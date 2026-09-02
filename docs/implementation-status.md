@@ -4,10 +4,13 @@ The sole execution baseline is `../LOONGBOARD_V1_TECHNICAL_DEVELOPMENT_PLAN.md` 
 
 ## Current stage
 
-Stage 0: Foundation — accepted locally on 2026-09-03.
+Stage 1: GitHub Metadata Vertical Slice — in progress.
 
 ## Done
 
+- Stage 0 was accepted locally on 2026-09-03 in commit `e075dc4`.
+- Froze Stage 1 API, persistence, GitHub command, timezone, cursor, ownership,
+  and failure-semantics decisions in `docs/stage-1-tasks.md`.
 - Created the new `system/loong-dashboard` Git repository and pnpm workspace.
 - Added root and package-level Agent operating rules.
 - Froze first-wave ownership, the health API contract, and Stage 0 task briefs.
@@ -47,5 +50,5 @@ Stage 0: Foundation — accepted locally on 2026-09-03.
 
 ## Next stage blockers
 
-- None. Stage 1 remains deliberately unstarted until the Team Lead explicitly
-  begins it from this accepted foundation.
+- Stage 1 implementation, integration, real-repository smoke, E2E, and Team
+  Lead acceptance must complete before Stage 2 begins.
