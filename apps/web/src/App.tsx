@@ -22,8 +22,7 @@ import {
   fetchList,
   fetchRepositories,
   fetchSyncStatus,
-  isValidDate,
-  normalizeFilter,
+  readMetadataFilters,
   startSync,
   type IssueListItem,
   type PullRequestListItem,
@@ -54,7 +53,7 @@ function RepositorySelector({ repositories, selectedId }: { repositories: Reposi
   const selected = selectedId ?? repositories[0]?.id;
   return <label className="repository-selector">Repository
     <select aria-label="Repository" value={selected ?? ""} onChange={(event) => navigate(`/repositories/${encodeURIComponent(event.target.value)}/pulls`)}>
-      {repositories.map((repository) => <option key={repository.id} value={repository.id}>{repository.name} ({repository.github})</option>)}
+      {repositories.map((repository) => <option key={repository.id} value={repository.id}>{repository.displayName} ({repository.githubOwner}/{repository.githubName})</option>)}
     </select>
   </label>;
 }
@@ -117,23 +116,23 @@ function MetadataTable({ kind, items }: { kind: "pulls" | "issues"; items: Array
 function MetadataPage({ kind }: { kind: "pulls" | "issues" }) {
   const { repositoryId = "" } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
-  const statuses = kind === "pulls" ? pullStatuses : issueStatuses;
+  const { date, status } = readMetadataFilters(kind, searchParams);
   const rawDate = searchParams.get("date"); const rawStatus = searchParams.get("status");
-  const date = isValidDate(rawDate) ? rawDate : null; const status = normalizeFilter(rawStatus, statuses); const filterKey = `${date ?? ""}:${status ?? ""}`;
+  const filterKey = `${date ?? ""}:${status ?? ""}`;
   useEffect(() => {
     if (rawDate !== date || rawStatus !== status) { const next = new URLSearchParams(searchParams); if (date) next.set("date", date); else next.delete("date"); if (status) next.set("status", status); else next.delete("status"); next.delete("cursor"); setSearchParams(next, { replace: true }); }
   }, [date, rawDate, rawStatus, searchParams, setSearchParams, status]);
   const repositories = useQuery({ queryKey: ["repositories"], queryFn: ({ signal }) => fetchRepositories(signal) });
   const repository = repositories.data?.items.find((item) => item.id === repositoryId);
   const initialCursor = searchParams.get("cursor");
-  const list = useInfiniteQuery({ queryKey: ["metadata", repositoryId, kind, filterKey, initialCursor], enabled: repositoryId.length > 0, initialPageParam: initialCursor, queryFn: ({ pageParam, signal }) => fetchList<PullRequestListItem | IssueListItem>(repositoryId, kind, { date, status, cursor: pageParam }, signal), getNextPageParam: (page) => page.nextCursor ?? undefined, placeholderData: keepPreviousData });
-  const items = list.data?.pages.flatMap((page) => page.items) ?? [];
+  const list = useInfiniteQuery({ queryKey: ["metadata", repositoryId, kind, filterKey, initialCursor], enabled: repositoryId.length > 0, initialPageParam: initialCursor, queryFn: ({ pageParam, signal }) => fetchList(repositoryId, kind, { date, status, cursor: pageParam }, signal), getNextPageParam: (page) => page.nextCursor ?? undefined, placeholderData: keepPreviousData });
+  const items = list.data?.pages.flatMap((page) => page.items as Array<PullRequestListItem | IssueListItem>) ?? [];
   const calendarTimeZone = list.data?.pages[0]?.calendarTimeZone;
   if (repositories.isPending) return <p role="status">Loading repositories…</p>;
   if (repositories.isError) return <p role="alert">Unable to load repositories: {repositories.error.message}</p>;
   if (!repository) return <section><h2>Repository not found</h2><p role="alert">This repository is missing or disabled.</p><Link to="/">Choose another repository</Link></section>;
   const changeFilter = (key: "date" | "status", value: string) => { const next = new URLSearchParams(searchParams); if (value) next.set(key, value); else next.delete(key); next.delete("cursor"); setSearchParams(next); };
-  return <section className="metadata-page" aria-labelledby="metadata-heading"><div className="page-heading"><div><p className="eyebrow">{repository.github}</p><h2 id="metadata-heading">{kind === "pulls" ? "Pull requests" : "Issues"}</h2></div><Link to="/">Change repository</Link></div><RepositorySelector repositories={repositories.data.items} selectedId={repository.id} /><div className="sync-status"><SyncStatus repositoryId={repository.id} /><SyncControl repositoryId={repository.id} /></div><FilterBar kind={kind} date={date} status={status} onDate={(value) => changeFilter("date", value)} onStatus={(value) => changeFilter("status", value)} />{calendarTimeZone && <p className="timezone">Calendar timezone: {calendarTimeZone}</p>}{list.isPending && <p role="status">Loading {kind}…</p>}{list.isError && !list.isFetching && <p role="alert">Unable to load {kind}: {list.error.message}</p>}{!list.isPending && !list.isError && items.length === 0 && <p role="status">No {kind} match these filters.</p>}{(items.length > 0 || list.isFetching) && <><Metrics kind={kind} items={items} /><MetadataTable kind={kind} items={items} /></>}{list.hasNextPage && <button type="button" onClick={() => void list.fetchNextPage()} disabled={list.isFetchingNextPage}>{list.isFetchingNextPage ? "Loading more…" : "Load more"}</button>}{list.isFetching && !list.isFetchingNextPage && <p role="status">Refreshing…</p>}<p className="query-debug" aria-hidden="true">{buildListUrl(repository.id, kind, { date, status })}</p></section>;
+  return <section className="metadata-page" aria-labelledby="metadata-heading"><div className="page-heading"><div><p className="eyebrow">{repository.githubOwner}/{repository.githubName}</p><h2 id="metadata-heading">{kind === "pulls" ? "Pull requests" : "Issues"}</h2></div><Link to="/">Change repository</Link></div><RepositorySelector repositories={repositories.data.items} selectedId={repository.id} /><div className="sync-status"><SyncStatus repositoryId={repository.id} /><SyncControl repositoryId={repository.id} /></div><FilterBar kind={kind} date={date} status={status} onDate={(value) => changeFilter("date", value)} onStatus={(value) => changeFilter("status", value)} />{calendarTimeZone && <p className="timezone">Calendar timezone: {calendarTimeZone}</p>}{list.isPending && <p role="status">Loading {kind}…</p>}{list.isError && !list.isFetching && <p role="alert">Unable to load {kind}: {list.error.message}</p>}{!list.isPending && !list.isError && items.length === 0 && <p role="status">No {kind} match these filters.</p>}{(items.length > 0 || list.isFetching) && <><Metrics kind={kind} items={items} /><MetadataTable kind={kind} items={items} /></>}{list.hasNextPage && <button type="button" onClick={() => void list.fetchNextPage()} disabled={list.isFetchingNextPage}>{list.isFetchingNextPage ? "Loading more…" : "Load more"}</button>}{list.isFetching && !list.isFetchingNextPage && <p role="status">Refreshing…</p>}<p className="query-debug" aria-hidden="true">{buildListUrl(repository.id, kind, { date, status })}</p></section>;
 }
 
 function HealthPage() { return <section aria-labelledby="health-heading"><p className="eyebrow">System</p><h2 id="health-heading">Service health</h2><p>The web shell checks the API boundary without hiding failures.</p><HealthStatus /></section>; }
