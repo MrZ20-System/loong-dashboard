@@ -4,27 +4,48 @@ The sole execution baseline is `../LOONGBOARD_V1_TECHNICAL_DEVELOPMENT_PLAN.md` 
 
 ## Current stage
 
-Stage 0: Foundation — in progress.
+Stage 0: Foundation — accepted locally on 2026-09-03.
 
 ## Done
 
-- Created the new `system/loong-dashboard` Git repository.
-- Added the root Agent operating rules.
+- Created the new `system/loong-dashboard` Git repository and pnpm workspace.
+- Added root and package-level Agent operating rules.
 - Froze first-wave ownership, the health API contract, and Stage 0 task briefs.
-- Initialized the local CodeGraph index; the repository was empty at initialization.
+- Added the shared health contract, Fastify server, React/Vite shell, SQLite
+  migration foundation, Drizzle schema, DSH adapter boundary, and empty package
+  scaffolds for later stages.
+- Added architecture, pin, unit, migration, integration-entrypoint, and build
+  checks under one root `pnpm check` command.
+- Refreshed the local CodeGraph index after implementation and inspected the
+  Stage 0 configuration, migration, and health-request flow.
 
 ## Validated
 
-- The parent `system/` directory is not a Git repository.
-- The repository starts from an empty `main` branch.
-- Local tools are available: Node.js 26.3.0, pnpm 11.19.0, and Git 2.54.0.
+- `CI=true pnpm install --frozen-lockfile` completed with the committed lockfile.
+- `CI=true pnpm check` completed: lint, type checking, architecture boundaries,
+  the exact DSH pin, 39 substantive tests, the integration entrypoint, and the
+  production build all passed.
+- `pnpm dev` started Fastify on `127.0.0.1:4174` and Vite on
+  `127.0.0.1:5173`.
+- Direct `GET http://127.0.0.1:4174/api/health` and proxied
+  `GET http://127.0.0.1:5173/api/health` both returned HTTP 200 with
+  `{ "status": "ok" }`; the Web root also returned HTTP 200.
+- Validation used Node.js 26.3.0, pnpm 11.19.0, and Git 2.54.0.
 
 ## Known limitations
 
-- The host currently exposes Node.js 26 rather than the baseline Node.js 24 runtime. Stage 0 will encode the supported runtime contract and report validation against the available host separately.
-- No Stage 0 implementation has passed acceptance yet.
+- The repository supports Node.js 24 through 26. The local Node.js 26 runtime
+  requires exact `better-sqlite3@12.11.1`; this changes no database ownership or
+  API contract.
+- Node.js 26 prints a `tsx` deprecation warning for `module.register()` during
+  development startup. It does not affect startup or the health contract.
+- Stage 0 intentionally has no product-level integration or browser scenarios;
+  their entrypoints exist and later stages must add feature tests with their
+  behavior.
+- DSH is pinned and isolated but is not started in Stage 0. Live DSH lifecycle
+  validation belongs to Stage 4.
 
 ## Next stage blockers
 
-- Stage 0 must pass `pnpm install`, `pnpm check`, `pnpm dev`, and `GET /api/health = 200` before Stage 1 may begin.
-
+- None. Stage 1 remains deliberately unstarted until the Team Lead explicitly
+  begins it from this accepted foundation.

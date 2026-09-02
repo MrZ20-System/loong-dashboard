@@ -10,5 +10,5 @@ test-results/
 *.db
 *.db-shm
 *.db-wal
+*.tsbuildinfo
 .DS_Store
-

@@ -1,0 +1,21 @@
+version: 1
+timezone: Asia/Shanghai
+
+repositories: []
+
+knowledge:
+  path: ./knowledge
+  inbox: inbox
+  historyLimit: 10
+
+runtime:
+  statePath: ./.loong
+  worktreesPath: ./.worktrees
+  serverHost: 127.0.0.1
+  serverPort: 4174
+
+agent:
+  defaultProvider: deepseek-official
+  defaultModel: deepseek-v4-flash
+  defaultReasoningEffort: high
+  idleProcessMinutes: 20

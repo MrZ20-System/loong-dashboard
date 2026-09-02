@@ -1,0 +1,21 @@
+{
+  "name": "@loongboard/agent-runtime-dsh",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh": "0.1.2-alpha.5",
+    "@deepseek-ai/dsh-sdk-client": "0.1.2-alpha.5"
+  },
+  "devDependencies": {
+    "@types/node": "24.3.0",
+    "typescript": "5.9.2",
+    "vitest": "3.2.4"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "name": "loongboard",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.19.0",
+  "engines": {
+    "node": ">=24.0.0 <27.0.0"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --if-present --filter @loongboard/web --filter @loongboard/server dev",
+    "build": "pnpm --recursive run build",
+    "lint": "eslint .",
+    "typecheck": "pnpm --recursive run typecheck",
+    "test": "node scripts/run-workspace-tests.mjs",
+    "test:integration": "vitest run tests/integration --passWithNoTests",
+    "test:e2e": "playwright test --pass-with-no-tests",
+    "check:architecture": "node scripts/check-architecture.mjs",
+    "check:dsh-boundary": "node scripts/check-architecture.mjs --rule dsh-import,dsh-manifest",
+    "check:dsh-pin": "node scripts/check-dsh-pin.mjs",
+    "check": "pnpm lint && pnpm typecheck && pnpm check:architecture && pnpm check:dsh-pin && pnpm test && pnpm test:integration && pnpm build",
+    "check:full": "pnpm check && pnpm test:e2e"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.55.0",
+    "@typescript-eslint/parser": "8.42.0",
+    "@types/node": "24.3.0",
+    "eslint": "9.35.0",
+    "typescript": "5.9.2",
+    "vitest": "3.2.4"
+  }
+}

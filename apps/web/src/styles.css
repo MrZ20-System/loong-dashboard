@@ -1,0 +1,161 @@
+:root {
+  color: #e9eefc;
+  background: #0b1220;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background:
+    radial-gradient(circle at 80% 0%, #1f365c 0, transparent 42%),
+    #0b1220;
+}
+
+a {
+  color: #9cc5ff;
+}
+
+.app-shell {
+  display: flex;
+  min-height: 100vh;
+  flex-direction: column;
+}
+
+.app-header,
+.app-content,
+.app-footer {
+  width: min(100% - 3rem, 68rem);
+  margin: 0 auto;
+}
+
+.app-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 2rem;
+  padding: 3rem 0 2rem;
+}
+
+.app-header h1,
+.app-header p {
+  margin: 0;
+}
+
+.app-header h1 {
+  font-size: clamp(2rem, 5vw, 3.5rem);
+  letter-spacing: -0.05em;
+}
+
+.brand-mark {
+  display: inline-grid;
+  width: 2rem;
+  height: 2rem;
+  margin-bottom: 0.8rem !important;
+  place-items: center;
+  border: 1px solid #82b8ff;
+  border-radius: 0.55rem;
+  color: #82b8ff;
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.tagline {
+  margin-top: 0.6rem !important;
+  color: #a9b6cc;
+}
+
+nav {
+  display: flex;
+  gap: 1rem;
+  padding-top: 1rem;
+}
+
+nav a {
+  text-decoration: none;
+}
+
+nav a:hover,
+nav a:focus-visible {
+  text-decoration: underline;
+}
+
+.app-content {
+  flex: 1;
+}
+
+section {
+  max-width: 48rem;
+  margin-top: 4rem;
+  padding: clamp(1.5rem, 5vw, 3rem);
+  border: 1px solid #2d4264;
+  border-radius: 1rem;
+  background: rgba(18, 31, 54, 0.82);
+  box-shadow: 0 1.5rem 4rem rgba(0, 0, 0, 0.2);
+}
+
+section h2 {
+  max-width: 38rem;
+  margin: 0.4rem 0 1rem;
+  font-size: clamp(1.7rem, 4vw, 2.7rem);
+  letter-spacing: -0.04em;
+}
+
+section > p:not(.eyebrow) {
+  color: #c1ccde;
+  line-height: 1.7;
+}
+
+.eyebrow {
+  margin: 0;
+  color: #82b8ff;
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+[role="status"],
+[role="alert"] {
+  margin-top: 2rem;
+  padding: 0.8rem 1rem;
+  border-radius: 0.6rem;
+  background: #172744;
+  color: #d9e6ff;
+}
+
+[role="alert"] {
+  background: #3a202c;
+  color: #ffb8ca;
+}
+
+.app-footer {
+  padding: 2rem 0;
+  color: #7789a7;
+  font-size: 0.85rem;
+}
+
+@media (max-width: 600px) {
+  .app-header {
+    flex-direction: column;
+  }
+
+  nav {
+    padding-top: 0;
+  }
+
+  .app-header,
+  .app-content,
+  .app-footer {
+    width: min(100% - 2rem, 68rem);
+  }
+}

@@ -1,0 +1,31 @@
+version: 1
+timezone: Asia/Shanghai
+repositories:
+  - key: loongboard
+    name: LoongBoard
+    github: MrZ20/loong-dashboard
+    path: ./repositories/loongboard
+    remote: origin
+    defaultBranch: main
+    worktreeSlots: 2
+  - key: vllm
+    name: vLLM
+    github: vllm-project/vllm
+    path: /absolute/vllm
+    remote: upstream
+    defaultBranch: main
+    worktreeSlots: 3
+knowledge:
+  path: ./knowledge
+  inbox: inbox
+  historyLimit: 10
+runtime:
+  statePath: ./.loong
+  worktreesPath: ./.worktrees
+  serverHost: 127.0.0.1
+  serverPort: 4174
+agent:
+  defaultProvider: deepseek-official
+  defaultModel: deepseek-v4-flash
+  defaultReasoningEffort: high
+  idleProcessMinutes: 20

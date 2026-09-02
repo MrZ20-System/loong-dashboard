@@ -1,0 +1,9 @@
+{
+  "version": "0.1.2-alpha.5",
+  "tag": "dsh-v0.1.2-alpha.5",
+  "masterInspected": "49a606bc5b5934603f22a26957a07dc799ab0291",
+  "packages": {
+    "@deepseek-ai/dsh": "0.1.2-alpha.5",
+    "@deepseek-ai/dsh-sdk-client": "0.1.2-alpha.5"
+  }
+}

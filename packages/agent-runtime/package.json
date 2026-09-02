@@ -1,0 +1,12 @@
+{
+  "name": "@loongboard/agent-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node ../../scripts/empty-package-check.mjs",
+    "lint": "node ../../scripts/empty-package-check.mjs",
+    "typecheck": "node ../../scripts/empty-package-check.mjs",
+    "test": "node ../../scripts/empty-package-check.mjs"
+  }
+}
