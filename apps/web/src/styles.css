@@ -115,6 +115,150 @@ section > p:not(.eyebrow) {
   line-height: 1.7;
 }
 
+.repository-selector,
+.filters label {
+  display: grid;
+  gap: 0.4rem;
+  color: #c1ccde;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.repository-selector {
+  max-width: 28rem;
+  margin-top: 1.5rem;
+}
+
+select,
+input,
+button {
+  min-height: 2.5rem;
+  border: 1px solid #45638d;
+  border-radius: 0.45rem;
+  background: #12213b;
+  color: #e9eefc;
+  font: inherit;
+  padding: 0.45rem 0.65rem;
+}
+
+button {
+  cursor: pointer;
+  font-weight: 700;
+}
+
+button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.metadata-page {
+  width: 100%;
+  max-width: none;
+}
+
+.page-heading,
+.sync-status,
+.filters {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.sync-status {
+  margin: 1.5rem 0;
+  justify-content: flex-start;
+  color: #c1ccde;
+}
+
+.sync-control {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.sync-control p {
+  margin: 0;
+}
+
+.filters {
+  align-items: end;
+  justify-content: flex-start;
+  padding: 1rem;
+  border: 1px solid #2d4264;
+  border-radius: 0.6rem;
+}
+
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  margin: 1.5rem 0;
+}
+
+.metrics div {
+  padding: 1rem;
+  border: 1px solid #2d4264;
+  border-radius: 0.6rem;
+  background: #12213b;
+}
+
+.metrics dt {
+  color: #a9b6cc;
+  font-size: 0.8rem;
+}
+
+.metrics dd {
+  margin: 0.3rem 0 0;
+  font-size: 1.5rem;
+  font-weight: 800;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  overflow: hidden;
+  border: 1px solid #2d4264;
+  background: rgba(18, 31, 54, 0.82);
+}
+
+caption {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+th,
+td {
+  padding: 0.7rem;
+  border-bottom: 1px solid #2d4264;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  color: #a9b6cc;
+  font-size: 0.8rem;
+}
+
+td {
+  color: #e9eefc;
+}
+
+.timezone,
+.query-debug {
+  color: #7789a7;
+  font-size: 0.8rem;
+}
+
+.query-debug {
+  margin-top: 1rem;
+  opacity: 0;
+}
+
 .eyebrow {
   margin: 0;
   color: #82b8ff;
@@ -157,5 +301,20 @@ section > p:not(.eyebrow) {
   .app-content,
   .app-footer {
     width: min(100% - 2rem, 68rem);
+  }
+
+  .page-heading,
+  .sync-status,
+  .filters {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .metadata-page {
+    overflow-x: auto;
   }
 }
