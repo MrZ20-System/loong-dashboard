@@ -1,0 +1,25 @@
+export {
+  GhGitHubMetadataProvider,
+  GitHubCommandError,
+  GitHubGraphQLError,
+  GitHubResponseError,
+  derivePullRequestStatus,
+  githubGraphqlQueries,
+  githubProviderConstants,
+} from "./provider.js";
+export type {
+  GhGitHubMetadataProviderOptions,
+  GitHubMetadataProvider,
+  GitHubPageInfo,
+  GitHubRateLimit,
+  IssueMetadata,
+  IssuePage,
+  IssueStatus,
+  IssueSyncInput,
+  PullRequestMetadata,
+  PullRequestPage,
+  PullRequestStatus,
+  PullRequestSyncInput,
+  RepositoryRef,
+  SyncMode,
+} from "./provider.js";

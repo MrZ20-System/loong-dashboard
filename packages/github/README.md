@@ -6,7 +6,8 @@ Provider boundary for GitHub metadata synchronization.
 
 ## Owns
 
-- `gh api graphql` and `gh api` command execution.
+- `gh api graphql --input -` command execution for pull-request and issue
+  metadata pages.
 - GitHub response validation and metadata provider behavior.
 
 ## Does not own
@@ -17,11 +18,20 @@ Provider boundary for GitHub metadata synchronization.
 
 ## Public API
 
-No Stage 0 API is exported yet.
+`GhGitHubMetadataProvider` exposes the frozen metadata streams:
+
+- `fetchPullRequestUpdates(input)`;
+- `fetchIssueUpdates(input)`.
+
+Each stream yields typed pages and performs exactly one `gh api graphql`
+invocation per page. Bootstrap reads all open items and then the configured
+closed lookback; incremental reads all states down to the inclusive watermark
+overlap floor.
 
 ## Dependencies
 
-None in Stage 0.
+`execa` runs `gh` with `shell: false`; `zod` validates each GraphQL response at
+the command boundary.
 
 ## Invariants
 
@@ -29,4 +39,6 @@ HTTP list reads use SQLite and never invoke GitHub directly.
 
 ## Tests
 
-Future provider tests use fake executables or recorded JSON fixtures.
+Provider tests use a temporary fake `gh` executable and assert exact argv,
+stdin request bodies, page iteration, cutoff behavior, response validation,
+and command counts. No per-item `gh pr view` command is used.
