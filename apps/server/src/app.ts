@@ -98,6 +98,7 @@ function registerStageOneRoutes(
   });
 
   app.post("/api/repositories/:id/sync", async (request, reply) => {
+    assertEmptyRequestBody(request.body);
     const { id } = parseRequest(repositoryParamsSchema, request.params);
     const run = syncCoordinator.start(id);
     return sendParsed(reply, 202, syncAcceptedResponseSchema, {
@@ -188,6 +189,12 @@ function parseRequest<T>(schema: ZodType<T>, input: unknown): T {
   return parsed.data;
 }
 
+function assertEmptyRequestBody(body: unknown): void {
+  if (body !== undefined) {
+    throw new InvalidRequestError("Request body must be empty");
+  }
+}
+
 function sendParsed<T>(
   reply: FastifyReply,
   statusCode: number,
@@ -243,24 +250,40 @@ function errorResponse(error: unknown): {
           : code === "SYNC_ALREADY_RUNNING"
             ? 409
             : 500;
-  const message =
-    code === "INTERNAL_ERROR"
-      ? "Internal server error"
-      : error instanceof Error && error.message.trim().length > 0
-        ? error.message
-        : "Internal server error";
+  const message = requestErrorMessage(error, code);
   const body = apiErrorSchema.parse({ error: { code, message } });
   return { statusCode, body };
 }
 
 function errorCode(error: unknown): ApiErrorCode {
-  if (error instanceof InvalidRequestError || error instanceof ZodError) {
+  if (error instanceof InvalidRequestError || isMalformedJsonError(error)) {
     return "INVALID_REQUEST";
   }
   if (hasCode(error, "INVALID_CURSOR")) return "INVALID_CURSOR";
   if (hasCode(error, "REPOSITORY_NOT_FOUND")) return "REPOSITORY_NOT_FOUND";
   if (hasCode(error, "SYNC_ALREADY_RUNNING")) return "SYNC_ALREADY_RUNNING";
   return "INTERNAL_ERROR";
+}
+
+function isMalformedJsonError(error: unknown): boolean {
+  return hasErrorCode(error, "FST_ERR_CTP_INVALID_JSON_BODY");
+}
+
+function requestErrorMessage(error: unknown, code: ApiErrorCode): string {
+  if (code === "INTERNAL_ERROR") return "Internal server error";
+  if (isMalformedJsonError(error)) return "Malformed JSON request body";
+  return error instanceof Error && error.message.trim().length > 0
+    ? error.message
+    : "Invalid request";
+}
+
+function hasErrorCode(error: unknown, code: string): boolean {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    "code" in error &&
+    error.code === code
+  );
 }
 
 function hasCode(

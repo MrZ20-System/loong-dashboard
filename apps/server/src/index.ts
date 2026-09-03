@@ -15,6 +15,11 @@ export type {
   CreateServerRuntimeOptions,
   ServerRuntime,
 } from "./runtime.js";
+export {
+  createShutdownHandler,
+  installSignalHandlers,
+} from "./lifecycle.js";
+export type { ShutdownHandler, SignalLifecycle } from "./lifecycle.js";
 export { RepositorySyncCoordinator } from "./sync-coordinator.js";
 export type {
   RepositorySyncCoordinatorOptions,

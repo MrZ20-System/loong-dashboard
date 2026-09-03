@@ -13,6 +13,7 @@ import {
   type ConfiguredRepository,
   type DatabaseClient,
 } from "@loongboard/database";
+import * as databaseModule from "@loongboard/database";
 import {
   type GitHubMetadataProvider,
   type IssueMetadata,
@@ -22,13 +23,14 @@ import {
   type PullRequestPage,
   type PullRequestSyncInput,
 } from "@loongboard/github";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildApp } from "../src/app.js";
 import {
   createServerRuntime,
   runtimeDatabasePath,
 } from "../src/runtime.js";
+import type { SystemConfig } from "../src/config.js";
 import {
   RepositorySyncCoordinator,
   type SyncCoordinator,
@@ -39,6 +41,7 @@ const databases: DatabaseClient[] = [];
 const apps: Array<ReturnType<typeof buildApp>> = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await Promise.all(apps.splice(0).map((app) => app.close()));
   for (const database of databases.splice(0)) {
     if (database.open) database.close();
@@ -76,6 +79,31 @@ function setupDatabase(...keys: string[]): DatabaseClient {
     "2026-09-03T00:00:00.000Z",
   );
   return client;
+}
+
+function runtimeConfig(root: string): SystemConfig {
+  return {
+    version: 1,
+    timezone: "Asia/Shanghai",
+    repositories: [repository("alpha")],
+    knowledge: {
+      path: join(root, "knowledge"),
+      inbox: join(root, "knowledge", "inbox"),
+      historyLimit: 10,
+    },
+    runtime: {
+      statePath: join(root, ".loong"),
+      worktreesPath: join(root, ".worktrees"),
+      serverHost: "127.0.0.1",
+      serverPort: 4174,
+    },
+    agent: {
+      defaultProvider: "deepseek-official",
+      defaultModel: "deepseek-v4-flash",
+      defaultReasoningEffort: "high",
+      idleProcessMinutes: 20,
+    },
+  };
 }
 
 function pullRequest(number: number, updatedAt: string): PullRequestMetadata {
@@ -308,34 +336,76 @@ describe("Stage 1 HTTP routes", () => {
       status: "accepted",
     });
   });
+
+  it("rejects a request body and malformed JSON with the shared 400 envelope", async () => {
+    const client = setupDatabase("alpha");
+    const app = appFor(client);
+
+    const body = await app.inject({
+      method: "POST",
+      url: "/api/repositories/alpha/sync",
+      headers: { "content-type": "application/json" },
+      payload: { unexpected: true },
+    });
+    expect(body.statusCode).toBe(400);
+    expect(body.json()).toEqual({
+      error: { code: "INVALID_REQUEST", message: "Request body must be empty" },
+    });
+
+    const malformed = await app.inject({
+      method: "POST",
+      url: "/api/repositories/alpha/sync",
+      headers: { "content-type": "application/json" },
+      payload: '{"unexpected":',
+    });
+    expect(malformed.statusCode).toBe(400);
+    expect(malformed.json()).toMatchObject({
+      error: { code: "INVALID_REQUEST", message: "Malformed JSON request body" },
+    });
+
+    const raw = await app.inject({
+      method: "POST",
+      url: "/api/repositories/alpha/sync",
+      headers: { "content-type": "text/plain" },
+      payload: "unexpected",
+    });
+    expect(raw.statusCode).toBe(400);
+    expect(raw.json()).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+  });
+
+  it("maps response schema failures to a generic 500 error", async () => {
+    const client = setupDatabase("alpha");
+    const validStatus = getRepositorySyncStatus(client, "alpha");
+    const statusWithBadTimestamp = {
+      ...validStatus,
+      pullRequests: {
+        ...validStatus.pullRequests,
+        lastAttemptAt: "not-a-timestamp",
+      },
+    };
+    const getStatus = vi
+      .spyOn(databaseModule, "getRepositorySyncStatus")
+      .mockReturnValue(statusWithBadTimestamp);
+    const app = appFor(client);
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/repositories/alpha/sync-status",
+    });
+    expect(response.statusCode).toBe(500);
+    expect(response.json()).toEqual({
+      error: { code: "INTERNAL_ERROR", message: "Internal server error" },
+    });
+    expect(response.body).not.toContain("lastAttemptAt");
+    expect(response.body).not.toContain("Invalid datetime");
+  });
 });
 
 describe("Stage 1 runtime composition", () => {
   it("creates the state directory/database, reconciles config, and closes DB on app close", async () => {
     const root = mkdtempSync(join(tmpdir(), "loongboard-runtime-stage1-"));
     temporaryDirectories.push(root);
-    const config = {
-      version: 1 as const,
-      timezone: "Asia/Shanghai",
-      repositories: [repository("alpha")],
-      knowledge: {
-        path: join(root, "knowledge"),
-        inbox: join(root, "knowledge", "inbox"),
-        historyLimit: 10,
-      },
-      runtime: {
-        statePath: join(root, ".loong"),
-        worktreesPath: join(root, ".worktrees"),
-        serverHost: "127.0.0.1",
-        serverPort: 4174,
-      },
-      agent: {
-        defaultProvider: "deepseek-official",
-        defaultModel: "deepseek-v4-flash",
-        defaultReasoningEffort: "high",
-        idleProcessMinutes: 20,
-      },
-    };
+    const config = runtimeConfig(root);
     const runtime = createServerRuntime({
       config,
       provider: new RecordingProvider(),
@@ -359,9 +429,98 @@ describe("Stage 1 runtime composition", () => {
     await runtime.app.close();
     expect(runtime.database.open).toBe(false);
   });
+
+  it("waits for gated sync work before closing the runtime database", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loongboard-runtime-gated-"));
+    temporaryDirectories.push(root);
+    const config = runtimeConfig(root);
+    const provider = new RecordingProvider();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    provider.pullFactory = async function* () {
+      await gate;
+      yield pullPage([]);
+    };
+    provider.issueFactory = async function* () {
+      await gate;
+      yield issuePage([]);
+    };
+    const runtime = createServerRuntime({ config, provider });
+    apps.push(runtime.app);
+    databases.push(runtime.database);
+
+    const response = await runtime.app.inject({
+      method: "POST",
+      url: "/api/repositories/alpha/sync",
+    });
+    expect(response.statusCode).toBe(202);
+
+    let closed = false;
+    const closePromise = runtime.app.close().then(() => {
+      closed = true;
+    });
+    await Promise.resolve();
+    expect(closed).toBe(false);
+    expect(runtime.database.open).toBe(true);
+
+    release();
+    await closePromise;
+    expect(closed).toBe(true);
+    expect(runtime.database.open).toBe(false);
+  });
 });
 
 describe("RepositorySyncCoordinator", () => {
+  it("returns 202 without waiting for a gated provider and drains it on close", async () => {
+    const client = setupDatabase("alpha");
+    const provider = new RecordingProvider();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    provider.pullFactory = async function* () {
+      await gate;
+      yield pullPage([]);
+    };
+    provider.issueFactory = async function* () {
+      await gate;
+      yield issuePage([]);
+    };
+    const coordinator = new RepositorySyncCoordinator({
+      database: client,
+      provider,
+      now: () => new Date("2026-09-03T01:00:00.000Z"),
+    });
+    const app = appFor(client, coordinator);
+    app.addHook("onClose", async () => {
+      await coordinator.close();
+      client.close();
+    });
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/repositories/alpha/sync",
+    });
+    expect(response.statusCode).toBe(202);
+    expect(provider.pullInputs).toHaveLength(1);
+    expect(provider.issueInputs).toHaveLength(1);
+
+    let closed = false;
+    const closePromise = app.close().then(() => {
+      closed = true;
+    });
+    await Promise.resolve();
+    expect(closed).toBe(false);
+    expect(client.open).toBe(true);
+
+    release();
+    await closePromise;
+    expect(closed).toBe(true);
+    expect(client.open).toBe(false);
+  });
+
   it("uses bootstrap then incremental inputs and persists both streams", async () => {
     const client = setupDatabase("alpha");
     const provider = new RecordingProvider();
