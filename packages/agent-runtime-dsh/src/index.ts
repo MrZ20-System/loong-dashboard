@@ -1,5 +1,6 @@
 import { DeepSeekHarness } from "@deepseek-ai/dsh-sdk-client";
 import type { DeepSeekHarnessOptions } from "@deepseek-ai/dsh-sdk-client";
+import type { HarnessNotification } from "@deepseek-ai/dsh-sdk-client";
 import {
   type AgentRuntime,
   type AgentRuntimeEvent,
@@ -13,6 +14,39 @@ export type { DeepSeekHarnessOptions } from "@deepseek-ai/dsh-sdk-client";
 
 /** Exact pin marker kept in sync with `dsh.lock.json`. */
 export const DSH_RELEASE = "dsh-v0.1.2-alpha.5" as const;
+
+/** Minimal async FIFO channel bridging SDK notifications to the generator. */
+class NotificationChannel {
+  private readonly items: HarnessNotification[] = [];
+  private readonly waiters: Array<(item: HarnessNotification) => void> = [];
+  private closed = false;
+
+  push(notification: HarnessNotification): void {
+    const waiter = this.waiters.shift();
+    if (waiter !== undefined) {
+      waiter(notification);
+      return;
+    }
+    this.items.push(notification);
+  }
+
+  close(): void {
+    this.closed = true;
+  }
+
+  async take(): Promise<HarnessNotification | undefined> {
+    const item = this.items.shift();
+    if (item !== undefined) return item;
+    if (this.closed) return undefined;
+    return new Promise<HarnessNotification>((resolve) => {
+      this.waiters.push(resolve);
+    });
+  }
+}
+
+function toError(value: unknown): Error {
+  return value instanceof Error ? value : new Error(String(value));
+}
 
 /**
  * DSH-backed runtime: one pinned DeepSeekHarness subprocess per LoongBoard
@@ -41,19 +75,45 @@ export class DSHRuntime implements AgentRuntime {
     const runtimeSessionId = spec.runtimeSessionId ?? this.runtimeSessionIds.get(spec.sessionId);
     const session = harness.session(runtimeSessionId);
     try {
-      const result = await session.run(prompt, {
-        onNotification: () => undefined,
-      });
-      this.runtimeSessionIds.set(spec.sessionId, result.sessionId);
-      // Surface the normalized delta/tool events so the SSE and DB layers see
-      // the same shapes the live path emits.
-      for (const notification of result.notifications) {
+      // True streaming (plan 13.3.6): the SDK delivers notifications while
+      // `session.run` is still pending, so a channel lets the generator emit
+      // normalized events as they arrive instead of replaying after idle.
+      const channel = new NotificationChannel();
+      const runPromise = (async (): Promise<
+        | { ok: true; finalResponse: string }
+        | { ok: false; errorMessage: string }
+      > => {
+        try {
+          const result = await session.run(prompt, {
+            onNotification: (notification: HarnessNotification) => {
+              channel.push(notification);
+            },
+          });
+          this.runtimeSessionIds.set(spec.sessionId, result.sessionId);
+          return { ok: true, finalResponse: result.finalResponse };
+        } catch (error) {
+          return { ok: false, errorMessage: toError(error).message };
+        } finally {
+          channel.close();
+        }
+      })();
+
+      // Drain live notifications until the run settles and the channel
+      // closes; each notification maps to AgentRuntimeEvents in real time.
+      while (true) {
+        const notification = await channel.take();
+        if (notification === undefined) break;
         for (const event of mapNotification(notification)) {
           yield event;
         }
       }
-      if (result.finalResponse.length > 0) {
-        yield { type: "assistant.completed", markdown: result.finalResponse };
+      const outcome = await runPromise;
+      if (!outcome.ok) {
+        yield { type: "error", message: outcome.errorMessage };
+      } else if (outcome.finalResponse.length > 0) {
+        // The final assistant text is guaranteed by the SDK and persisted
+        // exactly once per turn.
+        yield { type: "assistant.completed", markdown: outcome.finalResponse };
       }
     } catch (error) {
       yield {
