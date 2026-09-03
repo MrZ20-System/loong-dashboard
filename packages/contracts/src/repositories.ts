@@ -25,7 +25,11 @@ export const repositorySummarySchema = z
     worktreeSlots: z.number().int().nonnegative(),
     enabled: z.boolean(),
   })
-  .strict();
+  .strict()
+  .refine((repository) => repository.id === repository.key, {
+    message: "Repository id must match key",
+    path: ["key"],
+  });
 
 export const repositoriesResponseSchema = z
   .object({

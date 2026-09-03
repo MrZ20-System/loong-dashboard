@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import * as fc from "fast-check";
 
 import {
   activityDaysQuerySchema,
@@ -140,6 +141,9 @@ describe("repository and sync contracts", () => {
     expect(repositorySummarySchema.safeParse({ ...repository, enabled: "yes" }).success).toBe(
       false,
     );
+    expect(
+      repositorySummarySchema.safeParse({ ...repository, key: "another-repository" }).success,
+    ).toBe(false);
   });
 
   it("parses accepted sync and database-backed status records", () => {
@@ -271,6 +275,25 @@ describe("versioned list cursors", () => {
       updatedAt: "2026-09-03T02:03:04.000Z",
       number: 42,
     });
+  });
+
+  it("round-trips generated canonical UTC timestamps and positive numbers", () => {
+    const timestampArbitrary = fc
+      .date({
+        min: new Date("2000-01-01T00:00:00.000Z"),
+        max: new Date("2100-12-31T23:59:59.999Z"),
+        noInvalidDate: true,
+      })
+      .map((date) => date.toISOString());
+    const numberArbitrary = fc.integer({ min: 1, max: 1_000_000 });
+
+    fc.assert(
+      fc.property(timestampArbitrary, numberArbitrary, (updatedAt, number) => {
+        const cursor = encodeListCursor({ updatedAt, number });
+        expect(decodeListCursor(cursor)).toEqual({ version: 1, updatedAt, number });
+      }),
+      { numRuns: 100, seed: 20260903 },
+    );
   });
 
   it("rejects malformed, unsupported, and extra cursor payloads", () => {
