@@ -64,6 +64,21 @@ describe("architecture boundary fixtures", () => {
     ]);
   });
 
+  it("does not mistake JSX elements or collection methods for raw SQL", () => {
+    const root = makeFixture(
+      "apps/web/src/page.tsx",
+      `export function Page() {
+  const entries = new Map();
+  entries.delete("old");
+  return <select aria-label="Repository"><option>Example</option></select>;
+}\n`,
+    );
+
+    expect(
+      checkArchitecture(root, { rules: new Set(["raw-sql"]) }),
+    ).toEqual([]);
+  });
+
   it("rejects GitHub CLI execution outside the GitHub package", () => {
     const root = makeFixture(
       "packages/server/src/sync.ts",

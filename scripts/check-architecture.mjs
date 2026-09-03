@@ -141,9 +141,7 @@ function hasDshImport(source) {
 
 function hasRawSql(source) {
   return (
-    /\b(?:SELECT|INSERT|UPDATE|DELETE|CREATE\s+TABLE|ALTER\s+TABLE|DROP\s+TABLE|PRAGMA)\b/i.test(
-      source,
-    ) ||
+    /["'`]\s*(?:SELECT\b|INSERT\b|UPDATE\b|DELETE\b|CREATE\s+TABLE\b|ALTER\s+TABLE\b|DROP\s+TABLE\b|PRAGMA\b)/i.test(source) ||
     /(?:better-sqlite3|drizzle-orm\/sqlite|\.prepare\s*\(|\bsql\s*`)/i.test(source)
   );
 }
