@@ -47,7 +47,7 @@ function json(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 }
 
-function mockApi(options: { pulls?: unknown[]; issues?: unknown[]; pullPages?: unknown[][]; issuePages?: unknown[][]; pullsByRepository?: Record<string, unknown[][]>; syncStatuses?: StreamStatus[]; syncSnapshots?: SyncSnapshot[]; syncSnapshotsByRepository?: Record<string, SyncSnapshot[]>; syncDelayMs?: number; syncRunIds?: string[]; repositories?: typeof repository[] } = {}) {
+function mockApi(options: { pulls?: unknown[]; issues?: unknown[]; pullPages?: unknown[][]; issuePages?: unknown[][]; pullsByRepository?: Record<string, unknown[][]>; syncStatuses?: StreamStatus[]; syncSnapshots?: SyncSnapshot[]; syncSnapshotsByRepository?: Record<string, SyncSnapshot[]>; syncDelayMs?: number; syncRunIds?: string[]; repositories?: typeof repository[]; onSyncStatusAbort?: (repositoryId: string) => void } = {}) {
   const pulls = options.pulls ?? [pull(2), pull(1)];
   const issues = options.issues ?? [issue(7)];
   let pullPage = 0;
@@ -67,8 +67,32 @@ function mockApi(options: { pulls?: unknown[]; issues?: unknown[]; pullPages?: u
       return json({ repositoryId, syncRunId, status: "accepted" }, 202);
     }
     if (url.pathname.endsWith("/sync-status")) {
-      if (options.syncDelayMs) await new Promise((resolve) => setTimeout(resolve, options.syncDelayMs));
       const repositoryId = url.pathname.split("/")[3] ?? "repo";
+      if (options.syncDelayMs) {
+        await new Promise<void>((resolve, reject) => {
+          const signal = init?.signal;
+          let timer: ReturnType<typeof setTimeout> | undefined;
+          const cleanup = () => {
+            if (timer !== undefined) clearTimeout(timer);
+            signal?.removeEventListener("abort", onAbort);
+          };
+          const onAbort = () => {
+            cleanup();
+            options.onSyncStatusAbort?.(repositoryId);
+            reject(new DOMException("The operation was aborted.", "AbortError"));
+          };
+          const onComplete = () => {
+            cleanup();
+            resolve();
+          };
+          if (signal?.aborted) {
+            onAbort();
+            return;
+          }
+          signal?.addEventListener("abort", onAbort, { once: true });
+          timer = setTimeout(onComplete, options.syncDelayMs);
+        });
+      }
       const snapshots = options.syncSnapshotsByRepository?.[repositoryId] ?? options.syncSnapshots ?? (options.syncStatuses ?? ["idle"]).map((status) => ({ pullRequests: status, issues: status }));
       const nextIndex = options.syncSnapshotsByRepository ? (syncIndexesByRepository.get(repositoryId) ?? 0) : syncIndex;
       const snapshot = snapshots[Math.min(nextIndex, snapshots.length - 1)];
@@ -310,6 +334,7 @@ describe("LoongBoard metadata routes", () => {
     const initialPull = pull(1, "A initial pull");
     const syncedPull = pull(2, "A synced pull");
     const bPull = { ...pull(9, "B pull"), repositoryId: "repo-b", url: "https://github.com/acme/project-b/pull/9" };
+    const abortedSyncStatusRepositories: string[] = [];
     const fetchMock = mockApi({
       repositories: [repository, repositoryB],
       syncDelayMs: 50,
@@ -321,6 +346,7 @@ describe("LoongBoard metadata routes", () => {
         ],
         "repo-b": [{ pullRequests: "idle", issues: "idle" }],
       },
+      onSyncStatusAbort: (repositoryId) => abortedSyncStatusRepositories.push(repositoryId),
     });
     renderApp("/repositories/repo/pulls");
     expect(await screen.findByText("A initial pull")).toBeInTheDocument();
@@ -328,11 +354,13 @@ describe("LoongBoard metadata routes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
     expect(await screen.findByText("Sync started.")).toBeInTheDocument();
     fireEvent.change(screen.getByRole("combobox", { name: "Repository" }), { target: { value: "repo-b" } });
+    await waitFor(() => expect(abortedSyncStatusRepositories).toEqual(["repo"]));
     expect(await screen.findByText("B pull")).toBeInTheDocument();
     fireEvent.change(screen.getByRole("combobox", { name: "Repository" }), { target: { value: "repo" } });
     expect(await screen.findByText("A synced pull", {}, { timeout: 4_000 })).toBeInTheDocument();
     expect(screen.queryByText("A synced pull")).toBeInTheDocument();
     expect(fetchMock.mock.calls.filter(([input]) => String(input).includes("/repositories/repo/pulls")).length).toBe(2);
     expect(fetchMock.mock.calls.filter(([input]) => String(input).includes("/repositories/repo-b/pulls")).length).toBe(1);
+    expect(abortedSyncStatusRepositories.filter((repositoryId) => repositoryId === "repo")).toHaveLength(1);
   });
 });
