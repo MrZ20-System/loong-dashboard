@@ -173,19 +173,20 @@ export class SchedulerEngine {
       this.schedule(taskId);
       return;
     }
-    // Arm the next future occurrence before running so a crash cannot replay
-    // the missed run (plan 16.2 restart semantics).
-    const updated = this.storeNextRun(task);
-    this.schedule(taskId);
-
+    // A busy workspace defers the SAME occurrence without advancing the
+    // schedule: retry later instead of silently skipping or running early.
     if (this.workspaceLocks.has(task.workspacePath)) {
-      // The workspace is busy with another run; defer without marking skipped.
       const retry = setTimeout(() => {
+        this.timers.delete(taskId);
         void this.fire(taskId).catch(() => undefined);
       }, 30_000);
       this.timers.set(taskId, retry);
       return;
     }
+    // Arm the next future occurrence before running so a crash cannot replay
+    // the missed run (plan 16.2 restart semantics).
+    const updated = this.storeNextRun(task);
+    this.schedule(taskId);
 
     const run = insertScheduledRun(this.database, task.id, scheduledFor);
     this.runContext.set(run.id, { workspacePath: updated.workspacePath });
