@@ -86,6 +86,53 @@ describe("GhGitHubMetadataProvider", () => {
     expect(readFileSync(join(fixture.directory, "count"), "utf8")).toBe("2");
   });
 
+  it("keeps the 90-day bootstrap PR boundary item and stops before the next page", async () => {
+    const fixture = createFakeGh([
+      pullRequestResponse([], { hasNextPage: false, endCursor: null }),
+      pullRequestResponse(
+        [
+          pullRequestNode({
+            id: "PR_BOUNDARY",
+            number: 90,
+            state: "MERGED",
+            mergedAt: "2024-03-12T00:00:00Z",
+            updatedAt: "2024-03-12T00:00:00Z",
+          }),
+          pullRequestNode({
+            id: "PR_OLD",
+            number: 89,
+            state: "CLOSED",
+            updatedAt: "2024-03-11T23:59:59Z",
+          }),
+        ],
+        { hasNextPage: true, endCursor: "closed-pr-next" },
+      ),
+      pullRequestResponse([], { hasNextPage: false, endCursor: null }),
+    ]);
+    const provider = new GhGitHubMetadataProvider({ ghExecutable: fixture.executable });
+
+    const pages = await collect(provider.fetchPullRequestUpdates({
+      repository,
+      mode: "bootstrap",
+      syncStartedAt: "2024-06-10T00:00:00Z",
+    }));
+
+    expect(pages).toHaveLength(2);
+    expect(pages[0]?.items).toHaveLength(0);
+    expect(pages[1]?.items).toHaveLength(1);
+    expect(pages[1]?.items[0]).toMatchObject({
+      number: 90,
+      stateRaw: "MERGED",
+      status: "merged",
+      updatedAt: "2024-03-12T00:00:00.000Z",
+    });
+    expect(readCall(fixture.directory, 1).request.variables.states).toEqual([
+      "CLOSED",
+      "MERGED",
+    ]);
+    expect(callExists(fixture.directory, 2)).toBe(false);
+  });
+
   it("stops incremental PRs at the first older item without another command", async () => {
     const fixture = createFakeGh([
       pullRequestResponse(
@@ -231,6 +278,51 @@ describe("GhGitHubMetadataProvider", () => {
     });
     expect(readCall(fixture.directory, 0).request.query).toContain("comments { totalCount }");
     expect(readCall(fixture.directory, 0).request.query).not.toContain("comments(first");
+  });
+
+  it("keeps the 90-day bootstrap closed Issue boundary item and stops before the next page", async () => {
+    const fixture = createFakeGh([
+      issueResponse([], { hasNextPage: false, endCursor: null }),
+      issueResponse(
+        [
+          issueNode({
+            id: "I_BOUNDARY",
+            number: 90,
+            state: "CLOSED",
+            updatedAt: "2024-03-12T00:00:00Z",
+          }),
+          issueNode({
+            id: "I_OLD",
+            number: 89,
+            state: "CLOSED",
+            updatedAt: "2024-03-11T23:59:59Z",
+          }),
+        ],
+        { hasNextPage: true, endCursor: "closed-issue-next" },
+      ),
+      issueResponse([], { hasNextPage: false, endCursor: null }),
+    ]);
+    const provider = new GhGitHubMetadataProvider({ ghExecutable: fixture.executable });
+
+    const pages = await collect(provider.fetchIssueUpdates({
+      repository,
+      mode: "bootstrap",
+      syncStartedAt: "2024-06-10T00:00:00Z",
+    }));
+
+    expect(pages).toHaveLength(2);
+    expect(pages[0]?.items).toHaveLength(0);
+    expect(pages[1]?.items).toHaveLength(1);
+    expect(pages[1]?.items[0]).toMatchObject({
+      number: 90,
+      state: "CLOSED",
+      status: "closed",
+      updatedAt: "2024-03-12T00:00:00.000Z",
+    });
+    expect(readCall(fixture.directory, 1).request.variables.states).toEqual([
+      "CLOSED",
+    ]);
+    expect(callExists(fixture.directory, 2)).toBe(false);
   });
 
   it.each([
