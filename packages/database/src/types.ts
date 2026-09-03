@@ -18,6 +18,7 @@ export type {
   DomainRule,
   DomainTag,
   EntityKind,
+  IssueDetail,
   IssueListItem,
   IssueStatus,
   PullRequestDetail,

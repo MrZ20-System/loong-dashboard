@@ -1,5 +1,6 @@
 import {
   getIssueActivityDays,
+  getIssueDetail,
   getPullRequestActivityDays,
   getRepositorySyncStatus,
   listIssues,
@@ -12,6 +13,8 @@ import {
   activityDaysResponseSchema,
   apiErrorSchema,
   healthResponseSchema,
+  issueDetailSchema,
+  issueParamsSchema,
   issuesQuerySchema,
   issuesResponseSchema,
   pullRequestsQuerySchema,
@@ -35,6 +38,10 @@ import Fastify, {
 import { registerDomainRoutes } from "./domains.js";
 import { registerDiffRoutes } from "./diff.js";
 import {
+  AgentChatController,
+  registerAgentRoutes,
+} from "./agent-chat.js";
+import {
   DomainReclassificationService,
   type DomainReclassification,
 } from "./reclassification-service.js";
@@ -50,6 +57,16 @@ const healthResponse: HealthResponse = healthResponseSchema.parse({
   status: "ok",
 });
 
+/** Route-level 404 for issue reads (stored metadata is SQLite-only). */
+export class IssueNotFoundError extends Error {
+  readonly code = "ISSUE_NOT_FOUND" as const;
+
+  constructor(repositoryId: string, number: number) {
+    super(`Issue #${number} was not found in repository ${repositoryId}`);
+    this.name = "IssueNotFoundError";
+  }
+}
+
 /** Explicit non-HTTP dependency set used by the app factory. */
 export interface BuildAppDependencies {
   database: DatabaseClient;
@@ -59,6 +76,8 @@ export interface BuildAppDependencies {
   reclassification?: DomainReclassification;
   /** Defaults to a real local Git workspace. */
   gitWorkspace?: GitWorkspace;
+  /** Chat controller created by the runtime; routes register only when set. */
+  agentChat?: AgentChatController;
 }
 
 /**
@@ -86,6 +105,9 @@ export function buildApp(
   registerStageOneRoutes(app, database, timezone, syncCoordinator);
   registerDomainRoutes(app, { database, reclassification });
   registerDiffRoutes(app, { database, gitWorkspace });
+  if (dependencies.agentChat !== undefined) {
+    registerAgentRoutes(app, dependencies.agentChat);
+  }
 
   if (ownsReclassification) {
     app.addHook("onClose", async () => {
@@ -212,6 +234,13 @@ function registerStageOneRoutes(
     });
     return sendParsed(reply, 200, issuesResponseSchema, page);
   });
+
+  app.get("/api/repositories/:id/issues/:number", async (request, reply) => {
+    const { repositoryId, number } = parseRequest(issueParamsSchema, request.params);
+    const issue = getIssueDetail(database, repositoryId, number);
+    if (issue === null) throw new IssueNotFoundError(repositoryId, number);
+    return sendParsed(reply, 200, issueDetailSchema, issue);
+  });
 }
 
 function configureJsonParser(app: FastifyInstance): void {
@@ -262,12 +291,17 @@ function errorResponse(error: unknown): {
       ? 400
       : code === "INVALID_CURSOR"
         ? 400
-        : code === "REPOSITORY_NOT_FOUND" ||
+          : code === "REPOSITORY_NOT_FOUND" ||
             code === "DOMAIN_NOT_FOUND" ||
             code === "PULL_REQUEST_NOT_FOUND" ||
-            code === "FILE_NOT_FOUND"
+            code === "FILE_NOT_FOUND" ||
+            code === "ISSUE_NOT_FOUND" ||
+            code === "AGENT_SESSION_NOT_FOUND"
           ? 404
-          : code === "SYNC_ALREADY_RUNNING" || code === "DOMAIN_NAME_CONFLICT"
+          : code === "SYNC_ALREADY_RUNNING" ||
+              code === "DOMAIN_NAME_CONFLICT" ||
+              code === "AGENT_TURN_BUSY" ||
+              code === "WORKTREE_POOL_EXHAUSTED"
             ? 409
             : 500;
   const message = requestErrorMessage(error, code);
@@ -291,6 +325,10 @@ function errorCode(error: unknown): ApiErrorCode {
     return "PULL_REQUEST_NOT_FOUND";
   }
   if (hasCode(error, "FILE_NOT_FOUND")) return "FILE_NOT_FOUND";
+  if (hasCode(error, "ISSUE_NOT_FOUND")) return "ISSUE_NOT_FOUND";
+  if (hasCode(error, "AGENT_SESSION_NOT_FOUND")) return "AGENT_SESSION_NOT_FOUND";
+  if (hasCode(error, "AGENT_TURN_BUSY")) return "AGENT_TURN_BUSY";
+  if (hasCode(error, "WORKTREE_POOL_EXHAUSTED")) return "WORKTREE_POOL_EXHAUSTED";
   if (hasCode(error, "SYNC_ALREADY_RUNNING")) return "SYNC_ALREADY_RUNNING";
   return "INTERNAL_ERROR";
 }

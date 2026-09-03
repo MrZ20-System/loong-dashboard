@@ -3,10 +3,24 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "import": "./src/index.ts"
+    }
+  },
   "scripts": {
-    "build": "node ../../scripts/empty-package-check.mjs",
-    "lint": "node ../../scripts/empty-package-check.mjs",
-    "typecheck": "node ../../scripts/empty-package-check.mjs",
-    "test": "node ../../scripts/empty-package-check.mjs"
+    "build": "tsc -p tsconfig.build.json",
+    "lint": "tsc -p tsconfig.json --noEmit --pretty false",
+    "typecheck": "tsc -p tsconfig.json --noEmit --pretty false",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@loongboard/contracts": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "24.3.0",
+    "typescript": "5.9.2",
+    "vitest": "3.2.4"
   }
 }

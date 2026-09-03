@@ -5,6 +5,7 @@ import {
 import { lazy, Suspense, useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import type { ChangedFileEntry, DomainTag, PullRequestDetail } from "@loongboard/contracts";
+import { AgentChatPanel } from "./agent-chat";
 import {
   fetchFileContent,
   fetchLocalCommand,
@@ -185,25 +186,31 @@ export function PullRequestDetailPage() {
       </div>
       <div className="pr-heading-actions"><CopyLocalCommand repositoryId={repositoryId} number={pr.number} /><Link to={`/repositories/${encodeURIComponent(repositoryId)}/pulls`}>Back to list</Link></div>
     </div>
-    {prepare.isPending && <p role="status">Preparing local Git objects…</p>}
-    {prepare.isError && <p role="alert">Unable to prepare diff: {prepare.error.message}</p>}
-    {!prepare.isPending && !prepare.isError && prepare.data !== undefined && <div className="pr-workspace">
-      <FileSidebar files={files} selected={selectedPath} onSelect={setSelectedPath} />
-      <div className="pr-diff-main">
-        <div className="diff-toolbar">
-          <div className="segmented" role="group" aria-label="Diff view mode">
-            <button type="button" aria-pressed={mode === "changes"} onClick={() => setMode("changes")}>Changes</button>
-            <button type="button" aria-pressed={mode === "full"} onClick={() => setMode("full")}>Full File</button>
+      <div className="pr-layout">
+        {prepare.isPending && <p role="status">Preparing local Git objects…</p>}
+        {prepare.isError && <p role="alert">Unable to prepare diff: {prepare.error.message}</p>}
+        {!prepare.isPending && !prepare.isError && prepare.data !== undefined && <div className="pr-workspace">
+          <FileSidebar files={files} selected={selectedPath} onSelect={setSelectedPath} />
+          <div className="pr-diff-main">
+            <div className="diff-toolbar">
+              <div className="segmented" role="group" aria-label="Diff view mode">
+                <button type="button" aria-pressed={mode === "changes"} onClick={() => setMode("changes")}>Changes</button>
+                <button type="button" aria-pressed={mode === "full"} onClick={() => setMode("full")}>Full File</button>
+              </div>
+              {prepare.data.fetched && <span role="status" className="fetch-hint">Fetched missing Git objects</span>}
+              <span className="diff-file-label">{fileLabel}</span>
+            </div>
+            {selectedFile !== null
+              ? <Suspense fallback={<p role="status">Loading editor…</p>}>
+                <FilePane repositoryId={repositoryId} number={pr.number} file={selectedFile} mergeBase={prepare.data.mergeBase} headSha={pr.headSha} fullFile={mode === "full"} onFileLabel={setFileLabel} />
+              </Suspense>
+              : <p role="status">No changed files for this pull request.</p>}
           </div>
-          {prepare.data.fetched && <span role="status" className="fetch-hint">Fetched missing Git objects</span>}
-          <span className="diff-file-label">{fileLabel}</span>
-        </div>
-        {selectedFile !== null
-          ? <Suspense fallback={<p role="status">Loading editor…</p>}>
-            <FilePane repositoryId={repositoryId} number={pr.number} file={selectedFile} mergeBase={prepare.data.mergeBase} headSha={pr.headSha} fullFile={mode === "full"} onFileLabel={setFileLabel} />
-          </Suspense>
-          : <p role="status">No changed files for this pull request.</p>}
+        </div>}
+        <AgentChatPanel
+          scope={{ kind: "pr", repositoryId, prNumber: pr.number, targetSha: pr.headSha }}
+          heading="PR chat"
+        />
       </div>
-    </div>}
   </section>;
 }

@@ -22,6 +22,12 @@ import {
 import { PullRequestEnrichmentService } from "./enrichment-service.js";
 import { DomainReclassificationService } from "./reclassification-service.js";
 import {
+  type AgentRuntime,
+  type AgentSessionSpec,
+} from "@loongboard/agent-runtime";
+
+import { AgentChatController } from "./agent-chat.js";
+import {
   RepositorySyncCoordinator,
   type SyncCoordinatorLogger,
 } from "./sync-coordinator.js";
@@ -37,6 +43,8 @@ export interface CreateServerRuntimeOptions {
   now?: () => Date;
   coordinatorLogger?: SyncCoordinatorLogger;
   appOptions?: FastifyServerOptions;
+  /** Override the DSH-backed runtime factory (tests inject a scripted one). */
+  runtimeFactory?: (spec: AgentSessionSpec) => AgentRuntime;
 }
 
 export interface ServerRuntime {
@@ -46,6 +54,7 @@ export interface ServerRuntime {
   readonly databasePath: string;
   readonly coordinator: RepositorySyncCoordinator;
   readonly reclassification: DomainReclassificationService;
+  readonly agentChat: AgentChatController;
 }
 
 /** Resolve the one SQLite path owned by the Server runtime. */
@@ -84,12 +93,28 @@ export function createServerRuntime(
       enricher,
     });
     const reclassification = new DomainReclassificationService({ database });
+    const agentChat = new AgentChatController({
+      database,
+      agentSessionsPath: join(config.runtime.statePath, "agent-sessions"),
+      worktreesPath: config.runtime.worktreesPath,
+      knowledgePath: config.knowledge.path,
+      defaults: {
+        provider: config.agent.defaultProvider,
+        model: config.agent.defaultModel,
+        reasoningEffort: config.agent.defaultReasoningEffort,
+        idleProcessMinutes: config.agent.idleProcessMinutes,
+      },
+      ...(options.runtimeFactory !== undefined
+        ? { runtimeFactory: options.runtimeFactory as (spec: AgentSessionSpec) => AgentRuntime }
+        : {}),
+    });
     const app = buildApp(
       {
         database,
         timezone: config.timezone,
         syncCoordinator: coordinator,
         reclassification,
+        agentChat,
       },
       options.appOptions,
     );
@@ -99,12 +124,13 @@ export function createServerRuntime(
       closePromise ??= (async () => {
         await coordinator.close();
         await reclassification.close();
+        await agentChat.close();
         database.close();
       })();
       await closePromise;
     });
 
-    return { app, config, database, databasePath, coordinator, reclassification };
+    return { app, config, database, databasePath, coordinator, reclassification, agentChat };
   } catch (error) {
     database.close();
     throw error;

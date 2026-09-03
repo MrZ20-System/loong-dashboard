@@ -13,6 +13,7 @@ import {
 import {
   type ActivityDay,
   type DatabaseClient,
+  type IssueDetail,
   type IssueListItem,
   type IssueMetadata,
   type IssueStatus,
@@ -366,6 +367,30 @@ export function listIssues(
         ? encodeListCursor({ updatedAt: last.updatedAt, number: last.number })
         : null,
     calendarTimeZone,
+  };
+}
+
+/** Stored full Issue row for the detail page (plan 1.3, 18.3). */
+export function getIssueDetail(
+  database: DatabaseClient,
+  repositoryId: string,
+  number: number,
+): IssueDetail | null {
+  requireRepository(database, repositoryId);
+  const row = database
+    .prepare(
+      `SELECT repository_id, number, title, url, author_login, state,
+              comments_count, updated_at, created_at, closed_at, detail_body
+       FROM issues
+       WHERE repository_id = ? AND number = ?`,
+    )
+    .get(repositoryId, number) as Record<string, unknown> | undefined;
+  if (row === undefined) return null;
+  return {
+    ...mapIssue(row),
+    createdAt: row.created_at as string,
+    closedAt: (row.closed_at as string | null) ?? null,
+    detailBody: (row.detail_body as string | null) ?? null,
   };
 }
 

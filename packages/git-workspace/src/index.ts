@@ -23,6 +23,12 @@ export type { ChangedFileEntry, FileContent, PreparePullInput, PreparePullResult
 export { MAX_DIFF_FILE_BYTES } from "./diff-types.js";
 export { GitCommandError, runGitBuffer, runGitOptionalText, runGitText, type RunGitOptions } from "./git-command.js";
 export { GitObjectMissingError, GitPathUnsafeError, LocalGitWorkspace, type LocalGitWorkspaceOptions } from "./local-git-workspace.js";
+export {
+  WorktreePool,
+  WorktreePoolError,
+  type AllocatedSlot,
+  type AllocateSlotInput,
+} from "./worktree-pool.js";
 
 /**
  * Public service shape used by the server routes. Keeping the interface in

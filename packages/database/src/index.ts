@@ -32,6 +32,7 @@ export type {
 } from "./sync-service.js";
 export {
   getIssueActivityDays,
+  getIssueDetail,
   getPullRequestActivityDays,
   InvalidCursorError,
   listIssues,
@@ -62,6 +63,25 @@ export {
   replacePullRequestDomains,
   replacePullRequestFiles,
 } from "./classification-service.js";
+export {
+  AgentSessionNotFoundError,
+  appendAgentMessage,
+  createAgentSession,
+  findAgentSession,
+  listAgentMessages,
+  listAgentSessions,
+  listBusyWorkspacePaths,
+  requireAgentSession,
+  touchAgentSession,
+  updateAgentMessage,
+  updateAgentSession,
+} from "./agent-service.js";
+export type {
+  AgentMessageRecord,
+  AgentSessionListFilter,
+  AgentSessionRecord,
+  CreateAgentSessionInput,
+} from "./agent-service.js";
 export type {
   PullRequestEnrichmentTarget,
   StoredPullRequestFiles,

@@ -118,9 +118,29 @@ export const activityDaysQuerySchema = z
     path: ["to"],
   });
 
+/** Numeric path params shared by issue routes (plan 17.4, 18.3). */
+export const issueParamsSchema = z
+  .object({
+    repositoryId: repositoryIdSchema,
+    number: z.preprocess(
+      (value) => (typeof value === "string" ? Number(value) : value),
+      z.number().int().positive(),
+    ),
+  })
+  .strict();
+
+/** Full stored Issue row used by the issue detail page (plan 1.3, 18.3). */
+export const issueDetailSchema = issueListItemSchema.extend({
+  createdAt: utcDateTimeSchema,
+  closedAt: utcDateTimeSchema.nullable(),
+  detailBody: z.string().nullable(),
+});
+
 export type PullRequestListItem = z.infer<typeof pullRequestListItemSchema>;
 export type PullRequestDetail = z.infer<typeof pullRequestDetailSchema>;
 export type IssueListItem = z.infer<typeof issueListItemSchema>;
+export type IssueDetail = z.infer<typeof issueDetailSchema>;
+export type IssueParams = z.infer<typeof issueParamsSchema>;
 export type ActivityDay = z.infer<typeof activityDaySchema>;
 export type PullRequestsResponse = z.infer<typeof pullRequestsResponseSchema>;
 export type IssuesResponse = z.infer<typeof issuesResponseSchema>;
