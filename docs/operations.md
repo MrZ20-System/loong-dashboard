@@ -13,3 +13,22 @@ Configuration errors fail fast. A failed command or migration is visible in
 the operation error and is not converted to an empty response. Stage 0 starts
 the local server and Web shell through `pnpm dev`; DSH process lifecycle is
 deferred to its later stage.
+
+## Stage 1 acceptance harnesses
+
+Use `pnpm test:e2e:stage1` for the deterministic acceptance path. The runner
+owns one temporary root and removes it after terminating the exact Server,
+Vite, and Playwright child processes. Its fake GitHub executable is selected by
+`PATH` only inside that process environment, and its command log contains
+repository/operation/state/cursor/generation metadata rather than credentials
+or raw responses.
+
+Use `pnpm smoke:stage1:real` only when authenticated GitHub CLI access is
+intended. The real smoke selects exactly `vllm` and `vllm-ascend` from the parent
+configuration, points Server at temporary runtime directories, and wraps an
+absolute real `gh` executable. It does not create worktrees, fetch, checkout,
+commit, or otherwise write either source repository. Before and after the two
+syncs it compares the source repositories' raw Git `HEAD` and status output;
+any difference fails the command. A successful report includes per-repository
+watermarks, list sizes, command counts before/after local reads, and an
+explicit unchanged-source result.
