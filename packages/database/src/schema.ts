@@ -115,6 +115,12 @@ export const pullRequests = sqliteTable(
       table.status,
       desc(table.updatedAt),
     ),
+    index("pull_requests_status_updated_number_idx").on(
+      table.repositoryId,
+      table.status,
+      desc(table.updatedAt),
+      desc(table.number),
+    ),
     check("pull_requests_number_check", sql`${table.number} > 0`),
     check(
       "pull_requests_status_check",
@@ -240,6 +246,12 @@ export const issues = sqliteTable(
     unique("issues_repository_node_unique").on(table.repositoryId, table.nodeId),
     index("issues_updated_number_idx").on(
       table.repositoryId,
+      desc(table.updatedAt),
+      desc(table.number),
+    ),
+    index("issues_state_updated_number_idx").on(
+      table.repositoryId,
+      table.state,
       desc(table.updatedAt),
       desc(table.number),
     ),

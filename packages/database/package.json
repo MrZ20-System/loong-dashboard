@@ -13,6 +13,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit --pretty false"
   },
   "dependencies": {
+    "@loongboard/contracts": "workspace:*",
     "better-sqlite3": "12.11.1",
     "drizzle-orm": "0.44.5"
   },

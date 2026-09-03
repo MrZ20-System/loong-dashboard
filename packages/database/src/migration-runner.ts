@@ -1,13 +1,18 @@
 import Database from "better-sqlite3";
 
 import { initialSchemaMigration } from "./migrations/001-initial-schema.js";
+import { metadataListIndexesMigration } from "./migrations/002-metadata-list-indexes.js";
+import { recoverInterruptedSyncStates } from "./sync-service.js";
 
 export interface Migration {
   readonly id: string;
   migrate(database: Database.Database): void;
 }
 
-const migrations: readonly Migration[] = [initialSchemaMigration];
+const migrations: readonly Migration[] = [
+  initialSchemaMigration,
+  metadataListIndexesMigration,
+];
 
 function orderedMigrations(items: readonly Migration[]): readonly Migration[] {
   const ordered = [...items].sort((left, right) => left.id.localeCompare(right.id));
@@ -60,6 +65,7 @@ export function openDatabase(databasePath: string): Database.Database {
 
   try {
     runMigrations(database);
+    recoverInterruptedSyncStates(database);
     return database;
   } catch (error) {
     database.close();

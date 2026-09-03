@@ -26,6 +26,19 @@ SQLite persistence foundation for LoongBoard.
 - `runMigrations(database)`: applies pending migrations to an existing client.
 - `createDrizzleDatabase(database)`: wraps a migrated `better-sqlite3` client
   with the exported typed schema.
+- `reconcileRepositories(database, configuredRepositories)`: synchronizes the
+  `system.yaml` repository projection, using each configured `key` as its
+  stable id and disabling removed entries without deleting history.
+- `startRepositorySync`, `completeSyncStream`, and `failSyncStream`: the
+  narrow metadata sync state machine. A failed stream leaves its previous
+  watermark unchanged; `openDatabase` recovers interrupted running streams.
+- `upsertPullRequestPage` and `upsertIssuePage`: transactional, replay-safe
+  metadata page writes.
+- `listPullRequests` and `listIssues`: SQLite-only list reads ordered by
+  `updated_at DESC, number DESC`, with status, IANA-date, and v1 cursor
+  filters.
+- `getPullRequestActivityDays` and `getIssueActivityDays`: UTC-range queries
+  grouped by the requested IANA calendar date.
 - Table declarations and the combined `schema` object.
 
 ## Dependencies
@@ -47,5 +60,8 @@ SQLite persistence foundation for LoongBoard.
 ## Tests
 
 `test/migration-runner.test.ts` covers a fresh database, idempotent re-runs,
-foreign-key activation and enforcement, all V1 core tables, and typed Drizzle
-queries for repository, scheduled-task, and Issue Chat identity mappings.
+foreign-key activation and enforcement, all V1 core tables, the metadata list
+indexes, and typed Drizzle queries for repository, scheduled-task, and Issue
+Chat identity mappings. `test/metadata-services.test.ts` covers reconciliation,
+interrupted sync recovery, failure watermark preservation, replay-safe upserts,
+stable tie-breaking cursors, status/date/DST filters, and activity-day counts.

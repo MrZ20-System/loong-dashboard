@@ -83,7 +83,10 @@ describe("database migrations", () => {
 
       expect(tables).toEqual(CORE_TABLES);
       expect(foreignKeys).toBe(1);
-      expect(ledger).toEqual([{ id: "001_initial_schema" }]);
+      expect(ledger).toEqual([
+        { id: "001_initial_schema" },
+        { id: "002_metadata_list_indexes" },
+      ]);
     } finally {
       database.close();
     }
@@ -105,6 +108,7 @@ describe("database migrations", () => {
         .all();
       expect(ledger).toEqual([
         { id: "001_initial_schema", applied_at: firstAppliedAt },
+        expect.objectContaining({ id: "002_metadata_list_indexes" }),
       ]);
     } finally {
       database.close();
@@ -138,6 +142,22 @@ describe("database migrations", () => {
       ]);
       expect(readIndexColumns(database, "issues_updated_number_idx")).toEqual([
         { name: "repository_id", descending: 0 },
+        { name: "updated_at", descending: 1 },
+        { name: "number", descending: 1 },
+      ]);
+      expect(
+        readIndexColumns(database, "pull_requests_status_updated_number_idx"),
+      ).toEqual([
+        { name: "repository_id", descending: 0 },
+        { name: "status", descending: 0 },
+        { name: "updated_at", descending: 1 },
+        { name: "number", descending: 1 },
+      ]);
+      expect(
+        readIndexColumns(database, "issues_state_updated_number_idx"),
+      ).toEqual([
+        { name: "repository_id", descending: 0 },
+        { name: "state", descending: 0 },
         { name: "updated_at", descending: 1 },
         { name: "number", descending: 1 },
       ]);
