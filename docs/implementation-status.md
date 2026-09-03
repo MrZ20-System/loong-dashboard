@@ -6,8 +6,9 @@ and does not copy the rejected legacy dashboard architecture.
 
 ## Current stage
 
-Stage 6: Scheduler — completed locally on 2026-09-03.
-Stage 7 (Release Acceptance) is next.
+All V1 stages (0-7) completed locally on 2026-09-03; Stage 7 release
+acceptance below. Real GitHub/DSH live smokes remain deferred by explicit
+user direction.
 
 ## Done
 

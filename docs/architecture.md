@@ -45,3 +45,20 @@ sync-status GET routes read SQLite only. The Web consumes those routes, and an
 explicit user sync starts independent PR and Issue streams. GitHub response
 types are validated once in `packages/github`; they do not leak into the
 database, Server, or Web layers.
+
+## Stages 2-6
+
+Stage 2 derives deterministic PR domain labels from changed file paths and
+user rules (`domain_rules`, `pull_request_domains`) and reclassifies in
+process without GitHub calls. Stage 3 reads local Git only through
+`packages/git-workspace` (fetch-once prepare, merge-base diffs, byte-exact
+file reads). Stage 4 adds Agent chat: product code depends on the
+vendor-neutral `AgentRuntime` contract in `packages/agent-runtime`, while
+`packages/agent-runtime-dsh` is the only package allowed to import
+`@deepseek-ai/*`; one DSH subprocess per session runs in an isolated
+`dsh-home`, worktrees are disposable caches, and messages persist as
+normalized rows in SQLite. Stage 5 makes the Knowledge Markdown directory the
+source of truth with SQLite only an index (`loongboard_id` front matter,
+full-content history capped at 10 versions, default document chat). Stage 6
+adds a single-timer scheduler that starts fresh Agent Sessions per run with a
+workspace mutex.
