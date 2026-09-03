@@ -13,11 +13,17 @@ import {
 } from "node:fs";
 import { constants as fsConstants } from "node:fs";
 import { createRequire } from "node:module";
-import { spawn, spawnSync, execFileSync } from "node:child_process";
+import { spawnSync, execFileSync } from "node:child_process";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import {
+  signalProcessTree,
+  spawnProcessTree,
+  terminateProcessTree,
+} from "./process-tree.mjs";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(scriptDirectory, "..");
@@ -29,7 +35,12 @@ let temporaryRoot;
 
 const onSignal = () => {
   for (const child of children) {
-    if (child.exitCode === null) child.kill("SIGTERM");
+    try {
+      signalProcessTree(child, "SIGTERM");
+    } catch (error) {
+      process.exitCode = 1;
+      console.error(`Unable to signal smoke process tree: ${redact(errorMessage(error))}`);
+    }
   }
 };
 process.once("SIGINT", onSignal);
@@ -102,14 +113,30 @@ try {
   console.error(`Stage 1 real smoke failed: ${redact(message)}`);
   process.exitCode = 1;
 } finally {
+  let cleanupError;
   for (const child of [...children].reverse()) {
-    await terminateChild(child);
+    try {
+      await terminateChild(child);
+    } catch (error) {
+      cleanupError ??= error;
+    }
   }
-  if (temporaryRoot && existsSync(temporaryRoot)) {
-    rmSync(temporaryRoot, { recursive: true, force: true });
+  try {
+    if (temporaryRoot && existsSync(temporaryRoot)) {
+      rmSync(temporaryRoot, { recursive: true, force: true });
+    }
+  } catch (error) {
+    cleanupError ??= error;
+  } finally {
+    process.removeListener("SIGINT", onSignal);
+    process.removeListener("SIGTERM", onSignal);
   }
-  process.removeListener("SIGINT", onSignal);
-  process.removeListener("SIGTERM", onSignal);
+  if (cleanupError !== undefined) {
+    process.exitCode = 1;
+    console.error(
+      `Stage 1 real smoke cleanup failed: ${redact(errorMessage(cleanupError))}`,
+    );
+  }
 }
 
 function findParentConfig() {
@@ -264,7 +291,7 @@ function startServer(environment, serverPort, root) {
   const stdout = openSync(stdoutPath, "a");
   const stderr = openSync(stderrPath, "a");
   const executable = resolve(repositoryRoot, "apps/server/node_modules/.bin/tsx");
-  const child = spawn(executable, ["src/start.ts"], {
+  const child = spawnProcessTree(executable, ["src/start.ts"], {
     cwd: resolve(repositoryRoot, "apps/server"),
     env: { ...environment },
     stdio: ["ignore", stdout, stderr],
@@ -278,14 +305,10 @@ async function runSmokeFlow(origin, repositories, callLogPath) {
   const reports = [];
   for (const repository of repositories) {
     const first = await synchronize(origin, repository.key, callLogPath);
-    if (first.commandCount < 4) {
-      throw new Error(`bootstrap sync did not cover four metadata streams for ${repository.key}`);
-    }
+    assertBootstrapStreams(repository, first.calls);
     const firstReads = await readListsWithoutGh(origin, repository.key, callLogPath);
     const second = await synchronize(origin, repository.key, callLogPath);
-    if (second.commandCount !== 2) {
-      throw new Error(`incremental sync expected one command per metadata stream for ${repository.key}`);
-    }
+    assertIncrementalStreams(repository, second.calls);
     const secondReads = await readListsWithoutGh(origin, repository.key, callLogPath);
     assertWatermarksAdvance(repository.key, first, second);
     reports.push({
@@ -302,20 +325,68 @@ async function runSmokeFlow(origin, repositories, callLogPath) {
 }
 
 async function synchronize(origin, repositoryId, callLogPath) {
-  const commandCountBefore = countCalls(callLogPath);
+  const callsBefore = readRecordedCalls(callLogPath);
   const accepted = await requestJson(origin, "POST", `/api/repositories/${encodeURIComponent(repositoryId)}/sync`);
   if (accepted.status !== "accepted" || accepted.repositoryId !== repositoryId) {
     throw new Error(`sync was not accepted for ${repositoryId}`);
   }
   const status = await waitForStatus(origin, repositoryId);
   if (status.pullRequests.status !== "idle" || status.issues.status !== "idle") {
-    throw new Error(`sync failed for ${repositoryId}: ${status.pullRequests.status}/${status.issues.status}`);
+    const pullError = status.pullRequests.lastError ?? "none";
+    const issueError = status.issues.lastError ?? "none";
+    throw new Error(
+      `sync failed for ${repositoryId}: ${status.pullRequests.status}/${status.issues.status}; ` +
+      `pulls=${pullError}; issues=${issueError}`,
+    );
   }
-  const commandCount = countCalls(callLogPath) - commandCountBefore;
+  const calls = readRecordedCalls(callLogPath).slice(callsBefore.length);
+  const commandCount = calls.length;
   if (commandCount < 2) {
     throw new Error(`sync did not execute both metadata streams for ${repositoryId}`);
   }
-  return { ...status, commandCount };
+  return { ...status, commandCount, calls };
+}
+
+function assertBootstrapStreams(repository, calls) {
+  const expected = new Set([
+    "pulls:OPEN",
+    "pulls:CLOSED,MERGED",
+    "issues:OPEN",
+    "issues:CLOSED",
+  ]);
+  for (const call of calls) {
+    if (call.github !== repository.github) {
+      throw new Error(`bootstrap command targeted the wrong repository for ${repository.key}`);
+    }
+    expected.delete(`${call.operation}:${call.states.join(",")}`);
+  }
+  if (expected.size > 0) {
+    throw new Error(
+      `bootstrap sync missed metadata streams for ${repository.key}: ${[...expected].join(", ")}`,
+    );
+  }
+}
+
+function assertIncrementalStreams(repository, calls) {
+  const operations = new Set();
+  for (const call of calls) {
+    if (call.github !== repository.github) {
+      throw new Error(`incremental command targeted the wrong repository for ${repository.key}`);
+    }
+    if (
+      call.operation === "pulls" &&
+      call.states.join(",") !== "OPEN,CLOSED,MERGED"
+    ) {
+      throw new Error(`incremental Pull Request states are invalid for ${repository.key}`);
+    }
+    if (call.operation === "issues" && call.states.join(",") !== "OPEN,CLOSED") {
+      throw new Error(`incremental Issue states are invalid for ${repository.key}`);
+    }
+    operations.add(call.operation);
+  }
+  if (!operations.has("pulls") || !operations.has("issues")) {
+    throw new Error(`incremental sync missed a metadata stream for ${repository.key}`);
+  }
 }
 
 async function waitForStatus(origin, repositoryId) {
@@ -418,10 +489,15 @@ function sameSnapshot(left, right) {
 }
 
 function countCalls(filePath) {
-  if (!existsSync(filePath)) return 0;
+  return readRecordedCalls(filePath).length;
+}
+
+function readRecordedCalls(filePath) {
+  if (!existsSync(filePath)) return [];
   return readFileSync(filePath, "utf8")
     .split("\n")
-    .filter((line) => line.trim().length > 0).length;
+    .filter((line) => line.trim().length > 0)
+    .map((line) => JSON.parse(line));
 }
 
 function waitForHttp(url, child) {
@@ -457,30 +533,15 @@ async function reservePort() {
 }
 
 async function terminateChild(child) {
-  if (!child || child.exitCode !== null) return;
-  child.kill("SIGTERM");
-  if (!await waitForExitWithin(child, 5_000)) {
-    child.kill("SIGKILL");
-    await waitForExitWithin(child, 5_000);
-  }
-}
-
-function waitForExitWithin(child, timeoutMs) {
-  return new Promise((resolvePromise) => {
-    if (child.exitCode !== null) {
-      resolvePromise(true);
-      return;
-    }
-    const timer = setTimeout(() => resolvePromise(false), timeoutMs);
-    child.once("close", () => {
-      clearTimeout(timer);
-      resolvePromise(true);
-    });
-  });
+  await terminateProcessTree(child);
 }
 
 function delay(milliseconds) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
+}
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function redact(value) {

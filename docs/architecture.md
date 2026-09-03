@@ -36,3 +36,12 @@ architecture checks, core database schema/migrations, the Fastify health route,
 the minimal React shell, package scaffolds, and the exact DSH pin. It does not
 implement product CRUD, GitHub synchronization, business routes or pages, or
 DSH lifecycle behavior.
+
+## Stage 1
+
+Stage 1 adds one explicit metadata write path from the Server through
+`GhGitHubMetadataProvider` into SQLite. Repository, PR, Issue, activity-day, and
+sync-status GET routes read SQLite only. The Web consumes those routes, and an
+explicit user sync starts independent PR and Issue streams. GitHub response
+types are validated once in `packages/github`; they do not leak into the
+database, Server, or Web layers.

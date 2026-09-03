@@ -9,12 +9,13 @@ Local Fastify HTTP server for LoongBoard.
 - Fastify app construction and route registration.
 - The local server process entrypoint.
 - Strict `system.yaml` loading and one-time path resolution.
+- Stage 1 runtime composition and bounded background metadata synchronization.
 
 ## Does not own
 
 - HTTP request or response contracts.
 - Database schema, migrations, or raw SQL.
-- GitHub, local Git, Knowledge, Scheduler, or DSH behavior in Stage 0.
+- GitHub command execution, local Git, Knowledge, Scheduler, or DSH behavior.
 
 ## Public API
 
@@ -27,6 +28,10 @@ Local Fastify HTTP server for LoongBoard.
 - `resolveSystemConfigPath(environment, cwd)`: selects the explicit environment
   path or the repository parent's `system.yaml`, whether invoked from the
   repository root or a package working directory.
+- `RepositorySyncCoordinator`: starts one background run per repository with a
+  global maximum of two active repositories and independent PR/Issue streams.
+- `createServerRuntime`: reconciles configured repositories, opens the runtime
+  database, wires the provider/coordinator/app, and owns graceful shutdown.
 
 ## Dependencies
 
@@ -34,6 +39,8 @@ Local Fastify HTTP server for LoongBoard.
 - `zod` for system-configuration boundary validation.
 - `yaml` for parsing `system.yaml`.
 - `@loongboard/contracts` for shared HTTP response validation.
+- `@loongboard/database` for typed persistence operations.
+- `@loongboard/github` for the metadata provider boundary.
 
 ## Invariants
 
@@ -43,10 +50,15 @@ Local Fastify HTTP server for LoongBoard.
 - Invalid or missing system configuration stops startup before listening.
 - `knowledge.inbox` is a relative directory contained by the resolved
   `knowledge.path`.
+- PR/Issue GET routes read SQLite only; only the explicit sync POST calls the
+  GitHub provider.
+- Sync POST has an empty-body contract, returns 202 without waiting, and a
+  second run for the same repository returns 409.
+- Shutdown waits for active runs before closing SQLite.
 
 ## Tests
 
-`test/health.test.ts` uses Fastify injection to verify the health response status,
-content type, and exact body. Configuration tests cover valid parsing, invalid
-fail-fast behavior, path resolution, extra-field rejection at every schema
-layer, and startup-path selection.
+Fastify injection tests cover health, strict request/error boundaries, every
+Stage 1 route, background 202 behavior, concurrency, bootstrap/incremental
+selection, mixed stream failures, and shutdown ordering. Configuration tests
+cover validation and path resolution.

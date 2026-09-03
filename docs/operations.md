@@ -10,18 +10,20 @@ under `.loong`; disposable worktrees live under `.worktrees`. Do not commit
 either directory.
 
 Configuration errors fail fast. A failed command or migration is visible in
-the operation error and is not converted to an empty response. Stage 0 starts
-the local server and Web shell through `pnpm dev`; DSH process lifecycle is
-deferred to its later stage.
+the operation error and is not converted to an empty response. `pnpm dev`
+starts the local Server and Web application. Stage 1 GitHub synchronization is
+started only by the explicit sync action; DSH process lifecycle is deferred to
+its later stage.
 
 ## Stage 1 acceptance harnesses
 
 Use `pnpm test:e2e:stage1` for the deterministic acceptance path. The runner
-owns one temporary root and removes it after terminating the exact Server,
-Vite, and Playwright child processes. Its fake GitHub executable is selected by
-`PATH` only inside that process environment, and its command log contains
-repository/operation/state/cursor/generation metadata rather than credentials
-or raw responses.
+owns one temporary root and removes it after terminating the Server, Vite,
+Playwright, and their discovered descendant processes. Its fake GitHub
+executable is selected by `PATH` only inside that process environment, and its
+command log contains repository/operation/state/cursor/generation metadata
+rather than credentials or raw responses. Cleanup fails visibly if neither the
+owned process group nor descendant discovery can prove tree termination.
 
 Use `pnpm smoke:stage1:real` only when authenticated GitHub CLI access is
 intended. The real smoke selects exactly `vllm` and `vllm-ascend` from the parent
@@ -31,4 +33,6 @@ commit, or otherwise write either source repository. Before and after the two
 syncs it compares the source repositories' raw Git `HEAD` and status output;
 any difference fails the command. A successful report includes per-repository
 watermarks, list sizes, command counts before/after local reads, and an
-explicit unchanged-source result.
+explicit unchanged-source result. The recording wrapper passes GraphQL stdout
+through a pipe to the provider for in-memory validation; it persists only
+operation, repository, states, cursor, exit, signal, and byte-count metadata.

@@ -10,6 +10,8 @@ const callLogPath = requiredEnvironment("LOONGBOARD_REAL_GH_CALL_LOG");
 const inputChunks = [];
 process.stdin.on("data", (chunk) => inputChunks.push(Buffer.from(chunk)));
 process.stdin.on("end", () => {
+  const input = Buffer.concat(inputChunks);
+  const request = requestMetadata(input);
   const child = spawn(realExecutable, process.argv.slice(2), {
     shell: false,
     env: process.env,
@@ -17,6 +19,21 @@ process.stdin.on("end", () => {
   });
   const stdoutChunks = [];
   const stderrChunks = [];
+  let recorded = false;
+  const recordOnce = (result) => {
+    if (recorded) return;
+    recorded = true;
+    appendCall({
+      argv: process.argv.slice(2),
+      ...request,
+      ...result,
+    });
+  };
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.once(signal, () => {
+      if (child.exitCode === null) child.kill(signal);
+    });
+  }
   child.stdout.on("data", (chunk) => {
     const buffer = Buffer.from(chunk);
     stdoutChunks.push(buffer);
@@ -28,8 +45,7 @@ process.stdin.on("end", () => {
     process.stderr.write(buffer);
   });
   child.once("error", (error) => {
-    appendCall({
-      argv: process.argv.slice(2),
+    recordOnce({
       exitCode: null,
       signal: null,
       stdoutBytes: 0,
@@ -39,8 +55,7 @@ process.stdin.on("end", () => {
     process.exitCode = 127;
   });
   child.once("close", (exitCode, signal) => {
-    appendCall({
-      argv: process.argv.slice(2),
+    recordOnce({
       exitCode,
       signal,
       stdoutBytes: Buffer.concat(stdoutChunks).byteLength,
@@ -48,7 +63,7 @@ process.stdin.on("end", () => {
     });
     process.exitCode = exitCode ?? 1;
   });
-  child.stdin.end(Buffer.concat(inputChunks));
+  child.stdin.end(input);
 });
 
 function requiredEnvironment(name) {
@@ -66,4 +81,36 @@ function appendCall(record) {
     `${JSON.stringify({ at: new Date().toISOString(), ...record })}\n`,
     "utf8",
   );
+}
+
+function requestMetadata(input) {
+  try {
+    const decoded = JSON.parse(input.toString("utf8"));
+    const variables = decoded?.variables;
+    const query = decoded?.query;
+    if (
+      typeof query !== "string" ||
+      variables === null ||
+      typeof variables !== "object"
+    ) {
+      return { operation: "unknown", github: null, states: [], cursor: null };
+    }
+    const operation = query.includes("pullRequests")
+      ? "pulls"
+      : query.includes("issues")
+        ? "issues"
+        : "unknown";
+    const owner = typeof variables.owner === "string" ? variables.owner : null;
+    const name = typeof variables.name === "string" ? variables.name : null;
+    return {
+      operation,
+      github: owner !== null && name !== null ? `${owner}/${name}` : null,
+      states: Array.isArray(variables.states)
+        ? variables.states.filter((value) => typeof value === "string")
+        : [],
+      cursor: typeof variables.cursor === "string" ? variables.cursor : null,
+    };
+  } catch {
+    return { operation: "unknown", github: null, states: [], cursor: null };
+  }
 }

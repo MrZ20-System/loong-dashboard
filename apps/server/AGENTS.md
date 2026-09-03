@@ -11,8 +11,13 @@ Own the local Fastify HTTP process and route composition.
 - Validate `system.yaml` once and resolve its paths relative to the file before
   entering typed application code.
 - Do not place raw SQL here.
-- Do not call GitHub, Git, or DSH in Stage 0.
+- Route GitHub metadata work only through `@loongboard/github`; GET list routes
+  remain SQLite-only and sync starts only from the explicit POST route.
+- Keep Pull Request and Issue stream failures independent and make process
+  shutdown wait for active synchronization before closing SQLite.
+- Do not call local Git or DSH, and do not add Stage 2 behavior.
 
 ## Verification
 
-Run `pnpm test` and `pnpm typecheck` from this app after a Server change.
+Run `pnpm --filter @loongboard/server test`, typecheck, and build from the
+repository root after a Server change.

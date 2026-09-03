@@ -1,8 +1,9 @@
 # LoongBoard Data Model
 
 The database package owns migrations, schema, raw SQL, and migration tests.
-Stage 0 establishes the documented core tables and migration ledger; this
-document records the entities without implementing their product services.
+Stage 0 established the core tables and migration ledger. Stage 1 implements
+repository reconciliation, sync state, and PR/Issue metadata persistence while
+later entity services remain deferred.
 
 ## Core entities
 

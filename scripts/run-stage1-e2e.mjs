@@ -10,7 +10,7 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -20,6 +20,11 @@ import {
   buildStage1Fixture,
   stage1RepositoryConfigs,
 } from "../tests/fixtures/stage1-fixture.mjs";
+import {
+  signalProcessTree,
+  spawnProcessTree,
+  terminateProcessTree,
+} from "./process-tree.mjs";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const repositoryRoot = resolve(scriptDirectory, "..");
@@ -29,7 +34,12 @@ let temporaryRoot;
 
 const onSignal = () => {
   for (const child of processChildren) {
-    if (child.exitCode === null) child.kill("SIGTERM");
+    try {
+      signalProcessTree(child, "SIGTERM");
+    } catch (error) {
+      process.exitCode = 1;
+      console.error(`Unable to signal E2E process tree: ${errorMessage(error)}`);
+    }
   }
 };
 process.once("SIGINT", onSignal);
@@ -96,19 +106,33 @@ try {
   const callCount = readCallLog(paths.callLogPath).length;
   console.log(`Stage 1 E2E passed; fake gh calls: ${callCount}`);
 } catch (error) {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = errorMessage(error);
   console.error(`Stage 1 E2E failed: ${message}`);
   if (temporaryRoot) printFailureLogs(temporaryRoot);
   process.exitCode = 1;
 } finally {
+  let cleanupError;
   for (const child of [...processChildren].reverse()) {
-    await terminateChild(child);
+    try {
+      await terminateChild(child);
+    } catch (error) {
+      cleanupError ??= error;
+    }
   }
-  if (temporaryRoot && existsSync(temporaryRoot)) {
-    rmSync(temporaryRoot, { recursive: true, force: true });
+  try {
+    if (temporaryRoot && existsSync(temporaryRoot)) {
+      rmSync(temporaryRoot, { recursive: true, force: true });
+    }
+  } catch (error) {
+    cleanupError ??= error;
+  } finally {
+    process.removeListener("SIGINT", onSignal);
+    process.removeListener("SIGTERM", onSignal);
   }
-  process.removeListener("SIGINT", onSignal);
-  process.removeListener("SIGTERM", onSignal);
+  if (cleanupError !== undefined) {
+    process.exitCode = 1;
+    console.error(`Stage 1 E2E cleanup failed: ${errorMessage(cleanupError)}`);
+  }
 }
 
 function prepareFixture(root, fixture) {
@@ -269,7 +293,7 @@ function startChild(
   const stderr = inheritOutput
     ? "inherit"
     : openSync(stderrPath, "a");
-  const child = spawn(executable, argumentsList, {
+  const child = spawnProcessTree(executable, argumentsList, {
     cwd,
     env: environment,
     stdio: ["ignore", stdout, stderr],
@@ -277,9 +301,6 @@ function startChild(
   if (typeof stdout === "number") closeSync(stdout);
   if (typeof stderr === "number") closeSync(stderr);
   processChildren.add(child);
-  child.once("close", () => {
-    processChildren.delete(child);
-  });
   return child;
 }
 
@@ -314,27 +335,7 @@ function waitForExit(child) {
 }
 
 async function terminateChild(child) {
-  if (child.exitCode !== null) return;
-  child.kill("SIGTERM");
-  const stopped = await waitForExitWithin(child, 5_000);
-  if (!stopped && child.exitCode === null) {
-    child.kill("SIGKILL");
-    await waitForExitWithin(child, 5_000);
-  }
-}
-
-function waitForExitWithin(child, timeoutMs) {
-  return new Promise((resolvePromise) => {
-    if (child.exitCode !== null) {
-      resolvePromise(true);
-      return;
-    }
-    const timer = setTimeout(() => resolvePromise(false), timeoutMs);
-    child.once("close", () => {
-      clearTimeout(timer);
-      resolvePromise(true);
-    });
-  });
+  await terminateProcessTree(child);
 }
 
 function readCallLog(filePath) {
@@ -358,4 +359,8 @@ function printFailureLogs(root) {
 
 function delay(milliseconds) {
   return new Promise((resolvePromise) => setTimeout(resolvePromise, milliseconds));
+}
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
 }

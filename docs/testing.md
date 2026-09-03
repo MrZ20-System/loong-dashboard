@@ -27,8 +27,8 @@ actually ran it.
 fixture repositories, a temporary `system.yaml`, runtime directories, an
 executable fake GitHub CLI, and an append-only command log. It starts the
 non-watch Server and Vite on strict temporary loopback ports, runs the serial
-Playwright flow, and then terminates the exact child PIDs before removing only
-that root.
+Playwright flow, and then terminates each owned process tree before removing
+only that root.
 
 The runner uses the Playwright-managed browser by default. If that browser is
 not installed on a development host, set `LOONGBOARD_E2E_BROWSER_PATH` to an
@@ -55,3 +55,5 @@ repository, checks non-empty sorted lists and zero command increments for
 SQLite reads, records both watermarks, and byte-compares each source checkout's
 Git `HEAD` and status before/after. The wrapper records command metadata only;
 tokens, request bodies, and raw GitHub responses are not persisted or printed.
+The wrapper records only parsed repository/operation/state/cursor metadata and
+result byte counts; response bytes travel only through the provider pipe.
