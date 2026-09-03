@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { AgentChatPanel } from "./agent-chat";
+import { KnowledgeEditor } from "./knowledge-editor";
 import {
   createKnowledgeDocument,
   deleteKnowledgeDocument,
@@ -242,12 +243,13 @@ export function KnowledgePage() {
               )}
               {mode === "preview" && <div className="knowledge-body"><MarkdownView text={content} /></div>}
               {mode === "edit" && (
-                <textarea
-                  aria-label="Markdown source"
-                  className="knowledge-editor"
+                <KnowledgeEditor
+                  key={activePath}
                   value={content}
-                  onChange={(event) => { setDraft(event.target.value); setError(null); }}
-                  spellCheck={false}
+                  onChange={(next) => {
+                    setDraft(next);
+                    setError(null);
+                  }}
                 />
               )}
               {mode === "history" && rawDocumentId.length > 0 && (

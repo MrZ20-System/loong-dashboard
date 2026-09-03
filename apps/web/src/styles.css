@@ -1107,3 +1107,13 @@ td {
   clip: rect(0 0 0 0);
   white-space: nowrap;
 }
+
+/* Monaco-backed Knowledge markdown editor (plan 15.3). */
+.knowledge-editor-host {
+  width: 100%;
+  min-height: 60vh;
+  height: 60vh;
+  border: 1px solid #2c3d63;
+  border-radius: 0.4rem;
+  overflow: hidden;
+}
