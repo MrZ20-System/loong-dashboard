@@ -12,3 +12,6 @@ test-results/
 *.db-wal
 *.tsbuildinfo
 .DS_Store
+
+# machine-specific pnpm store location
+.npmrc
