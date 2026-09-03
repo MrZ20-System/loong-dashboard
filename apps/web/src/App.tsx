@@ -7,7 +7,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Link,
   Route,
@@ -79,29 +79,43 @@ function FilterBar({ kind, date, status, onDate, onStatus }: { kind: "pulls" | "
 function SyncControl({ repositoryId }: { repositoryId: string }) {
   const client = useQueryClient();
   const [message, setMessage] = useState<string | null>(null);
-  const sync = useMutation({ mutationFn: () => startSync(repositoryId), onSuccess: (accepted) => { setMessage("Sync started."); client.setQueryData(["sync-attempt", repositoryId], { syncRunId: accepted.syncRunId }); void client.invalidateQueries({ queryKey: ["sync", repositoryId] }); }, onError: (error: Error) => setMessage(`Sync failed: ${error.message}`) });
+  const sync = useMutation({ mutationFn: () => startSync(repositoryId), onSuccess: (accepted) => { setMessage("Sync started."); client.setQueryData(["sync-attempt", repositoryId], { syncRunId: accepted.syncRunId, statusDataUpdatedAt: client.getQueryState(["sync", repositoryId])?.dataUpdatedAt ?? null }); void client.invalidateQueries({ queryKey: ["sync", repositoryId] }); }, onError: (error: Error) => setMessage(`Sync failed: ${error.message}`) });
   return <div className="sync-control"><button type="button" onClick={() => { setMessage(null); sync.mutate(); }} disabled={sync.isPending}>{sync.isPending ? "Starting sync…" : "Sync now"}</button>{message && <p role={sync.isError ? "alert" : "status"}>{message}</p>}</div>;
 }
 
 function SyncStatus({ repositoryId }: { repositoryId: string }) {
   const client = useQueryClient();
   const status = useQuery({ queryKey: ["sync", repositoryId], queryFn: ({ signal }) => fetchSyncStatus(repositoryId, signal), refetchInterval: (query) => query.state.data?.status === "running" ? 1000 : false });
-  const accepted = useQuery<{ syncRunId: string } | null>({ queryKey: ["sync-attempt", repositoryId], queryFn: async () => null, enabled: false });
+  const accepted = useQuery<{ syncRunId: string; statusDataUpdatedAt: number | null } | null>({ queryKey: ["sync-attempt", repositoryId], queryFn: async () => null, enabled: false });
   const acceptedRunId = accepted.data?.syncRunId;
-  const [handledAttempt, setHandledAttempt] = useState<string | null>(null);
-  const [wasRunning, setWasRunning] = useState(false);
+  const previousStreams = useRef<{ pullRequests: "idle" | "running" | "failed"; issues: "idle" | "running" | "failed" } | null>(null);
   useEffect(() => {
-    if (status.data?.status === "running") setWasRunning(true);
-    if (acceptedRunId && acceptedRunId !== handledAttempt) {
-      setHandledAttempt(acceptedRunId);
-      if (status.data?.status === "running") setWasRunning(true);
-      else if (status.data && status.data.status !== "failed") void client.invalidateQueries({ queryKey: ["metadata", repositoryId] });
+    if (!status.data) return;
+    const streams = { pullRequests: status.data.pullRequests, issues: status.data.issues };
+    const previous = previousStreams.current;
+    const handledKey = ["sync-handled", repositoryId] as const;
+    let handled = client.getQueryData<{ syncRunId: string; pullRequests: boolean; issues: boolean }>(handledKey);
+    const isNewAttempt = acceptedRunId !== null && acceptedRunId !== handled?.syncRunId;
+    if (isNewAttempt && acceptedRunId) {
+      handled = { syncRunId: acceptedRunId, pullRequests: false, issues: false };
+      client.setQueryData(handledKey, handled);
     }
-    if (wasRunning && status.data && status.data.status !== "running") {
-      if (status.data.status !== "failed") void client.invalidateQueries({ queryKey: ["metadata", repositoryId] });
-      setWasRunning(false);
+    const acceptedStatusReady = !isNewAttempt || accepted.data?.statusDataUpdatedAt === null ||
+      (accepted.data?.statusDataUpdatedAt !== undefined && status.dataUpdatedAt > accepted.data.statusDataUpdatedAt);
+    for (const [streamName, stream] of Object.entries(streams) as Array<["pullRequests" | "issues", typeof streams.pullRequests]>) {
+      if (!handled || handled[streamName]) continue;
+      const reachedSuccessfulTerminal = stream.status === "idle" && (
+        (isNewAttempt && acceptedStatusReady) || previous?.[streamName] === "running"
+      );
+      if (reachedSuccessfulTerminal) {
+        handled = { ...handled, [streamName]: true };
+        client.setQueryData(handledKey, handled);
+        const kind = streamName === "pullRequests" ? "pulls" : "issues";
+        void client.invalidateQueries({ queryKey: ["metadata", repositoryId, kind] });
+      }
     }
-  }, [acceptedRunId, client, handledAttempt, repositoryId, status.data, wasRunning]);
+    previousStreams.current = { pullRequests: streams.pullRequests.status, issues: streams.issues.status };
+  }, [accepted.data, acceptedRunId, client, repositoryId, status.data, status.dataUpdatedAt]);
   if (status.isPending) return <span role="status">Checking sync status…</span>;
   if (status.isError) return <span role="alert">Sync status unavailable: {status.error.message}</span>;
   if (status.data.status === "running") return <span role="status">Sync in progress…</span>;

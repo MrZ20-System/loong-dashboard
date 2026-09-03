@@ -27,24 +27,30 @@ const issue = (number: number, title = `Issue ${number}`) => ({
   authorLogin: "author", status: "open" as const, updatedAt: "2026-09-03T02:03:04.000Z", commentsCount: 0,
 });
 
-const stream = (status: "idle" | "running" | "failed") => ({
-  entityKind: "pull_request" as const, status, watermarkUpdatedAt: null, lastAttemptAt: null,
+type StreamStatus = "idle" | "running" | "failed";
+type SyncSnapshot = { pullRequests: StreamStatus; issues: StreamStatus };
+
+const stream = (status: StreamStatus, entityKind: "pull_request" | "issue" = "pull_request") => ({
+  entityKind, status, watermarkUpdatedAt: null, lastAttemptAt: null,
   lastSuccessAt: null, lastError: status === "failed" ? "provider failed" : null,
   rateLimitRemaining: null, rateLimitResetAt: null,
 });
 
-const syncBody = (status: "idle" | "running" | "failed") => ({
-  repositoryId: "repo", status, pullRequests: stream(status), issues: { ...stream(status), entityKind: "issue" as const },
+const syncBody = (pullStatus: StreamStatus, issueStatus = pullStatus) => ({
+  repositoryId: "repo",
+  status: pullStatus === "running" || issueStatus === "running" ? "running" : pullStatus === "failed" || issueStatus === "failed" ? "failed" : "idle",
+  pullRequests: stream(pullStatus), issues: stream(issueStatus, "issue"),
 });
 
 function json(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 }
 
-function mockApi(options: { pulls?: unknown[]; issues?: unknown[]; pullPages?: unknown[][]; syncStatuses?: Array<"idle" | "running" | "failed"> } = {}) {
+function mockApi(options: { pulls?: unknown[]; issues?: unknown[]; pullPages?: unknown[][]; issuePages?: unknown[][]; syncStatuses?: StreamStatus[]; syncSnapshots?: SyncSnapshot[] } = {}) {
   const pulls = options.pulls ?? [pull(2), pull(1)];
   const issues = options.issues ?? [issue(7)];
   let pullPage = 0;
+  let issuePage = 0;
   let syncIndex = 0;
   const pullPages = options.pullPages ?? [pulls];
   const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
@@ -52,14 +58,19 @@ function mockApi(options: { pulls?: unknown[]; issues?: unknown[]; pullPages?: u
     if (url.pathname === "/api/repositories") return json({ items: [repository] });
     if (url.pathname.endsWith("/sync") && init?.method === "POST") return json({ repositoryId: "repo", syncRunId: "run-1", status: "accepted" }, 202);
     if (url.pathname.endsWith("/sync-status")) {
-      const statuses = options.syncStatuses ?? ["idle"];
-      return json(syncBody(statuses[Math.min(syncIndex++, statuses.length - 1)]));
+      const snapshots = options.syncSnapshots ?? (options.syncStatuses ?? ["idle"]).map((status) => ({ pullRequests: status, issues: status }));
+      const snapshot = snapshots[Math.min(syncIndex++, snapshots.length - 1)];
+      return json(syncBody(snapshot.pullRequests, snapshot.issues));
     }
     if (url.pathname.endsWith("/pulls")) {
       const items = pullPages[Math.min(pullPage++, pullPages.length - 1)];
       return json({ items, nextCursor: pullPage < pullPages.length ? "next-page" : null, calendarTimeZone: "Asia/Shanghai" });
     }
-    if (url.pathname.endsWith("/issues")) return json({ items: issues, nextCursor: null, calendarTimeZone: "Asia/Shanghai" });
+    if (url.pathname.endsWith("/issues")) {
+      const issuePages = options.issuePages ?? [issues];
+      const items = issuePages[Math.min(issuePage++, issuePages.length - 1)];
+      return json({ items, nextCursor: null, calendarTimeZone: "Asia/Shanghai" });
+    }
     return json({ error: { code: "INTERNAL_ERROR", message: "not found" } }, 404);
   });
   vi.stubGlobal("fetch", fetchMock);
@@ -142,5 +153,56 @@ describe("LoongBoard metadata routes", () => {
     expect(await screen.findByText(/Last sync failed/)).toBeInTheDocument();
     expect(screen.getByText("Pull 2")).toBeInTheDocument();
     expect(failedFetch).toBeDefined();
+  });
+
+  it("refreshes successful PRs when Issues fail and preserves cached Issue rows", async () => {
+    const oldPull = pull(2, "Old pull");
+    const newPull = pull(3, "Synced pull");
+    const oldIssue = issue(7, "Existing Issue");
+    const fetchMock = mockApi({
+      pullPages: [[oldPull], [newPull]],
+      syncSnapshots: [
+        { pullRequests: "idle", issues: "idle" },
+        { pullRequests: "running", issues: "running" },
+        { pullRequests: "idle", issues: "failed" },
+      ],
+    });
+    appQueryClient.setQueryData(["metadata", "repo", "issues", ":", null], {
+      pages: [{ items: [oldIssue], nextCursor: null, calendarTimeZone: "Asia/Shanghai" }],
+      pageParams: [null],
+    });
+    renderApp("/repositories/repo/pulls");
+    expect(await screen.findByText("Old pull")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+    expect(await screen.findByText("Synced pull", {}, { timeout: 4_000 })).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).includes("/issues")).length).toBe(0);
+    fireEvent.click(screen.getByRole("link", { name: "Issues" }));
+    expect(await screen.findByText("Existing Issue")).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).includes("/issues")).length).toBe(0);
+  });
+
+  it("refreshes successful Issues when PRs fail and preserves cached PR rows", async () => {
+    const oldPull = pull(2, "Existing pull");
+    const oldIssue = issue(7, "Old issue");
+    const newIssue = issue(8, "Synced issue");
+    const fetchMock = mockApi({
+      issuePages: [[oldIssue], [newIssue]],
+      syncSnapshots: [
+        { pullRequests: "idle", issues: "idle" },
+        { pullRequests: "running", issues: "running" },
+        { pullRequests: "failed", issues: "idle" },
+      ],
+    });
+    appQueryClient.setQueryData(["metadata", "repo", "pulls", ":", null], {
+      pages: [{ items: [oldPull], nextCursor: null, calendarTimeZone: "Asia/Shanghai" }],
+      pageParams: [null],
+    });
+    renderApp("/repositories/repo/issues");
+    expect(await screen.findByText("Old issue")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+    expect(await screen.findByText("Synced issue", {}, { timeout: 4_000 })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("link", { name: "Pull requests" }));
+    expect(await screen.findByText("Existing pull")).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).includes("/pulls")).length).toBe(0);
   });
 });
