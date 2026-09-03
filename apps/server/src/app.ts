@@ -38,6 +38,10 @@ import Fastify, {
 import { registerDomainRoutes } from "./domains.js";
 import { registerDiffRoutes } from "./diff.js";
 import {
+  registerKnowledgeRoutes,
+  type KnowledgeController,
+} from "./knowledge.js";
+import {
   AgentChatController,
   registerAgentRoutes,
 } from "./agent-chat.js";
@@ -78,6 +82,8 @@ export interface BuildAppDependencies {
   gitWorkspace?: GitWorkspace;
   /** Chat controller created by the runtime; routes register only when set. */
   agentChat?: AgentChatController;
+  /** Knowledge controller created by the runtime; routes register when set. */
+  knowledge?: KnowledgeController;
 }
 
 /**
@@ -107,6 +113,9 @@ export function buildApp(
   registerDiffRoutes(app, { database, gitWorkspace });
   if (dependencies.agentChat !== undefined) {
     registerAgentRoutes(app, dependencies.agentChat);
+  }
+  if (dependencies.knowledge !== undefined) {
+    registerKnowledgeRoutes(app, dependencies.knowledge);
   }
 
   if (ownsReclassification) {
@@ -296,11 +305,14 @@ function errorResponse(error: unknown): {
             code === "PULL_REQUEST_NOT_FOUND" ||
             code === "FILE_NOT_FOUND" ||
             code === "ISSUE_NOT_FOUND" ||
+            code === "KNOWLEDGE_DOCUMENT_NOT_FOUND" ||
+            code === "KNOWLEDGE_VERSION_NOT_FOUND" ||
             code === "AGENT_SESSION_NOT_FOUND"
           ? 404
           : code === "SYNC_ALREADY_RUNNING" ||
               code === "DOMAIN_NAME_CONFLICT" ||
               code === "AGENT_TURN_BUSY" ||
+              code === "KNOWLEDGE_DOCUMENT_CONFLICT" ||
               code === "WORKTREE_POOL_EXHAUSTED"
             ? 409
             : 500;
@@ -326,6 +338,9 @@ function errorCode(error: unknown): ApiErrorCode {
   }
   if (hasCode(error, "FILE_NOT_FOUND")) return "FILE_NOT_FOUND";
   if (hasCode(error, "ISSUE_NOT_FOUND")) return "ISSUE_NOT_FOUND";
+  if (hasCode(error, "KNOWLEDGE_DOCUMENT_NOT_FOUND")) return "KNOWLEDGE_DOCUMENT_NOT_FOUND";
+  if (hasCode(error, "KNOWLEDGE_DOCUMENT_CONFLICT")) return "KNOWLEDGE_DOCUMENT_CONFLICT";
+  if (hasCode(error, "KNOWLEDGE_VERSION_NOT_FOUND")) return "KNOWLEDGE_VERSION_NOT_FOUND";
   if (hasCode(error, "AGENT_SESSION_NOT_FOUND")) return "AGENT_SESSION_NOT_FOUND";
   if (hasCode(error, "AGENT_TURN_BUSY")) return "AGENT_TURN_BUSY";
   if (hasCode(error, "WORKTREE_POOL_EXHAUSTED")) return "WORKTREE_POOL_EXHAUSTED";

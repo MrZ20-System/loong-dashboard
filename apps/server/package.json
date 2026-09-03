@@ -20,6 +20,7 @@
     "@loongboard/database": "workspace:*",
     "@loongboard/git-workspace": "workspace:*",
     "@loongboard/github": "workspace:*",
+    "@loongboard/knowledge": "workspace:*",
     "fastify": "5.6.0",
     "picomatch": "4.0.7",
     "yaml": "2.9.0",

@@ -241,6 +241,17 @@ export function listBusyWorkspacePaths(
     .filter((path): path is string => path !== null);
 }
 
+/** Ids of running knowledge-scope sessions (agent-version attribution). */
+export function listRunningKnowledgeSessionIds(database: DatabaseClient): string[] {
+  const rows = database
+    .prepare(
+      `SELECT id FROM agent_sessions
+       WHERE scope_type = 'knowledge' AND status = 'running'`,
+    )
+    .all() as Array<{ id: string }>;
+  return rows.map((row) => row.id);
+}
+
 /** Update the markdown/metadata of one persisted message (tool completion). */
 export function updateAgentMessage(
   database: DatabaseClient,

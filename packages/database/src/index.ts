@@ -71,6 +71,7 @@ export {
   listAgentMessages,
   listAgentSessions,
   listBusyWorkspacePaths,
+  listRunningKnowledgeSessionIds,
   requireAgentSession,
   touchAgentSession,
   updateAgentMessage,
@@ -82,6 +83,26 @@ export type {
   AgentSessionRecord,
   CreateAgentSessionInput,
 } from "./agent-service.js";
+export {
+  addDocumentVersion,
+  deleteKnowledgeDocument,
+  getDocumentVersion,
+  getKnowledgeDocument,
+  getKnowledgeDocumentByPath,
+  KnowledgeDocumentNotFoundError,
+  KnowledgeVersionNotFoundError,
+  listDocumentVersions,
+  listKnowledgeDocuments,
+  requireKnowledgeDocument,
+  setKnowledgeDocumentDefaultSession,
+  updateKnowledgeDocumentPath,
+  upsertKnowledgeDocument,
+} from "./knowledge-service.js";
+export type {
+  AddDocumentVersionInput,
+  DocumentVersionRecord,
+  KnowledgeDocumentRow,
+} from "./knowledge-service.js";
 export type {
   PullRequestEnrichmentTarget,
   StoredPullRequestFiles,

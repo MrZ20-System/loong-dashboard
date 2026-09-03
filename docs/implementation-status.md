@@ -6,10 +6,62 @@ and does not copy the rejected legacy dashboard architecture.
 
 ## Current stage
 
-Stage 4: DSH Agent Chat — completed locally on 2026-09-03.
-Stage 5 (Knowledge Repository) is next and was not started.
+Stage 5: Knowledge Repository — completed locally on 2026-09-03.
+Stage 6 (Scheduler) is next and was not started.
 
 ## Done
+
+### Stage 5 — Knowledge Repository
+
+- Filled `packages/knowledge`: recursive Markdown tree scan that excludes
+  `.git`/`node_modules`/`.loong` (plan 15.1), front-matter parsing and the
+  stable `loongboard_id` (`doc_...`) serialization (plan 15.2), adoption of
+  front-matter-less files on first LoongBoard save, atomic temp+rename
+  writes (plan 15.3), and root-escape guards.
+- Added SQLite indexing and history in `packages/database`
+  (`knowledge-service.ts`): documents keyed by `loongboard_id` with unique
+  path, content hash, and default session id; full-content versions pruned to
+  the configured history window (default 10, plan 15.4); path moves update
+  the index only, so the default chat mapping survives renames.
+- Added the server `KnowledgeController` and routes (plan 17.6):
+  `GET /api/knowledge/tree`, `POST /api/knowledge/documents` (new document
+  writes the id front matter), `GET/PUT /api/knowledge/documents?path=`
+  (read/adopt by repository path), `GET/PUT /:id`, `POST /:id/move`,
+  `DELETE /:id`, `GET /:id/versions`, `POST /:id/versions/:versionId/restore`,
+  and `POST /:id/chat` which ensures and persists the default session
+  (plan 15.5). A recursive watcher plus a 1s debounce indexes external edits
+  as `external` versions; changes made while a knowledge-scope agent session
+  runs are aggregated and flushed as one `agent` version per document when the
+  agent becomes idle (plan 15.4 aggregation).
+- Added the Knowledge web page at `/knowledge/:documentId?`: file tree, a
+  center document panel with Preview / Edit (plain Markdown source editor)
+  / History + Restore, move and delete actions, a New-document form, and the
+  default document chat rail (plan 18.3). Documents opened without an id are
+  adopted on their first save and then redirect to their stable id URL.
+- Knowledge content stays ordinary Markdown on disk; Git checkpoint/autoPush
+  options remain off in V1 (documented limitation).
+
+## Validated
+
+- `CI=true pnpm check` passed on 2026-09-03 after Stage 5 (web build required
+  a manually cleared `apps/web/dist` for the sandbox bulk-delete guard).
+- New coverage: knowledge package front-matter/scan/atomic-write unit tests
+  (6), and server Stage 5 route tests (create -> tree -> save -> versions ->
+  move -> restore -> delete, plus front-matter adoption on first save). The
+  whole workspace suite stays green (see counts under Stage 4 plus the
+  additions above).
+
+## Deferred validation and known limitations
+
+- Live DSH smoke (real provider credentials), the two-repository real GitHub
+  smoke, and browser-level E2E remain deferred to the Stage 7 release
+  acceptance.
+- Git checkpoint (`autoCommit`/`autoPush`) settings are not exposed yet;
+  version history is stored in SQLite full-content snapshots, and Markdown
+  stays plain on disk.
+- Mermaid rendering and Monaco editing for Knowledge were simplified to the
+  shared Markdown renderer and a plain source editor; raw HTML stays escaped.
+
 
 ### Stage 4 — DSH Agent Chat and Worktree Pool
 
@@ -83,13 +135,11 @@ Stage 5 (Knowledge Repository) is next and was not started.
   vocabulary on completion; the UI reconciles transcripts from SQLite.
 - Browser-level diff and agent E2E are deferred to the Stage 7 release
   acceptance; unit/integration coverage stands in the meantime.
-- `packages/knowledge` and `packages/scheduler` remain Stage 0 scaffolds until
-  Stage 5/6.
+- `packages/scheduler` remains a Stage 0 scaffold until Stage 6.
 
 ## Next stage
 
-Stage 5: Knowledge Repository — file tree over `knowledge.path`, Front Matter
-`loongboard_id`, Preview/Edit, history snapshots with manual/agent/external
-sources, default chat mapping, and the optional Git checkpoint. Browser
-acceptance and real smokes from Stage 4 must not be represented as completed
-evidence later.
+Stage 6: Scheduler — scheduled task CRUD, cron/timezone, Run Now, per-run
+sessions, workspace mutex, run history and failure state. Browser acceptance
+and real smokes from Stage 4 must not be represented as completed evidence
+later.

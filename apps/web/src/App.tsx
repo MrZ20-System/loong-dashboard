@@ -19,6 +19,7 @@ import {
 import { fetchHealth } from "./health-client";
 import { PullRequestDetailPage } from "./pull-request-detail";
 import { IssueDetailPage } from "./issue-detail";
+import { KnowledgePage } from "./knowledge";
 import {
   createDomainRule,
   deleteDomainRule,
@@ -372,5 +373,5 @@ function DomainsSettingsPage() {
 }
 
 function NotFoundPage() { return <section aria-labelledby="not-found-heading"><p className="eyebrow">Not found</p><h2 id="not-found-heading">This LoongBoard route does not exist.</h2><Link to="/">Return to the board</Link></section>; }
-function AppRoutes() { return <div className="app-shell"><header className="app-header"><div><p className="brand-mark">LB</p><h1>LoongBoard</h1><p className="tagline">Your local engineering command center</p></div><nav aria-label="Primary navigation"><Link to="/">Board</Link><Link to="/settings/domains">Domains</Link><Link to="/health">Health</Link></nav></header><main className="app-content"><Routes><Route path="/" element={<HomePage />} /><Route path="/health" element={<HealthPage />} /><Route path="/settings/domains" element={<DomainsSettingsPage />} /><Route path="/repositories/:repositoryId/pulls" element={<MetadataPage kind="pulls" />} /><Route path="/repositories/:repositoryId/pulls/:number" element={<PullRequestDetailPage />} /><Route path="/repositories/:repositoryId/issues" element={<MetadataPage kind="issues" />} /><Route path="/repositories/:repositoryId/issues/:number" element={<IssueDetailPage />} /><Route path="*" element={<NotFoundPage />} /></Routes></main><footer className="app-footer">Stage 4 · DSH agent chat</footer></div>; }
+function AppRoutes() { return <div className="app-shell"><header className="app-header"><div><p className="brand-mark">LB</p><h1>LoongBoard</h1><p className="tagline">Your local engineering command center</p></div><nav aria-label="Primary navigation"><Link to="/">Board</Link><Link to="/knowledge">Knowledge</Link><Link to="/settings/domains">Domains</Link><Link to="/health">Health</Link></nav></header><main className="app-content"><Routes><Route path="/" element={<HomePage />} /><Route path="/health" element={<HealthPage />} /><Route path="/settings/domains" element={<DomainsSettingsPage />} /><Route path="/knowledge" element={<KnowledgePage />} /><Route path="/knowledge/:documentId" element={<KnowledgePage />} /><Route path="/repositories/:repositoryId/pulls" element={<MetadataPage kind="pulls" />} /><Route path="/repositories/:repositoryId/pulls/:number" element={<PullRequestDetailPage />} /><Route path="/repositories/:repositoryId/issues" element={<MetadataPage kind="issues" />} /><Route path="/repositories/:repositoryId/issues/:number" element={<IssueDetailPage />} /><Route path="*" element={<NotFoundPage />} /></Routes></main><footer className="app-footer">Stage 5 · Knowledge repository</footer></div>; }
 export function App() { return <QueryClientProvider client={appQueryClient}><AppRoutes /></QueryClientProvider>; }

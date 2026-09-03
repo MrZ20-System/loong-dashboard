@@ -27,6 +27,7 @@ import {
 } from "@loongboard/agent-runtime";
 
 import { AgentChatController } from "./agent-chat.js";
+import { KnowledgeController } from "./knowledge.js";
 import {
   RepositorySyncCoordinator,
   type SyncCoordinatorLogger,
@@ -55,6 +56,7 @@ export interface ServerRuntime {
   readonly coordinator: RepositorySyncCoordinator;
   readonly reclassification: DomainReclassificationService;
   readonly agentChat: AgentChatController;
+  readonly knowledge: KnowledgeController;
 }
 
 /** Resolve the one SQLite path owned by the Server runtime. */
@@ -108,6 +110,13 @@ export function createServerRuntime(
         ? { runtimeFactory: options.runtimeFactory as (spec: AgentSessionSpec) => AgentRuntime }
         : {}),
     });
+    const knowledge = new KnowledgeController({
+      database,
+      knowledgePath: config.knowledge.path,
+      historyLimit: config.knowledge.historyLimit,
+      chats: agentChat,
+    });
+    knowledge.start();
     const app = buildApp(
       {
         database,
@@ -115,6 +124,7 @@ export function createServerRuntime(
         syncCoordinator: coordinator,
         reclassification,
         agentChat,
+        knowledge,
       },
       options.appOptions,
     );
@@ -125,12 +135,22 @@ export function createServerRuntime(
         await coordinator.close();
         await reclassification.close();
         await agentChat.close();
+        await knowledge.close();
         database.close();
       })();
       await closePromise;
     });
 
-    return { app, config, database, databasePath, coordinator, reclassification, agentChat };
+    return {
+      app,
+      config,
+      database,
+      databasePath,
+      coordinator,
+      reclassification,
+      agentChat,
+      knowledge,
+    };
   } catch (error) {
     database.close();
     throw error;
