@@ -28,6 +28,7 @@ import {
 
 import { AgentChatController } from "./agent-chat.js";
 import { KnowledgeController } from "./knowledge.js";
+import { SchedulerEngine } from "./scheduler.js";
 import {
   RepositorySyncCoordinator,
   type SyncCoordinatorLogger,
@@ -57,6 +58,7 @@ export interface ServerRuntime {
   readonly reclassification: DomainReclassificationService;
   readonly agentChat: AgentChatController;
   readonly knowledge: KnowledgeController;
+  readonly scheduler: SchedulerEngine;
 }
 
 /** Resolve the one SQLite path owned by the Server runtime. */
@@ -117,6 +119,12 @@ export function createServerRuntime(
       chats: agentChat,
     });
     knowledge.start();
+    const scheduler = new SchedulerEngine({
+      database,
+      chats: agentChat,
+      agentSessionsPath: join(config.runtime.statePath, "agent-sessions"),
+    });
+    scheduler.start();
     const app = buildApp(
       {
         database,
@@ -125,6 +133,14 @@ export function createServerRuntime(
         reclassification,
         agentChat,
         knowledge,
+        scheduledTasks: {
+          engine: scheduler,
+          defaults: {
+            provider: config.agent.defaultProvider,
+            model: config.agent.defaultModel,
+            reasoningEffort: config.agent.defaultReasoningEffort,
+          },
+        },
       },
       options.appOptions,
     );
@@ -136,6 +152,7 @@ export function createServerRuntime(
         await reclassification.close();
         await agentChat.close();
         await knowledge.close();
+        await scheduler.close();
         database.close();
       })();
       await closePromise;
@@ -150,6 +167,7 @@ export function createServerRuntime(
       reclassification,
       agentChat,
       knowledge,
+      scheduler,
     };
   } catch (error) {
     database.close();

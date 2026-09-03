@@ -6,10 +6,35 @@ and does not copy the rejected legacy dashboard architecture.
 
 ## Current stage
 
-Stage 5: Knowledge Repository — completed locally on 2026-09-03.
-Stage 6 (Scheduler) is next and was not started.
+Stage 6: Scheduler — completed locally on 2026-09-03.
+Stage 7 (Release Acceptance) is next.
 
 ## Done
+
+### Stage 6 — Scheduler
+
+- Filled `packages/scheduler` with a dependency-free 5-field cron evaluator
+  (lists, ranges, steps, Sunday 0/7) that finds the next occurrence in the
+  configured IANA timezone (plan 16.1).
+- Added SQLite task/run services in `packages/database`
+  (`scheduler-service.ts`): task CRUD with `next_run_at` persistence, run rows
+  with running/completed/failed/skipped states, restart recovery that marks
+  crashed `running` runs as failed (plan 16.2), and run history reads.
+- Added the `SchedulerEngine` in `apps/server`: a single timer for the
+  nearest enabled task; each due task starts a fresh general Agent Session on
+  its workspace, sends the prompt verbatim, waits for the turn to idle, and
+  records completed/failed (plan 16.1). One workspace runs at most one agent
+  turn at a time (plan 16.3); a busy workspace defers rather than duplicates.
+  `POST /:id/run` (Run Now) is supported and surfaces a 409 when the
+  workspace is busy. Restarts recompute future occurrences and never replay
+  missed runs.
+- Added scheduled task routes (plan 17.7): `GET/POST /api/scheduled-tasks`,
+  `PUT/DELETE /:id`, `POST /:id/run`, and `GET /:id/runs`, wired into the
+  runtime lifecycle (engine starts after the chat controller and closes with
+  the app).
+- Added the `/scheduled-tasks` web page: task list with next/last run and
+  workspace, create form, enable/disable, Run now, Delete, and run history
+  with status/error (plan 18).
 
 ### Stage 5 — Knowledge Repository
 
@@ -139,7 +164,7 @@ Stage 6 (Scheduler) is next and was not started.
 
 ## Next stage
 
-Stage 6: Scheduler — scheduled task CRUD, cron/timezone, Run Now, per-run
-sessions, workspace mutex, run history and failure state. Browser acceptance
-and real smokes from Stage 4 must not be represented as completed evidence
-later.
+Stage 7: Release Acceptance — final `pnpm check:full`, docs sweep, live
+smokes (real GitHub/DSH), performance/command-count report, known
+limitations, and local install/run notes. Deferred evidence from earlier
+stages must not be represented as completed.

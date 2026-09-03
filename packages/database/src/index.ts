@@ -103,6 +103,28 @@ export type {
   DocumentVersionRecord,
   KnowledgeDocumentRow,
 } from "./knowledge-service.js";
+export {
+  createScheduledTask,
+  deleteScheduledTask,
+  getScheduledRun,
+  getScheduledTask,
+  insertScheduledRun,
+  listRunningRuns,
+  listScheduledTaskRuns,
+  listScheduledTasks,
+  recoverInterruptedScheduledRuns,
+  requireScheduledTask,
+  ScheduledTaskNotFoundError,
+  setTaskOccurrence,
+  updateScheduledRun,
+  updateScheduledTask,
+} from "./scheduler-service.js";
+export type {
+  ScheduledRunRow,
+  ScheduledTaskCreateInput,
+  ScheduledTaskRow,
+  ScheduledTaskUpdateInput,
+} from "./scheduler-service.js";
 export type {
   PullRequestEnrichmentTarget,
   StoredPullRequestFiles,

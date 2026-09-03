@@ -226,6 +226,27 @@ export class AgentChatController {
     return { messageId: userMessage.id, status: "accepted" };
   }
 
+  /**
+   * Run (and await) one full turn on an existing session without appending a
+   * user row — used by the scheduler, which persists the prompt itself so the
+   * scheduled text is sent verbatim (plan 16.1).
+   */
+  async runSessionTurn(sessionId: string, prompt: string): Promise<AgentSessionSummary> {
+    if (this.runningTurns.has(sessionId)) {
+      throw new AgentTurnBusyError(sessionId);
+    }
+    const session = requireAgentSession(this.dependencies.database, sessionId);
+    const turn = this.runTurn(session, prompt);
+    this.runningTurns.set(sessionId, turn);
+    try {
+      await turn;
+    } finally {
+      this.runningTurns.delete(sessionId);
+      this.cancelled.delete(sessionId);
+    }
+    return requireAgentSession(this.dependencies.database, sessionId);
+  }
+
   /** Register an SSE subscriber; returns an unsubscribe function. */
   subscribe(sessionId: string, reply: FastifyReply): () => void {
     const connection: SseConnection = { reply, closed: false };

@@ -42,6 +42,10 @@ import {
   type KnowledgeController,
 } from "./knowledge.js";
 import {
+  registerScheduledTaskRoutes,
+} from "./scheduled-tasks.js";
+import type { SchedulerEngine } from "./scheduler.js";
+import {
   AgentChatController,
   registerAgentRoutes,
 } from "./agent-chat.js";
@@ -84,6 +88,11 @@ export interface BuildAppDependencies {
   agentChat?: AgentChatController;
   /** Knowledge controller created by the runtime; routes register when set. */
   knowledge?: KnowledgeController;
+  /** Scheduler engine and defaults; task routes register when set. */
+  scheduledTasks?: {
+    engine: SchedulerEngine;
+    defaults: { provider: string; model: string; reasoningEffort: string };
+  };
 }
 
 /**
@@ -116,6 +125,13 @@ export function buildApp(
   }
   if (dependencies.knowledge !== undefined) {
     registerKnowledgeRoutes(app, dependencies.knowledge);
+  }
+  if (dependencies.scheduledTasks !== undefined) {
+    registerScheduledTaskRoutes(app, {
+      database,
+      engine: dependencies.scheduledTasks.engine,
+      defaults: dependencies.scheduledTasks.defaults,
+    });
   }
 
   if (ownsReclassification) {
@@ -307,13 +323,15 @@ function errorResponse(error: unknown): {
             code === "ISSUE_NOT_FOUND" ||
             code === "KNOWLEDGE_DOCUMENT_NOT_FOUND" ||
             code === "KNOWLEDGE_VERSION_NOT_FOUND" ||
+            code === "SCHEDULED_TASK_NOT_FOUND" ||
             code === "AGENT_SESSION_NOT_FOUND"
           ? 404
           : code === "SYNC_ALREADY_RUNNING" ||
               code === "DOMAIN_NAME_CONFLICT" ||
               code === "AGENT_TURN_BUSY" ||
               code === "KNOWLEDGE_DOCUMENT_CONFLICT" ||
-              code === "WORKTREE_POOL_EXHAUSTED"
+              code === "WORKTREE_POOL_EXHAUSTED" ||
+              code === "SCHEDULED_TASK_WORKSPACE_BUSY"
             ? 409
             : 500;
   const message = requestErrorMessage(error, code);
@@ -341,6 +359,8 @@ function errorCode(error: unknown): ApiErrorCode {
   if (hasCode(error, "KNOWLEDGE_DOCUMENT_NOT_FOUND")) return "KNOWLEDGE_DOCUMENT_NOT_FOUND";
   if (hasCode(error, "KNOWLEDGE_DOCUMENT_CONFLICT")) return "KNOWLEDGE_DOCUMENT_CONFLICT";
   if (hasCode(error, "KNOWLEDGE_VERSION_NOT_FOUND")) return "KNOWLEDGE_VERSION_NOT_FOUND";
+  if (hasCode(error, "SCHEDULED_TASK_NOT_FOUND")) return "SCHEDULED_TASK_NOT_FOUND";
+  if (hasCode(error, "SCHEDULED_TASK_WORKSPACE_BUSY")) return "SCHEDULED_TASK_WORKSPACE_BUSY";
   if (hasCode(error, "AGENT_SESSION_NOT_FOUND")) return "AGENT_SESSION_NOT_FOUND";
   if (hasCode(error, "AGENT_TURN_BUSY")) return "AGENT_TURN_BUSY";
   if (hasCode(error, "WORKTREE_POOL_EXHAUSTED")) return "WORKTREE_POOL_EXHAUSTED";
