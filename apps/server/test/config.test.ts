@@ -166,6 +166,31 @@ describe("system configuration", () => {
     ).toThrowError(/knowledge\.inbox/);
   });
 
+  it.each([
+    ["duplicate repository key", (config: ReturnType<typeof validConfigInput>) => ({
+      ...config,
+      repositories: [
+        config.repositories[0],
+        { ...config.repositories[0], name: "Second repository", github: "other/project" },
+      ],
+    }), /Duplicate repository key/],
+    ["duplicate GitHub slug", (config: ReturnType<typeof validConfigInput>) => ({
+      ...config,
+      repositories: [
+        config.repositories[0],
+        { ...config.repositories[0], key: "second", name: "Second repository" },
+      ],
+    }), /Duplicate GitHub repository/],
+    ["invalid IANA timezone", (config: ReturnType<typeof validConfigInput>) => ({
+      ...config,
+      timezone: "Mars/Olympus",
+    }), /valid IANA timezone/],
+  ])("rejects $0 at the config boundary", (_label, createConfig, expected) => {
+    expect(() =>
+      parseSystemConfig(createConfig(validConfigInput()), "/workspace/system.yaml"),
+    ).toThrowError(expected);
+  });
+
   it("resolves the default from the repository root cwd", () => {
     expect(resolveSystemConfigPath({}, repositoryRoot)).toBe(
       resolve(repositoryRoot, "..", "system.yaml"),

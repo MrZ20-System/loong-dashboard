@@ -1,11 +1,8 @@
-import { buildApp } from "./app.js";
-import { loadSystemConfig, resolveSystemConfigPath } from "./config.js";
+import { createServerRuntime } from "./runtime.js";
 
-const configPath = resolveSystemConfigPath(process.env, process.cwd());
-const config = loadSystemConfig(configPath);
-const app = buildApp({ logger: true });
+const runtime = createServerRuntime({ appOptions: { logger: true } });
 
-await app.listen({
-  host: config.runtime.serverHost,
-  port: config.runtime.serverPort,
+await runtime.app.listen({
+  host: runtime.config.runtime.serverHost,
+  port: runtime.config.runtime.serverPort,
 });

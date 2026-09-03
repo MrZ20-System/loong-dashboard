@@ -24,7 +24,7 @@ const repositorySchema = z
   })
   .strict();
 
-export const systemConfigSchema = z
+const baseSystemConfigSchema = z
   .object({
     version: z.literal(1),
     timezone: z.string().trim().min(1),
@@ -60,6 +60,60 @@ export const systemConfigSchema = z
       .strict(),
   })
   .strict();
+
+function isValidIanaTimeZone(value: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: value }).format();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Validate the complete system boundary before any typed runtime code sees
+ * it. Repository keys and GitHub slugs are durable identities, so duplicate
+ * values are rejected here rather than relying on a later SQLite constraint.
+ */
+export const systemConfigSchema = baseSystemConfigSchema.superRefine(
+  (config, context) => {
+    if (!isValidIanaTimeZone(config.timezone)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["timezone"],
+        message: "Expected a valid IANA timezone",
+      });
+    }
+
+    const keys = new Map<string, number>();
+    const githubRepositories = new Map<string, number>();
+    config.repositories.forEach((repository, index) => {
+      const previousKey = keys.get(repository.key);
+      if (previousKey !== undefined) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["repositories", index, "key"],
+          message: `Duplicate repository key; already used at index ${previousKey}`,
+        });
+      } else {
+        keys.set(repository.key, index);
+      }
+
+      // GitHub repository names are case-insensitive for identity purposes.
+      const githubKey = repository.github.toLocaleLowerCase("en-US");
+      const previousGithub = githubRepositories.get(githubKey);
+      if (previousGithub !== undefined) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["repositories", index, "github"],
+          message: `Duplicate GitHub repository; already used at index ${previousGithub}`,
+        });
+      } else {
+        githubRepositories.set(githubKey, index);
+      }
+    });
+  },
+);
 
 export type SystemConfig = z.infer<typeof systemConfigSchema>;
 

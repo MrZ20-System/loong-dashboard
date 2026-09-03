@@ -18,7 +18,9 @@ Local Fastify HTTP server for LoongBoard.
 
 ## Public API
 
-- `buildApp(options)`: creates a Fastify application without listening.
+- `buildApp(dependencies, options)`: creates a Fastify application without
+  listening from explicit database, timezone, and sync-coordinator
+  dependencies.
 - `systemConfigSchema`: strict V1 configuration contract.
 - `loadSystemConfig(path)`: parses YAML, validates it, and resolves configured
   paths once relative to the configuration file.
