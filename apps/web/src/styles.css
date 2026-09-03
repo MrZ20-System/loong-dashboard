@@ -129,6 +129,19 @@ section > p:not(.eyebrow) {
   margin-top: 1.5rem;
 }
 
+.repository-actions,
+.sibling-navigation {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.sibling-navigation {
+  padding: 0.75rem 0;
+  border-bottom: 1px solid #2d4264;
+}
+
 select,
 input,
 button {

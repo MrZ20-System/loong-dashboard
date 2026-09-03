@@ -29,7 +29,7 @@ import {
   type RepositorySummary,
 } from "./metadata-client";
 
-const queryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 5_000, retry: false } } });
+export const appQueryClient = new QueryClient({ defaultOptions: { queries: { staleTime: 5_000, retry: false } } });
 const pullStatuses = ["draft", "open", "closed", "merged"] as const;
 const issueStatuses = ["open", "closed"] as const;
 
@@ -63,7 +63,8 @@ function RepositoryPicker() {
   if (repositories.isPending) return <p role="status">Loading repositories…</p>;
   if (repositories.isError) return <p role="alert">Unable to load repositories: {repositories.error.message}</p>;
   if (repositories.data.items.length === 0) return <p role="status">No configured repositories.</p>;
-  return <RepositorySelector repositories={repositories.data.items} />;
+  const repository = repositories.data.items[0];
+  return <><RepositorySelector repositories={repositories.data.items} /><div className="repository-actions" aria-label="Repository metadata actions"><Link to={`/repositories/${encodeURIComponent(repository.id)}/pulls`}>Open Pull Requests</Link><Link to={`/repositories/${encodeURIComponent(repository.id)}/issues`}>Open Issues</Link></div></>;
 }
 
 function HomePage() {
@@ -78,21 +79,29 @@ function FilterBar({ kind, date, status, onDate, onStatus }: { kind: "pulls" | "
 function SyncControl({ repositoryId }: { repositoryId: string }) {
   const client = useQueryClient();
   const [message, setMessage] = useState<string | null>(null);
-  const sync = useMutation({ mutationFn: () => startSync(repositoryId), onSuccess: () => { setMessage("Sync started."); void client.invalidateQueries({ queryKey: ["sync", repositoryId] }); }, onError: (error: Error) => setMessage(`Sync failed: ${error.message}`) });
+  const sync = useMutation({ mutationFn: () => startSync(repositoryId), onSuccess: (accepted) => { setMessage("Sync started."); client.setQueryData(["sync-attempt", repositoryId], { syncRunId: accepted.syncRunId }); void client.invalidateQueries({ queryKey: ["sync", repositoryId] }); }, onError: (error: Error) => setMessage(`Sync failed: ${error.message}`) });
   return <div className="sync-control"><button type="button" onClick={() => { setMessage(null); sync.mutate(); }} disabled={sync.isPending}>{sync.isPending ? "Starting sync…" : "Sync now"}</button>{message && <p role={sync.isError ? "alert" : "status"}>{message}</p>}</div>;
 }
 
 function SyncStatus({ repositoryId }: { repositoryId: string }) {
   const client = useQueryClient();
   const status = useQuery({ queryKey: ["sync", repositoryId], queryFn: ({ signal }) => fetchSyncStatus(repositoryId, signal), refetchInterval: (query) => query.state.data?.status === "running" ? 1000 : false });
+  const accepted = useQuery<{ syncRunId: string } | null>({ queryKey: ["sync-attempt", repositoryId], queryFn: async () => null, enabled: false });
+  const acceptedRunId = accepted.data?.syncRunId;
+  const [handledAttempt, setHandledAttempt] = useState<string | null>(null);
   const [wasRunning, setWasRunning] = useState(false);
   useEffect(() => {
     if (status.data?.status === "running") setWasRunning(true);
+    if (acceptedRunId && acceptedRunId !== handledAttempt) {
+      setHandledAttempt(acceptedRunId);
+      if (status.data?.status === "running") setWasRunning(true);
+      else if (status.data && status.data.status !== "failed") void client.invalidateQueries({ queryKey: ["metadata", repositoryId] });
+    }
     if (wasRunning && status.data && status.data.status !== "running") {
       if (status.data.status !== "failed") void client.invalidateQueries({ queryKey: ["metadata", repositoryId] });
       setWasRunning(false);
     }
-  }, [client, repositoryId, status.data, wasRunning]);
+  }, [acceptedRunId, client, handledAttempt, repositoryId, status.data, wasRunning]);
   if (status.isPending) return <span role="status">Checking sync status…</span>;
   if (status.isError) return <span role="alert">Sync status unavailable: {status.error.message}</span>;
   if (status.data.status === "running") return <span role="status">Sync in progress…</span>;
@@ -132,10 +141,17 @@ function MetadataPage({ kind }: { kind: "pulls" | "issues" }) {
   if (repositories.isError) return <p role="alert">Unable to load repositories: {repositories.error.message}</p>;
   if (!repository) return <section><h2>Repository not found</h2><p role="alert">This repository is missing or disabled.</p><Link to="/">Choose another repository</Link></section>;
   const changeFilter = (key: "date" | "status", value: string) => { const next = new URLSearchParams(searchParams); if (value) next.set(key, value); else next.delete(key); next.delete("cursor"); setSearchParams(next); };
-  return <section className="metadata-page" aria-labelledby="metadata-heading"><div className="page-heading"><div><p className="eyebrow">{repository.githubOwner}/{repository.githubName}</p><h2 id="metadata-heading">{kind === "pulls" ? "Pull requests" : "Issues"}</h2></div><Link to="/">Change repository</Link></div><RepositorySelector repositories={repositories.data.items} selectedId={repository.id} /><div className="sync-status"><SyncStatus repositoryId={repository.id} /><SyncControl repositoryId={repository.id} /></div><FilterBar kind={kind} date={date} status={status} onDate={(value) => changeFilter("date", value)} onStatus={(value) => changeFilter("status", value)} />{calendarTimeZone && <p className="timezone">Calendar timezone: {calendarTimeZone}</p>}{list.isPending && <p role="status">Loading {kind}…</p>}{list.isError && !list.isFetching && <p role="alert">Unable to load {kind}: {list.error.message}</p>}{!list.isPending && !list.isError && items.length === 0 && <p role="status">No {kind} match these filters.</p>}{(items.length > 0 || list.isFetching) && <><Metrics kind={kind} items={items} /><MetadataTable kind={kind} items={items} /></>}{list.hasNextPage && <button type="button" onClick={() => void list.fetchNextPage()} disabled={list.isFetchingNextPage}>{list.isFetchingNextPage ? "Loading more…" : "Load more"}</button>}{list.isFetching && !list.isFetchingNextPage && <p role="status">Refreshing…</p>}<p className="query-debug" aria-hidden="true">{buildListUrl(repository.id, kind, { date, status })}</p></section>;
+  const siblingKind = kind === "pulls" ? "issues" : "pulls";
+  const siblingStatuses = siblingKind === "pulls" ? pullStatuses : issueStatuses;
+  const siblingStatus = status && siblingStatuses.includes(status as never) ? status : null;
+  const siblingParams = new URLSearchParams(); if (date) siblingParams.set("date", date); if (siblingStatus) siblingParams.set("status", siblingStatus);
+  const siblingHref = `/repositories/${encodeURIComponent(repository.id)}/${siblingKind}${siblingParams.toString() ? `?${siblingParams.toString()}` : ""}`;
+  const currentParams = new URLSearchParams(); if (date) currentParams.set("date", date); if (status) currentParams.set("status", status);
+  const currentHref = `/repositories/${encodeURIComponent(repository.id)}/${kind}${currentParams.toString() ? `?${currentParams.toString()}` : ""}`;
+  return <section className="metadata-page" aria-labelledby="metadata-heading"><div className="page-heading"><div><p className="eyebrow">{repository.githubOwner}/{repository.githubName}</p><h2 id="metadata-heading">{kind === "pulls" ? "Pull requests" : "Issues"}</h2></div><Link to="/">Change repository</Link></div><RepositorySelector repositories={repositories.data.items} selectedId={repository.id} /><nav className="sibling-navigation" aria-label="Repository metadata navigation"><Link to={kind === "pulls" ? currentHref : siblingHref}>Pull requests</Link><Link to={kind === "issues" ? currentHref : siblingHref}>Issues</Link></nav><div className="sync-status"><SyncStatus repositoryId={repository.id} /><SyncControl repositoryId={repository.id} /></div><FilterBar kind={kind} date={date} status={status} onDate={(value) => changeFilter("date", value)} onStatus={(value) => changeFilter("status", value)} />{calendarTimeZone && <p className="timezone">Calendar timezone: {calendarTimeZone}</p>}{list.isPending && <p role="status">Loading {kind}…</p>}{list.isError && !list.isFetching && <p role="alert">Unable to load {kind}: {list.error.message}</p>}{!list.isPending && !list.isError && items.length === 0 && <p role="status">No {kind} match these filters.</p>}{(items.length > 0 || list.isFetching) && <><Metrics kind={kind} items={items} /><MetadataTable kind={kind} items={items} /></>}{list.hasNextPage && <button type="button" onClick={() => void list.fetchNextPage()} disabled={list.isFetchingNextPage}>{list.isFetchingNextPage ? "Loading more…" : "Load more"}</button>}{list.isFetching && !list.isFetchingNextPage && <p role="status">Refreshing…</p>}<p className="query-debug" aria-hidden="true">{buildListUrl(repository.id, kind, { date, status })}</p></section>;
 }
 
 function HealthPage() { return <section aria-labelledby="health-heading"><p className="eyebrow">System</p><h2 id="health-heading">Service health</h2><p>The web shell checks the API boundary without hiding failures.</p><HealthStatus /></section>; }
 function NotFoundPage() { return <section aria-labelledby="not-found-heading"><p className="eyebrow">Not found</p><h2 id="not-found-heading">This LoongBoard route does not exist.</h2><Link to="/">Return to the board</Link></section>; }
 function AppRoutes() { return <div className="app-shell"><header className="app-header"><div><p className="brand-mark">LB</p><h1>LoongBoard</h1><p className="tagline">Your local engineering command center</p></div><nav aria-label="Primary navigation"><Link to="/">Board</Link><Link to="/health">Health</Link></nav></header><main className="app-content"><Routes><Route path="/" element={<HomePage />} /><Route path="/health" element={<HealthPage />} /><Route path="/repositories/:repositoryId/pulls" element={<MetadataPage kind="pulls" />} /><Route path="/repositories/:repositoryId/issues" element={<MetadataPage kind="issues" />} /><Route path="*" element={<NotFoundPage />} /></Routes></main><footer className="app-footer">Stage 1 · GitHub metadata</footer></div>; }
-export function App() { return <QueryClientProvider client={queryClient}><AppRoutes /></QueryClientProvider>; }
+export function App() { return <QueryClientProvider client={appQueryClient}><AppRoutes /></QueryClientProvider>; }
