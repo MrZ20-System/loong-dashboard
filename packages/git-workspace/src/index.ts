@@ -23,6 +23,8 @@ export type { ChangedFileEntry, FileContent, PreparePullInput, PreparePullResult
 export { MAX_DIFF_FILE_BYTES } from "./diff-types.js";
 export { GitCommandError, runGitBuffer, runGitOptionalText, runGitText, type RunGitOptions } from "./git-command.js";
 export { GitObjectMissingError, GitPathUnsafeError, LocalGitWorkspace, type LocalGitWorkspaceOptions } from "./local-git-workspace.js";
+export { runCheckpoint } from "./checkpoint.js";
+export type { RunCheckpointInput, RunCheckpointResult } from "./checkpoint.js";
 export {
   WorktreePool,
   WorktreePoolError,

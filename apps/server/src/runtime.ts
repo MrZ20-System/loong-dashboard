@@ -122,6 +122,7 @@ export function createServerRuntime(
       knowledgePath: config.knowledge.path,
       historyLimit: config.knowledge.historyLimit,
       chats: agentChat,
+      checkpoint: config.knowledge.checkpoint,
     });
     knowledge.start();
     const scheduler = new SchedulerEngine({

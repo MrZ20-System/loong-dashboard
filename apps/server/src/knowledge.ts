@@ -47,6 +47,8 @@ import {
   type KnowledgeFileInfo,
 } from "@loongboard/knowledge";
 
+import { runCheckpoint } from "@loongboard/git-workspace";
+
 import type { FastifyInstance } from "fastify";
 import { parseRequest, sendParsed } from "./route-helpers.js";
 import type { AgentChatController } from "./agent-chat.js";
@@ -84,6 +86,13 @@ export class KnowledgeDocumentConflictError extends Error {
   }
 }
 
+export interface KnowledgeCheckpointOptions {
+  autoCommit?: boolean;
+  autoPush?: boolean;
+  remote?: string;
+  branch?: string;
+}
+
 export interface KnowledgeControllerOptions {
   database: DatabaseClient;
   knowledgePath: string;
@@ -91,6 +100,8 @@ export interface KnowledgeControllerOptions {
   historyLimit?: number;
   /** Chat controller used for the default document chat (plan 15.5). */
   chats: AgentChatController;
+  /** Knowledge-only Git checkpoint (plan 15.6); off unless configured. */
+  checkpoint?: KnowledgeCheckpointOptions;
 }
 
 /**
@@ -105,6 +116,12 @@ export class KnowledgeController {
   private readonly knowledgePath: string;
   private readonly historyLimit: number;
   private readonly chats: AgentChatController;
+  private readonly checkpoint: {
+    autoCommit: boolean;
+    autoPush: boolean;
+    remote: string;
+    branch: string;
+  };
   private watcher: ReturnType<typeof watch> | null = null;
   private rescanTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingAgentVersions = new Map<string, string>();
@@ -115,6 +132,12 @@ export class KnowledgeController {
     this.knowledgePath = options.knowledgePath;
     this.historyLimit = options.historyLimit ?? 10;
     this.chats = options.chats;
+    this.checkpoint = {
+      autoCommit: options.checkpoint?.autoCommit ?? false,
+      autoPush: options.checkpoint?.autoPush ?? false,
+      remote: options.checkpoint?.remote ?? "origin",
+      branch: options.checkpoint?.branch ?? "main",
+    };
   }
 
   private fsPath(repositoryPath: string): string {
@@ -124,6 +147,25 @@ export class KnowledgeController {
     }
     return absolute;
   }
+  /**
+   * Deterministic Knowledge Git checkpoint (plan 15.6). Off by default;
+   * failures are only logged, never auto-merged or retried.
+   */
+  private maybeCheckpoint(): void {
+    if (!this.checkpoint.autoCommit) return;
+    void runCheckpoint({
+      repositoryPath: this.knowledgePath,
+      message: `chore(knowledge): checkpoint ${new Date().toISOString()}`,
+      push: this.checkpoint.autoPush,
+      remote: this.checkpoint.remote,
+      branch: this.checkpoint.branch,
+    }).then((result) => {
+      if (result.error !== undefined) {
+        console.error(`Knowledge checkpoint failed: ${result.error}`);
+      }
+    });
+  }
+
 
   tree(): KnowledgeTreeItem[] {
     this.indexExternalChanges();
@@ -160,6 +202,7 @@ export class KnowledgeController {
       contentHash: sha256(content),
     });
     addDocumentVersion(this.database, { documentId: id, content, source: "manual" });
+    this.maybeCheckpoint();
     return this.toDocument(input.path, id, content, row.defaultSessionId);
   }
 
@@ -188,6 +231,7 @@ export class KnowledgeController {
       content: adopted.content,
       source: "manual",
     });
+    this.maybeCheckpoint();
     return this.toDocument(repositoryPath, adopted.documentId, adopted.content, row.defaultSessionId);
   }
 
@@ -205,6 +249,7 @@ export class KnowledgeController {
     renameSync(source, target);
     const updated = updateKnowledgeDocumentPath(this.database, documentIdValue, newPath);
     const content = readFileSync(target, "utf8");
+    this.maybeCheckpoint();
     return this.toDocument(newPath, documentIdValue, content, updated.defaultSessionId);
   }
 
@@ -235,6 +280,7 @@ export class KnowledgeController {
       defaultSessionId: row.defaultSessionId,
     });
     addDocumentVersion(this.database, { documentId: documentIdValue, content, source: "restore" });
+    this.maybeCheckpoint();
     return this.toDocument(row.path, documentIdValue, content, row.defaultSessionId);
   }
 
@@ -343,6 +389,7 @@ export class KnowledgeController {
       contentHash: sha256(content),
     });
     addDocumentVersion(this.database, { documentId: documentIdValue, content, source });
+    this.maybeCheckpoint();
   }
 
   private fileHash(path: string): string {
