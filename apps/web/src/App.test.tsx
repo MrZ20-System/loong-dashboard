@@ -15,6 +15,7 @@ const repository = {
   worktreeSlots: 1,
   enabled: true,
 };
+const repositoryB = { ...repository, id: "repo-b", key: "repo-b", displayName: "LoongBoard B", githubName: "project-b" };
 
 const pull = (number: number, title = `Pull ${number}`) => ({
   repositoryId: "repo", number, title, url: `https://github.com/acme/project/pull/${number}`,
@@ -36,8 +37,8 @@ const stream = (status: StreamStatus, entityKind: "pull_request" | "issue" = "pu
   rateLimitRemaining: null, rateLimitResetAt: null,
 });
 
-const syncBody = (pullStatus: StreamStatus, issueStatus = pullStatus) => ({
-  repositoryId: "repo",
+const syncBody = (pullStatus: StreamStatus, issueStatus = pullStatus, repositoryId = "repo") => ({
+  repositoryId,
   status: pullStatus === "running" || issueStatus === "running" ? "running" : pullStatus === "failed" || issueStatus === "failed" ? "failed" : "idle",
   pullRequests: stream(pullStatus), issues: stream(issueStatus, "issue"),
 });
@@ -46,31 +47,43 @@ function json(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 }
 
-function mockApi(options: { pulls?: unknown[]; issues?: unknown[]; pullPages?: unknown[][]; issuePages?: unknown[][]; syncStatuses?: StreamStatus[]; syncSnapshots?: SyncSnapshot[]; syncDelayMs?: number; syncRunIds?: string[] } = {}) {
+function mockApi(options: { pulls?: unknown[]; issues?: unknown[]; pullPages?: unknown[][]; issuePages?: unknown[][]; pullsByRepository?: Record<string, unknown[][]>; syncStatuses?: StreamStatus[]; syncSnapshots?: SyncSnapshot[]; syncSnapshotsByRepository?: Record<string, SyncSnapshot[]>; syncDelayMs?: number; syncRunIds?: string[]; repositories?: typeof repository[] } = {}) {
   const pulls = options.pulls ?? [pull(2), pull(1)];
   const issues = options.issues ?? [issue(7)];
   let pullPage = 0;
+  const pullPagesByRepository = new Map<string, number>();
   let issuePage = 0;
   let syncIndex = 0;
+  const syncIndexesByRepository = new Map<string, number>();
   let syncRunIndex = 0;
   const pullPages = options.pullPages ?? [pulls];
   const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
     const url = new URL(String(input), "http://localhost");
-    if (url.pathname === "/api/repositories") return json({ items: [repository] });
+    if (url.pathname === "/api/repositories") return json({ items: options.repositories ?? [repository] });
     if (url.pathname.endsWith("/sync") && init?.method === "POST") {
+      const repositoryId = url.pathname.split("/")[3] ?? "repo";
       const syncRunIds = options.syncRunIds ?? ["run-1"];
       const syncRunId = syncRunIds[Math.min(syncRunIndex++, syncRunIds.length - 1)];
-      return json({ repositoryId: "repo", syncRunId, status: "accepted" }, 202);
+      return json({ repositoryId, syncRunId, status: "accepted" }, 202);
     }
     if (url.pathname.endsWith("/sync-status")) {
       if (options.syncDelayMs) await new Promise((resolve) => setTimeout(resolve, options.syncDelayMs));
-      const snapshots = options.syncSnapshots ?? (options.syncStatuses ?? ["idle"]).map((status) => ({ pullRequests: status, issues: status }));
-      const snapshot = snapshots[Math.min(syncIndex++, snapshots.length - 1)];
-      return json(syncBody(snapshot.pullRequests, snapshot.issues));
+      const repositoryId = url.pathname.split("/")[3] ?? "repo";
+      const snapshots = options.syncSnapshotsByRepository?.[repositoryId] ?? options.syncSnapshots ?? (options.syncStatuses ?? ["idle"]).map((status) => ({ pullRequests: status, issues: status }));
+      const nextIndex = options.syncSnapshotsByRepository ? (syncIndexesByRepository.get(repositoryId) ?? 0) : syncIndex;
+      const snapshot = snapshots[Math.min(nextIndex, snapshots.length - 1)];
+      if (options.syncSnapshotsByRepository) syncIndexesByRepository.set(repositoryId, nextIndex + 1);
+      else syncIndex += 1;
+      return json(syncBody(snapshot.pullRequests, snapshot.issues, repositoryId));
     }
     if (url.pathname.endsWith("/pulls")) {
-      const items = pullPages[Math.min(pullPage++, pullPages.length - 1)];
-      return json({ items, nextCursor: pullPage < pullPages.length ? "next-page" : null, calendarTimeZone: "Asia/Shanghai" });
+      const repositoryId = url.pathname.split("/")[3] ?? "repo";
+      const repositoryPullPages = options.pullsByRepository?.[repositoryId] ?? pullPages;
+      const pageIndex = options.pullsByRepository ? (pullPagesByRepository.get(repositoryId) ?? 0) : pullPage;
+      const items = repositoryPullPages[Math.min(pageIndex, repositoryPullPages.length - 1)];
+      if (options.pullsByRepository) pullPagesByRepository.set(repositoryId, pageIndex + 1);
+      else pullPage += 1;
+      return json({ items, nextCursor: pageIndex + 1 < repositoryPullPages.length ? "next-page" : null, calendarTimeZone: "Asia/Shanghai" });
     }
     if (url.pathname.endsWith("/issues")) {
       const issuePages = options.issuePages ?? [issues];
@@ -291,5 +304,35 @@ describe("LoongBoard metadata routes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
     expect(await screen.findByText("Second synced pull", {}, { timeout: 4_000 })).toBeInTheDocument();
     expect(fetchMock.mock.calls.filter(([input]) => String(input).includes("/pulls")).length).toBe(3);
+  });
+
+  it("recovers an accepted sync after switching away and back", async () => {
+    const initialPull = pull(1, "A initial pull");
+    const syncedPull = pull(2, "A synced pull");
+    const bPull = { ...pull(9, "B pull"), repositoryId: "repo-b", url: "https://github.com/acme/project-b/pull/9" };
+    const fetchMock = mockApi({
+      repositories: [repository, repositoryB],
+      syncDelayMs: 50,
+      pullsByRepository: { repo: [[initialPull], [syncedPull]], "repo-b": [[bPull]] },
+      syncSnapshotsByRepository: {
+        repo: [
+          { pullRequests: "idle", issues: "idle" },
+          { pullRequests: "idle", issues: "idle" },
+        ],
+        "repo-b": [{ pullRequests: "idle", issues: "idle" }],
+      },
+    });
+    renderApp("/repositories/repo/pulls");
+    expect(await screen.findByText("A initial pull")).toBeInTheDocument();
+    expect(await screen.findByText("Sync idle")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
+    expect(await screen.findByText("Sync started.")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("combobox", { name: "Repository" }), { target: { value: "repo-b" } });
+    expect(await screen.findByText("B pull")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("combobox", { name: "Repository" }), { target: { value: "repo" } });
+    expect(await screen.findByText("A synced pull", {}, { timeout: 4_000 })).toBeInTheDocument();
+    expect(screen.queryByText("A synced pull")).toBeInTheDocument();
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).includes("/repositories/repo/pulls")).length).toBe(2);
+    expect(fetchMock.mock.calls.filter(([input]) => String(input).includes("/repositories/repo-b/pulls")).length).toBe(1);
   });
 });

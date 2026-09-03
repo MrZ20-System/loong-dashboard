@@ -84,17 +84,7 @@ function SyncControl({ repositoryId }: { repositoryId: string }) {
     const statusKey = ["sync", repositoryId] as const;
     const attemptKey = ["sync-attempt", repositoryId] as const;
     const statusState = client.getQueryState(statusKey);
-    const waitForStatusRefresh = statusState?.fetchStatus === "fetching";
-    client.setQueryData(attemptKey, { syncRunId: accepted.syncRunId, statusDataUpdatedAt: statusState?.dataUpdatedAt ?? null, waitForStatusRefresh });
-    const refreshStatus = async () => {
-      if (waitForStatusRefresh) {
-        await client.refetchQueries({ queryKey: statusKey });
-        const settledStatus = client.getQueryState(statusKey);
-        client.setQueryData(attemptKey, (current: { syncRunId: string; statusDataUpdatedAt: number | null; waitForStatusRefresh: boolean } | undefined) => current?.syncRunId === accepted.syncRunId ? { ...current, statusDataUpdatedAt: settledStatus?.dataUpdatedAt ?? null, waitForStatusRefresh: false } : current);
-      }
-      await client.refetchQueries({ queryKey: statusKey });
-    };
-    void refreshStatus();
+    client.setQueryData(attemptKey, { syncRunId: accepted.syncRunId, statusDataUpdatedAt: statusState?.data === undefined ? null : statusState.dataUpdatedAt, waitForStatusRefresh: true, statusRefreshRequestedAt: null });
   }, onError: (error: Error) => setMessage(`Sync failed: ${error.message}`) });
   return <div className="sync-control"><button type="button" onClick={() => { setMessage(null); sync.mutate(); }} disabled={sync.isPending}>{sync.isPending ? "Starting sync…" : "Sync now"}</button>{message && <p role={sync.isError ? "alert" : "status"}>{message}</p>}</div>;
 }
@@ -102,14 +92,19 @@ function SyncControl({ repositoryId }: { repositoryId: string }) {
 function SyncStatus({ repositoryId }: { repositoryId: string }) {
   const client = useQueryClient();
   const status = useQuery({ queryKey: ["sync", repositoryId], queryFn: ({ signal }) => fetchSyncStatus(repositoryId, signal), refetchInterval: (query) => query.state.data?.status === "running" ? 1000 : false });
-  const accepted = useQuery<{ syncRunId: string; statusDataUpdatedAt: number | null; waitForStatusRefresh: boolean } | null>({ queryKey: ["sync-attempt", repositoryId], queryFn: async () => null, enabled: false });
+  const accepted = useQuery<{ syncRunId: string; statusDataUpdatedAt: number | null; waitForStatusRefresh: boolean; statusRefreshRequestedAt: number | null } | null>({ queryKey: ["sync-attempt", repositoryId], queryFn: async () => null, enabled: false });
   const acceptedRunId = accepted.data?.syncRunId;
   const previousStreams = useRef<{ pullRequests: "idle" | "running" | "failed"; issues: "idle" | "running" | "failed" } | null>(null);
   const previousRepositoryId = useRef(repositoryId);
+  const firstStatusEffect = useRef(true);
   useEffect(() => {
+    const isFirstStatusEffect = firstStatusEffect.current;
+    firstStatusEffect.current = false;
+    let repositoryChanged = false;
     if (previousRepositoryId.current !== repositoryId) {
       previousRepositoryId.current = repositoryId;
       previousStreams.current = null;
+      repositoryChanged = true;
     }
     if (!status.data) return;
     const streams = { pullRequests: status.data.pullRequests, issues: status.data.issues };
@@ -121,12 +116,32 @@ function SyncStatus({ repositoryId }: { repositoryId: string }) {
       handled = { syncRunId: acceptedRunId, pullRequests: false, issues: false };
       client.setQueryData(handledKey, handled);
     }
-    const acceptedStatusReady = accepted.data?.waitForStatusRefresh === false && (accepted.data.statusDataUpdatedAt === null || status.dataUpdatedAt > accepted.data.statusDataUpdatedAt);
+    let acceptedAttempt = accepted.data;
+    if (acceptedAttempt?.waitForStatusRefresh) {
+      if (acceptedAttempt.statusDataUpdatedAt === null) {
+        acceptedAttempt = { ...acceptedAttempt, statusDataUpdatedAt: status.dataUpdatedAt };
+        client.setQueryData(["sync-attempt", repositoryId], acceptedAttempt);
+      } else if (status.dataUpdatedAt > acceptedAttempt.statusDataUpdatedAt) {
+        acceptedAttempt = { ...acceptedAttempt, waitForStatusRefresh: false, statusRefreshRequestedAt: null };
+        client.setQueryData(["sync-attempt", repositoryId], acceptedAttempt);
+      }
+      if (acceptedAttempt.waitForStatusRefresh) {
+        const shouldRefresh = isFirstStatusEffect || repositoryChanged || acceptedAttempt.statusRefreshRequestedAt !== status.dataUpdatedAt;
+        if (shouldRefresh) {
+          const requestedAttempt = { ...acceptedAttempt, statusRefreshRequestedAt: status.dataUpdatedAt };
+          client.setQueryData(["sync-attempt", repositoryId], requestedAttempt);
+          void client.refetchQueries({ queryKey: ["sync", repositoryId] });
+        }
+        previousStreams.current = { pullRequests: streams.pullRequests.status, issues: streams.issues.status };
+        return;
+      }
+    }
+    const acceptedStatusReady = acceptedAttempt?.waitForStatusRefresh === false && (acceptedAttempt.statusDataUpdatedAt === null || status.dataUpdatedAt > acceptedAttempt.statusDataUpdatedAt);
     for (const [streamName, stream] of Object.entries(streams) as Array<["pullRequests" | "issues", typeof streams.pullRequests]>) {
       if (!handled || handled[streamName]) continue;
       const reachedSuccessfulTerminal = stream.status === "idle" && (
         acceptedRunId !== null && acceptedStatusReady && (
-          accepted.data?.statusDataUpdatedAt !== null || isNewAttempt || previous?.[streamName] === "running"
+          (acceptedAttempt !== null && acceptedAttempt !== undefined && acceptedAttempt.statusDataUpdatedAt !== null) || isNewAttempt || previous?.[streamName] === "running"
         )
       );
       if (reachedSuccessfulTerminal) {
