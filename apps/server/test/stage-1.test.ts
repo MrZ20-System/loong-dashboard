@@ -341,6 +341,14 @@ describe("Stage 1 HTTP routes", () => {
     const client = setupDatabase("alpha");
     const app = appFor(client);
 
+    const emptyJson = await app.inject({
+      method: "POST",
+      url: "/api/repositories/alpha/sync",
+      headers: { "content-type": "application/json" },
+      payload: "",
+    });
+    expect(emptyJson.statusCode).toBe(202);
+
     const body = await app.inject({
       method: "POST",
       url: "/api/repositories/alpha/sync",
@@ -371,6 +379,28 @@ describe("Stage 1 HTTP routes", () => {
     });
     expect(raw.statusCode).toBe(400);
     expect(raw.json()).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+
+    const octetStream = await app.inject({
+      method: "POST",
+      url: "/api/repositories/alpha/sync",
+      headers: { "content-type": "application/octet-stream" },
+      payload: "unexpected",
+    });
+    expect(octetStream.statusCode).toBe(400);
+    expect(octetStream.json()).toEqual({
+      error: { code: "INVALID_REQUEST", message: "Request body must be empty" },
+    });
+
+    const form = await app.inject({
+      method: "POST",
+      url: "/api/repositories/alpha/sync",
+      headers: { "content-type": "application/x-www-form-urlencoded" },
+      payload: "unexpected=true",
+    });
+    expect(form.statusCode).toBe(400);
+    expect(form.json()).toEqual({
+      error: { code: "INVALID_REQUEST", message: "Request body must be empty" },
+    });
   });
 
   it("maps response schema failures to a generic 500 error", async () => {

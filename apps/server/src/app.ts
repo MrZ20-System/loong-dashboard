@@ -54,6 +54,7 @@ export function buildApp(
 ): FastifyInstance {
   const { database, timezone, syncCoordinator } = dependencies;
   const app = Fastify(options);
+  configureJsonParser(app);
 
   app.get("/api/health", async (_request, reply) => {
     return reply.code(200).send(healthResponse);
@@ -181,6 +182,22 @@ function registerStageOneRoutes(
   });
 }
 
+function configureJsonParser(app: FastifyInstance): void {
+  const defaultJsonParser = app.getDefaultJsonParser("error", "ignore");
+  app.removeContentTypeParser("application/json");
+  app.addContentTypeParser(
+    "application/json",
+    { parseAs: "string" },
+    (request, payload, done) => {
+      if (payload.length === 0) {
+        done(null, undefined);
+        return;
+      }
+      defaultJsonParser(request, payload as string, done);
+    },
+  );
+}
+
 function parseRequest<T>(schema: ZodType<T>, input: unknown): T {
   const parsed = schema.safeParse(input);
   if (!parsed.success) {
@@ -256,7 +273,11 @@ function errorResponse(error: unknown): {
 }
 
 function errorCode(error: unknown): ApiErrorCode {
-  if (error instanceof InvalidRequestError || isMalformedJsonError(error)) {
+  if (
+    error instanceof InvalidRequestError ||
+    isMalformedJsonError(error) ||
+    isUnsupportedContentTypeError(error)
+  ) {
     return "INVALID_REQUEST";
   }
   if (hasCode(error, "INVALID_CURSOR")) return "INVALID_CURSOR";
@@ -269,9 +290,14 @@ function isMalformedJsonError(error: unknown): boolean {
   return hasErrorCode(error, "FST_ERR_CTP_INVALID_JSON_BODY");
 }
 
+function isUnsupportedContentTypeError(error: unknown): boolean {
+  return hasErrorCode(error, "FST_ERR_CTP_INVALID_MEDIA_TYPE");
+}
+
 function requestErrorMessage(error: unknown, code: ApiErrorCode): string {
   if (code === "INTERNAL_ERROR") return "Internal server error";
   if (isMalformedJsonError(error)) return "Malformed JSON request body";
+  if (isUnsupportedContentTypeError(error)) return "Request body must be empty";
   return error instanceof Error && error.message.trim().length > 0
     ? error.message
     : "Invalid request";
