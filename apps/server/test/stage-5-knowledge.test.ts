@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,11 +38,23 @@ function recordedRuntime(): AgentRuntime {
   };
 }
 
-function setup(): { app: FastifyInstance; knowledgePath: string } {
+function setup(options: { gitSeed?: boolean } = {}): { app: FastifyInstance; knowledgePath: string } {
   const directory = mkdtempSync(join(tmpdir(), "loongboard-stage5-"));
   temporaryDirectories.push(directory);
   const knowledgePath = join(directory, "knowledge");
   mkdirSync(knowledgePath, { recursive: true });
+  if (options.gitSeed === true) {
+    // Turn the knowledge root into a git repo so the checkpoint path runs.
+    const git = (args: string) =>
+      execSync(`git ${args}`, { cwd: knowledgePath, encoding: "utf8" });
+    git("init -b main .");
+    git('config user.email "t@e.c"');
+    git('config user.name "T"');
+    git("config commit.gpgsign false");
+    writeFileSync(join(knowledgePath, "README.md"), "# knowledge\n");
+    git("add -A");
+    git("commit -qm init");
+  }
   const database = openDatabase(join(directory, "state.sqlite3"));
   databases.push(database);
   const agentChat = new AgentChatController({
@@ -52,7 +65,14 @@ function setup(): { app: FastifyInstance; knowledgePath: string } {
     defaults: { provider: "deepseek-official", model: "deepseek-v4-flash", reasoningEffort: "high", idleProcessMinutes: 20 },
     runtimeFactory: () => recordedRuntime(),
   });
-  const knowledge = new KnowledgeController({ database, knowledgePath, chats: agentChat });
+  const knowledge = new KnowledgeController({
+    database,
+    knowledgePath,
+    chats: agentChat,
+    ...(options.gitSeed === true
+      ? { checkpoint: { autoCommit: true, autoPush: false, remote: "origin", branch: "main" } }
+      : {}),
+  });
   knowledge.start();
   const coordinator = {
     start: async () => ({ repositoryId: "x", syncRunId: "r", startedAt: "2026-09-03T00:00:00.000Z" }),
@@ -131,5 +151,27 @@ describe("Stage 5 knowledge routes", () => {
 
     const read = await app.inject({ method: "GET", url: "/api/knowledge/documents?path=legacy.md" });
     expect((JSON.parse(read.body) as { content: string }).content).toContain("plain notes edited");
+  });
+
+  it("commits a deterministic git checkpoint after a manual save when enabled", async () => {
+    const { app, knowledgePath } = setup({ gitSeed: true });
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/knowledge/documents",
+      payload: { path: "notes/auto.md", title: "Auto", content: "checkpoint body" },
+    });
+    expect(created.statusCode).toBe(201);
+
+    // The checkpoint runs asynchronously after the write; wait for the commit.
+    let last = "";
+    for (let attempt = 0; attempt < 100; attempt += 1) {
+      const log = execSync('git log -1 --format=%s', { cwd: knowledgePath, encoding: "utf8" });
+      last = log.trim();
+      if (last.startsWith("chore(knowledge)")) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(last).toMatch(/^chore\(knowledge\): checkpoint /);
+    const status = execSync("git status --porcelain", { cwd: knowledgePath, encoding: "utf8" });
+    expect(status.trim()).toBe("");
   });
 });
