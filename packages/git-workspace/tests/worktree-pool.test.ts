@@ -80,4 +80,19 @@ describe("WorktreePool", () => {
       pool.allocate({ mainRepositoryPath: main, poolRoot: busyPoolRoot, slotCount: 2, prNumber: 99, targetSha: shaB, busySlotPaths: [first.slotPath, second.slotPath] }),
     ).rejects.toBeInstanceOf(WorktreePoolError);
   });
+
+  it("repairs a broken leftover slot directory on the next allocation", async () => {
+    const pool = new WorktreePool();
+    const brokenPoolRoot = path.join(root, ".worktrees", "broken");
+    // Simulate an interrupted `worktree add`: the slot directory exists but
+    // is not a registered worktree (plan 12 repair).
+    const broken = path.join(brokenPoolRoot, "slot-01");
+    fs.mkdirSync(broken, { recursive: true });
+    fs.writeFileSync(path.join(broken, "stale.txt"), "leftover");
+    const allocated = await pool.allocate({ mainRepositoryPath: main, poolRoot: brokenPoolRoot, slotCount: 1, prNumber: 21, targetSha: shaA, busySlotPaths: [] });
+    expect(allocated.created).toBe(true);
+    expect(allocated.slotPath).toBe(broken);
+    expect(await pool.revision(broken)).toBe(shaA);
+    expect(fs.existsSync(path.join(broken, "stale.txt"))).toBe(false);
+  });
 });

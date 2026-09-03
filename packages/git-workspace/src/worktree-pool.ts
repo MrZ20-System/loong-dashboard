@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 
 import { runGitOptionalText, runGitText } from "./git-command.js";
@@ -51,7 +51,18 @@ export class WorktreePool {
     }
     mkdirSync(input.poolRoot, { recursive: true });
     const busy = new Set(input.busySlotPaths);
-    const existing = this.listSlots(input.poolRoot, input.slotCount);
+    let existing = this.listSlots(input.poolRoot, input.slotCount);
+
+    // Repair slots whose worktree registration is broken (plan 12: an
+    // initialization failure is repaired by deleting and re-adding the
+    // worktree). A leftover directory from an interrupted `worktree add`
+    // otherwise occupies its slot forever.
+    for (const slot of existing) {
+      if (busy.has(slot.path)) continue;
+      if ((await this.revision(slot.path)) !== null) continue;
+      await this.removeBrokenSlot(input.mainRepositoryPath, slot.path);
+    }
+    existing = this.listSlots(input.poolRoot, input.slotCount);
 
     // 1. Reuse a slot already on the target revision (never reset: the slot
     //    may hold unsaved agent work and is already correct).
@@ -110,6 +121,28 @@ export class WorktreePool {
   async isClean(slotPath: string): Promise<boolean> {
     const output = await runGitOptionalText(slotPath, ["status", "--porcelain"]);
     return output === null || output.trim().length === 0;
+  }
+
+  /**
+   * Unregister a broken slot worktree and remove its leftover directory so
+   * the slot can be re-created by the next allocation (plan 12 repair).
+   */
+  private async removeBrokenSlot(mainRepositoryPath: string, slotPath: string): Promise<void> {
+    try {
+      await runGitOptionalText(mainRepositoryPath, [
+        "worktree",
+        "remove",
+        "--force",
+        slotPath,
+      ]);
+    } catch {
+      // The directory may not be a registered worktree at all.
+    }
+    try {
+      rmSync(slotPath, { recursive: true, force: true });
+    } catch {
+      // Best effort; the next allocation retries the repair.
+    }
   }
 
   private listSlots(poolRoot: string, slotCount: number): Array<{ name: string; path: string }> {
