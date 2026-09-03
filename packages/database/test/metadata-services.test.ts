@@ -11,6 +11,7 @@ import {
   getPullRequestActivityDays,
   getRepositorySyncStatus,
   getRepositorySyncState,
+  InvalidCursorError,
   listIssues,
   listPullRequests,
   openDatabase,
@@ -248,6 +249,29 @@ describe("sync state persistence", () => {
       reopened.close();
     }
   });
+
+  it("uses the persisted attempt timestamp when completing a stream", () => {
+    withDatabase((database) => {
+      reconcileRepositories(database, [repository("repo")]);
+      startRepositorySync(database, "repo", "2026-09-03T01:00:00.000Z");
+
+      completeSyncStream(database, {
+        repositoryId: "repo",
+        entityKind: "pull_request",
+        completedAt: "2026-09-03T01:01:00.000Z",
+        // This is deliberately an untyped external payload. Completion must
+        // ignore it and use the persisted last_attempt_at value.
+        attemptStartedAt: "2099-01-01T00:00:00.000Z",
+      } as never);
+
+      expect(getRepositorySyncState(database, "repo", "pull_request")).toEqual(
+        expect.objectContaining({
+          watermarkUpdatedAt: "2026-09-03T01:00:00.000Z",
+          lastAttemptAt: "2026-09-03T01:00:00.000Z",
+        }),
+      );
+    });
+  });
 });
 
 describe("metadata upserts and queries", () => {
@@ -298,6 +322,54 @@ describe("metadata upserts and queries", () => {
       });
       expect(second.items.map((item) => item.number)).toEqual([1, 4]);
       expect(second.nextCursor).toBeNull();
+    });
+  });
+
+  it("paginates tied Issue timestamps within a status filter", () => {
+    withDatabase((database) => {
+      reconcileRepositories(database, [repository("repo")]);
+      upsertIssuePage(database, "repo", [
+        issue(5, "2026-09-03T00:00:00.000Z", { status: "open" }),
+        issue(4, "2026-09-03T00:00:00.000Z", { status: "closed" }),
+        issue(3, "2026-09-03T00:00:00.000Z", { status: "open" }),
+        issue(2, "2026-09-03T00:00:00.000Z", { status: "open" }),
+      ]);
+
+      const first = listIssues(database, "repo", {
+        calendarTimeZone: "UTC",
+        status: "open",
+        limit: 2,
+      });
+      expect(first.items.map((item) => item.number)).toEqual([5, 3]);
+      expect(first.nextCursor).not.toBeNull();
+
+      const second = listIssues(database, "repo", {
+        calendarTimeZone: "UTC",
+        status: "open",
+        limit: 2,
+        cursor: first.nextCursor,
+      });
+      expect(second.items.map((item) => item.number)).toEqual([2]);
+      expect(second.nextCursor).toBeNull();
+    });
+  });
+
+  it("rejects disabled repositories and malformed cursors", () => {
+    withDatabase((database) => {
+      reconcileRepositories(database, [repository("repo")]);
+      reconcileRepositories(database, []);
+
+      expect(() =>
+        listIssues(database, "repo", { calendarTimeZone: "UTC" }),
+      ).toThrowError(/Repository is missing or disabled/);
+      expect(() =>
+        startRepositorySync(database, "repo"),
+      ).toThrowError(/Repository is missing or disabled/);
+
+      reconcileRepositories(database, [repository("repo")]);
+      expect(() =>
+        listIssues(database, "repo", { calendarTimeZone: "UTC", cursor: "not-a-cursor" }),
+      ).toThrowError(InvalidCursorError);
     });
   });
 

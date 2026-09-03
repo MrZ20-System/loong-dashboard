@@ -1,9 +1,24 @@
 import type Database from "better-sqlite3";
 
-export type PullRequestStatus = "draft" | "open" | "closed" | "merged";
-export type IssueStatus = "open" | "closed";
-export type EntityKind = "pull_request" | "issue";
-export type SyncStatus = "idle" | "running" | "failed";
+import type {
+  ActivityDay,
+  EntityKind,
+  IssueListItem,
+  IssueStatus,
+  PullRequestListItem,
+  PullRequestStatus,
+  SyncStatus,
+} from "@loongboard/contracts";
+
+export type {
+  ActivityDay,
+  EntityKind,
+  IssueListItem,
+  IssueStatus,
+  PullRequestListItem,
+  PullRequestStatus,
+  SyncStatus,
+} from "@loongboard/contracts";
 
 /** The repository shape read from system.yaml by the Server boundary. */
 export interface ConfiguredRepository {
@@ -57,7 +72,6 @@ export interface SyncRun {
 }
 
 export interface SyncStreamUpdate {
-  attemptStartedAt?: Date | string;
   completedAt?: Date | string;
   rateLimitRemaining?: number | null;
   rateLimitResetAt?: Date | string | null;
@@ -98,35 +112,6 @@ export interface IssueMetadata {
   updatedAt: string;
   closedAt: string | null;
   detailBody?: string | null;
-}
-
-export interface PullRequestListItem {
-  repositoryId: string;
-  number: number;
-  title: string;
-  url: string;
-  authorLogin: string | null;
-  status: PullRequestStatus;
-  updatedAt: string;
-  changedFilesCount: number;
-  additions: number;
-  deletions: number;
-}
-
-export interface IssueListItem {
-  repositoryId: string;
-  number: number;
-  title: string;
-  url: string;
-  authorLogin: string | null;
-  status: IssueStatus;
-  commentsCount: number;
-  updatedAt: string;
-}
-
-export interface ActivityDay {
-  date: string;
-  count: number;
 }
 
 export interface ListQueryOptions {

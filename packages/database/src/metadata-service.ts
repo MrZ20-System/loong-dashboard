@@ -24,7 +24,7 @@ import {
 } from "./types.js";
 
 const DEFAULT_PAGE_SIZE = 50;
-class InvalidCursorError extends Error {
+export class InvalidCursorError extends Error {
   readonly code = "INVALID_CURSOR" as const;
 
   constructor() {
@@ -167,7 +167,7 @@ function pageSize(value: number | undefined): number {
   return size;
 }
 
-function cursorValues(value: string | null | undefined): { updatedAt: string; number: number } | null {
+function cursorValues(value: string | null | undefined): ListCursorPayload | null {
   if (!value) return null;
   try {
     return decodeListCursor(value);
@@ -191,7 +191,7 @@ function datePredicate(
 function cursorPredicate(
   clauses: string[],
   parameters: unknown[],
-  cursor: { updatedAt: string; number: number } | null,
+  cursor: Pick<ListCursorPayload, "updatedAt" | "number"> | null,
 ): void {
   if (!cursor) return;
   clauses.push("(updated_at < ? OR (updated_at = ? AND number < ?))");

@@ -33,6 +33,7 @@ export type {
 export {
   getIssueActivityDays,
   getPullRequestActivityDays,
+  InvalidCursorError,
   listIssues,
   listPullRequests,
   upsertIssuePage,

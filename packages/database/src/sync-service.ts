@@ -185,7 +185,18 @@ export function completeSyncStream(
       "Only a running sync stream can complete",
     );
   }
-  const attemptStartedAt = timestamp(input.attemptStartedAt ?? state.lastAttemptAt ?? undefined);
+  // The completion boundary must use the timestamp persisted by the start
+  // transition.  Accepting a caller-supplied attempt start here would let a
+  // provider move the incremental-sync watermark independently of the actual
+  // sync attempt.
+  const attemptStartedAt = state.lastAttemptAt;
+  if (attemptStartedAt === null) {
+    throw new InvalidSyncTransitionError(
+      input.repositoryId,
+      input.entityKind,
+      "A running sync stream has no persisted attempt timestamp",
+    );
+  }
   const completedAt = timestamp(input.completedAt);
   const nextRateLimitReset =
     input.rateLimitResetAt === undefined

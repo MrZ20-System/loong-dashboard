@@ -16,6 +16,8 @@ export interface UtcDateRange {
 }
 
 const datePattern = /^(\d{4})-(\d{2})-(\d{2})$/;
+const MILLIS_PER_DAY = 86_400_000;
+const MAX_BOUNDARY_SEARCH_DAYS = 370;
 
 function calendarPartsAsUtcMillis(
   year: number,
@@ -52,33 +54,32 @@ function parseCalendarDate(value: string): CalendarParts {
   return { year, month, day };
 }
 
-function assertTimeZone(timeZone: string): void {
+function createDateFormatter(timeZone: string): Intl.DateTimeFormat {
   if (timeZone.trim().length === 0) {
     throw new Error("Calendar timezone must not be empty");
   }
 
   try {
     // Constructing the formatter is the platform's IANA timezone validator.
-    new Intl.DateTimeFormat("en-CA", { timeZone }).format();
+    return new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      calendar: "iso8601",
+      numberingSystem: "latn",
+      hourCycle: "h23",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     throw new Error(`Invalid calendar timezone ${timeZone}: ${reason}`);
   }
 }
 
-function getZonedParts(instant: number, timeZone: string): ZonedParts {
-  const formatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone,
-    calendar: "iso8601",
-    numberingSystem: "latn",
-    hourCycle: "h23",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
+function getZonedParts(instant: number, formatter: Intl.DateTimeFormat): ZonedParts {
   const parts = Object.fromEntries(
     formatter
       .formatToParts(new Date(instant))
@@ -96,36 +97,60 @@ function getZonedParts(instant: number, timeZone: string): ZonedParts {
   };
 }
 
-function timeZoneOffsetMillis(instant: number, timeZone: string): number {
-  const local = getZonedParts(instant, timeZone);
-  const localAsUtc = calendarPartsAsUtcMillis(
-    local.year,
-    local.month,
-    local.day,
-    local.hour,
-    local.minute,
-    local.second,
-  );
-  return localAsUtc - Math.floor(instant / 1_000) * 1_000;
+function localDateOrdinal(instant: number, formatter: Intl.DateTimeFormat): number {
+  const local = getZonedParts(instant, formatter);
+  return calendarPartsAsUtcMillis(local.year, local.month, local.day);
 }
 
-function localMidnightUtc(date: string, timeZone: string): Date {
-  const local = parseCalendarDate(date);
-  const localAsUtc = calendarPartsAsUtcMillis(local.year, local.month, local.day);
-  let candidate = localAsUtc;
+/**
+ * Find the first instant whose projected local calendar date is at or after
+ * the requested date.  This is deliberately based on the date projection,
+ * rather than a fixed-point offset guess: it handles a midnight gap by
+ * returning the first real instant of that date and a skipped date by
+ * returning the first instant of the following real date.
+ */
+function firstInstantAtOrAfterDate(
+  date: CalendarParts,
+  formatter: Intl.DateTimeFormat,
+): Date {
+  const targetOrdinal = calendarPartsAsUtcMillis(date.year, date.month, date.day);
+  let low = targetOrdinal - 2 * MILLIS_PER_DAY;
+  let high = targetOrdinal + 2 * MILLIS_PER_DAY;
+  let lowDays = 2;
+  let highDays = 2;
 
-  // Offset changes near midnight are uncommon but legal in IANA data. A few
-  // fixed-point iterations account for both ordinary DST transitions and
-  // historical non-hour offsets without a third-party timezone dependency.
-  for (let iteration = 0; iteration < 4; iteration += 1) {
-    const next = localAsUtc - timeZoneOffsetMillis(candidate, timeZone);
-    if (next === candidate) {
-      return new Date(next);
-    }
-    candidate = next;
+  // IANA zones can have historical offsets outside today's usual range. Keep
+  // expanding the bracket until it straddles the target date instead of
+  // baking an offset assumption into this conversion.
+  while (localDateOrdinal(low, formatter) >= targetOrdinal && lowDays < MAX_BOUNDARY_SEARCH_DAYS) {
+    low -= MILLIS_PER_DAY;
+    lowDays += 1;
+  }
+  while (localDateOrdinal(high, formatter) < targetOrdinal && highDays < MAX_BOUNDARY_SEARCH_DAYS) {
+    high += MILLIS_PER_DAY;
+    highDays += 1;
   }
 
-  return new Date(candidate);
+  if (
+    localDateOrdinal(low, formatter) >= targetOrdinal ||
+    localDateOrdinal(high, formatter) < targetOrdinal
+  ) {
+    throw new Error("Could not resolve calendar date boundary");
+  }
+
+  // The local calendar date projection is ordered over a UTC interval. A
+  // binary search gives millisecond precision at ordinary transitions while
+  // also naturally collapsing a skipped date to the next real boundary.
+  while (high - low > 1) {
+    const middle = low + Math.floor((high - low) / 2);
+    if (localDateOrdinal(middle, formatter) >= targetOrdinal) {
+      high = middle;
+    } else {
+      low = middle;
+    }
+  }
+
+  return new Date(high);
 }
 
 function addCalendarDays(date: string, days: number): string {
@@ -149,10 +174,13 @@ export function calendarDateRangeToUtc(
     throw new Error("Calendar range from must be on or before to");
   }
 
-  assertTimeZone(timeZone);
+  const formatter = createDateFormatter(timeZone);
   return {
-    from: localMidnightUtc(fromDate, timeZone).toISOString(),
-    to: localMidnightUtc(addCalendarDays(toDate, 1), timeZone).toISOString(),
+    from: firstInstantAtOrAfterDate(from, formatter).toISOString(),
+    to: firstInstantAtOrAfterDate(
+      parseCalendarDate(addCalendarDays(toDate, 1)),
+      formatter,
+    ).toISOString(),
   };
 }
 
@@ -167,8 +195,7 @@ export function utcDateToCalendarDate(utcDateTime: string, timeZone: string): st
   if (!Number.isFinite(timestamp)) {
     throw new Error(`Invalid UTC timestamp: ${utcDateTime}`);
   }
-  assertTimeZone(timeZone);
-  const parts = getZonedParts(timestamp, timeZone);
+  const parts = getZonedParts(timestamp, createDateFormatter(timeZone));
   return [parts.year, parts.month, parts.day]
     .map((part, index) => (index === 0 ? String(part).padStart(4, "0") : String(part).padStart(2, "0")))
     .join("-");

@@ -86,6 +86,7 @@ describe("database migrations", () => {
       expect(ledger).toEqual([
         { id: "001_initial_schema" },
         { id: "002_metadata_list_indexes" },
+        { id: "003_issue_state_constraint" },
       ]);
     } finally {
       database.close();
@@ -109,6 +110,7 @@ describe("database migrations", () => {
       expect(ledger).toEqual([
         { id: "001_initial_schema", applied_at: firstAppliedAt },
         expect.objectContaining({ id: "002_metadata_list_indexes" }),
+        expect.objectContaining({ id: "003_issue_state_constraint" }),
       ]);
     } finally {
       database.close();
@@ -182,6 +184,80 @@ describe("database migrations", () => {
           "running",
         ),
       ).toThrowError(/FOREIGN KEY constraint failed/);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("enforces the Issue state contract on inserts and updates", () => {
+    const database = openDatabase(createDatabasePath());
+
+    try {
+      database
+        .prepare(
+          `INSERT INTO repositories
+             (id, key, display_name, github_owner, github_name, local_path,
+              remote_name, default_branch, worktree_slots, enabled, created_at,
+              updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          "repo-state",
+          "repo-state",
+          "State Repository",
+          "example",
+          "state-repo",
+          "/workspace/state-repo",
+          "origin",
+          "main",
+          1,
+          1,
+          "2026-09-03T00:00:00.000Z",
+          "2026-09-03T00:00:00.000Z",
+        );
+
+      const insert = database.prepare(
+        `INSERT INTO issues
+           (repository_id, node_id, number, title, url, author_login, state,
+            comments_count, created_at, updated_at, closed_at, detail_body)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      expect(() =>
+        insert.run(
+          "repo-state",
+          "issue-node-invalid",
+          1,
+          "Invalid state",
+          "https://github.com/example/state-repo/issues/1",
+          null,
+          "OPEN",
+          0,
+          "2026-09-03T00:00:00.000Z",
+          "2026-09-03T00:00:00.000Z",
+          null,
+          null,
+        ),
+      ).toThrowError(/issues\.state must be open or closed/);
+
+      insert.run(
+        "repo-state",
+        "issue-node-valid",
+        2,
+        "Valid state",
+        "https://github.com/example/state-repo/issues/2",
+        null,
+        "open",
+        0,
+        "2026-09-03T00:00:00.000Z",
+        "2026-09-03T00:00:00.000Z",
+        null,
+        null,
+      );
+      expect(() =>
+        database
+          .prepare("UPDATE issues SET state = ? WHERE repository_id = ? AND number = ?")
+          .run("CLOSED", "repo-state", 2),
+      ).toThrowError(/issues\.state must be open or closed/);
     } finally {
       database.close();
     }
@@ -314,7 +390,7 @@ describe("database migrations", () => {
           number: 42,
           title: "Track issue sessions",
           url: "https://github.com/example/issue-repo/issues/42",
-          state: "OPEN",
+          state: "open",
           commentsCount: 0,
           createdAt: "2026-09-03T00:00:00.000Z",
           updatedAt: "2026-09-03T00:00:00.000Z",

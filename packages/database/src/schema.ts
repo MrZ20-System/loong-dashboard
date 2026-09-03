@@ -234,7 +234,7 @@ export const issues = sqliteTable(
     title: text("title").notNull(),
     url: text("url").notNull(),
     authorLogin: text("author_login"),
-    state: text("state").notNull(),
+    state: text("state", { enum: ["open", "closed"] }).notNull(),
     commentsCount: integer("comments_count").notNull(),
     createdAt: text("created_at").notNull(),
     updatedAt: text("updated_at").notNull(),
