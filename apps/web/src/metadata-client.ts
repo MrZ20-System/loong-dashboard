@@ -1,6 +1,7 @@
 import {
   apiErrorSchema,
   calendarDateSchema,
+  domainRuleIdSchema,
   issueStatusSchema,
   issuesQuerySchema,
   issuesResponseSchema,
@@ -22,6 +23,13 @@ import {
 
 export type { IssueListItem, PullRequestListItem, RepositorySummary } from "@loongboard/contracts";
 
+export type MetadataFilters = {
+  date: string | null;
+  status: string | null;
+  /** Repeated `?domain=` values; pull request lists only. */
+  domains: string[];
+};
+
 export class ApiRequestError extends Error {
   readonly status: number;
   readonly code: string | null;
@@ -41,32 +49,43 @@ export function isValidDate(value: string | null): value is string {
 export function readMetadataFilters(
   kind: "pulls" | "issues",
   params: URLSearchParams,
-): { date: string | null; status: string | null } {
+): MetadataFilters {
   const dateValue = params.get("date");
   const statusValue = params.get("status");
+  const rawDomainValues = kind === "pulls" ? params.getAll("domain") : [];
   const querySchema = kind === "pulls" ? pullRequestsQuerySchema : issuesQuerySchema;
-  const candidate = Object.fromEntries(
-    [["date", dateValue], ["status", statusValue]].filter(([, value]) => value !== null),
-  );
+  const candidate: Record<string, unknown> = {};
+  if (dateValue !== null) candidate.date = dateValue;
+  if (statusValue !== null) candidate.status = statusValue;
+  if (rawDomainValues.length > 0) candidate.domain = rawDomainValues;
   const parsed = querySchema.safeParse(candidate);
   if (parsed.success) {
-    return { date: parsed.data.date ?? null, status: parsed.data.status ?? null };
+    const data = parsed.data as { date?: string; status?: string; domain?: string[] };
+    return {
+      date: data.date ?? null,
+      status: data.status ?? null,
+      domains: kind === "pulls" ? (data.domain ?? []) : [],
+    };
   }
   const statusSchema = kind === "pulls" ? pullRequestStatusSchema : issueStatusSchema;
   return {
     date: isValidDate(dateValue) ? dateValue : null,
     status: statusSchema.safeParse(statusValue).success ? statusValue : null,
+    domains: rawDomainValues
+      .filter((value) => domainRuleIdSchema.safeParse(value).success)
+      .slice(0, 20),
   };
 }
 
 export function buildListUrl(
   repositoryId: string,
   kind: "pulls" | "issues",
-  filters: { date?: string | null; status?: string | null; cursor?: string | null },
+  filters: { date?: string | null; status?: string | null; cursor?: string | null; domains?: string[] | null },
 ): string {
   const query = new URLSearchParams();
   if (filters.date) query.set("date", filters.date);
   if (filters.status) query.set("status", filters.status);
+  for (const domain of filters.domains ?? []) query.append("domain", domain);
   if (filters.cursor) query.set("cursor", filters.cursor);
   const search = query.toString();
   return `/api/repositories/${encodeURIComponent(repositoryId)}/${kind}${search ? `?${search}` : ""}`;
@@ -74,7 +93,7 @@ export function buildListUrl(
 
 type ParseSchema<T> = { parse: (input: unknown) => T };
 
-async function request<T>(
+export async function request<T>(
   url: string,
   schema: ParseSchema<T>,
   init: RequestInit = {},
@@ -131,7 +150,7 @@ export function fetchRepositories(
 export function fetchList(
   repositoryId: string,
   kind: "pulls" | "issues",
-  filters: { date?: string | null; status?: string | null; cursor?: string | null },
+  filters: { date?: string | null; status?: string | null; cursor?: string | null; domains?: string[] | null },
   signal?: AbortSignal,
   fetchImpl: typeof fetch = globalThis.fetch,
 ): Promise<PullRequestsResponse | IssuesResponse> {

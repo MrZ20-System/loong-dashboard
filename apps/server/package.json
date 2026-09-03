@@ -18,6 +18,7 @@
     "@loongboard/database": "workspace:*",
     "@loongboard/github": "workspace:*",
     "fastify": "5.6.0",
+    "picomatch": "4.0.7",
     "yaml": "2.9.0",
     "zod": "3.25.76"
   },

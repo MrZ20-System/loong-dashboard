@@ -3,6 +3,7 @@ import Database from "better-sqlite3";
 import { initialSchemaMigration } from "./migrations/001-initial-schema.js";
 import { metadataListIndexesMigration } from "./migrations/002-metadata-list-indexes.js";
 import { issueStateConstraintMigration } from "./migrations/003-issue-state-constraint.js";
+import { domainClassificationMigration } from "./migrations/004-domain-classification.js";
 import { recoverInterruptedSyncStates } from "./sync-service.js";
 
 export interface Migration {
@@ -14,6 +15,7 @@ const migrations: readonly Migration[] = [
   initialSchemaMigration,
   metadataListIndexesMigration,
   issueStateConstraintMigration,
+  domainClassificationMigration,
 ];
 
 function orderedMigrations(items: readonly Migration[]): readonly Migration[] {

@@ -141,7 +141,11 @@ function hasDshImport(source) {
 
 function hasRawSql(source) {
   return (
-    /["'`]\s*(?:SELECT\b|INSERT\b|UPDATE\b|DELETE\b|CREATE\s+TABLE\b|ALTER\s+TABLE\b|DROP\s+TABLE\b|PRAGMA\b)/i.test(source) ||
+    // Require SQL statement structure, not bare keywords: UI code legitimately
+    // contains quoted words like "DELETE" (HTTP methods) or "Update failed".
+    /["'`]\s*(?:SELECT\s+[\w*'"`,.\s]+\s+FROM\b|INSERT\s+INTO\b|DELETE\s+FROM\b|UPDATE\s+[\w"'.]+\s+SET\b|CREATE\s+TABLE\b|ALTER\s+TABLE\b|DROP\s+TABLE\b|PRAGMA\s+\w)/i.test(
+      source,
+    ) ||
     /(?:better-sqlite3|drizzle-orm\/sqlite|\.prepare\s*\(|\bsql\s*`)/i.test(source)
   );
 }

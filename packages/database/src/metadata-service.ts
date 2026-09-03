@@ -3,6 +3,7 @@ import {
   encodeListCursor,
   type ListCursorPayload,
 } from "@loongboard/contracts";
+import { listDomainTagsForPullRequests } from "./classification-service.js";
 import { requireRepository } from "./repository-service.js";
 import {
   calendarDateRangeToUtc,
@@ -198,7 +199,9 @@ function cursorPredicate(
   parameters.push(cursor.updatedAt, cursor.updatedAt, cursor.number);
 }
 
-function mapPullRequest(row: Record<string, unknown>): PullRequestListItem {
+function mapPullRequest(
+  row: Record<string, unknown>,
+): Omit<PullRequestListItem, "domains"> {
   return {
     repositoryId: row.repository_id as string,
     number: row.number as number,
@@ -242,6 +245,21 @@ export function listPullRequests(
     clauses.push("status = ?");
     parameters.push(options.status);
   }
+  const domainIds = options.domainIds?.filter((id) => id.length > 0) ?? [];
+  if (domainIds.length > 0) {
+    // ANY-match semantics: the pull request carries at least one selected
+    // domain rule (plan 10.3). The rule ids are validated at the HTTP edge.
+    const placeholders = domainIds.map(() => "?").join(", ");
+    clauses.push(
+      `EXISTS (
+        SELECT 1 FROM pull_request_domains pd
+        WHERE pd.repository_id = pull_requests.repository_id
+          AND pd.pr_number = pull_requests.number
+          AND pd.domain_rule_id IN (${placeholders})
+      )`,
+    );
+    parameters.push(...domainIds);
+  }
   cursorPredicate(clauses, parameters, cursor);
   parameters.push(limit + 1);
 
@@ -256,7 +274,16 @@ export function listPullRequests(
     )
     .all(...parameters) as Array<Record<string, unknown>>;
   const hasMore = rows.length > limit;
-  const items = rows.slice(0, limit).map(mapPullRequest);
+  const pageRows = rows.slice(0, limit);
+  const domainTags = listDomainTagsForPullRequests(
+    database,
+    repositoryId,
+    pageRows.map((row) => row.number as number),
+  );
+  const items: PullRequestListItem[] = pageRows.map((row) => ({
+    ...mapPullRequest(row),
+    domains: domainTags.get(row.number as number) ?? [],
+  }));
   const last = items.at(-1);
   return {
     items,

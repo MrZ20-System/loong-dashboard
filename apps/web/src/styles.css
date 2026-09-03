@@ -331,3 +331,154 @@ td {
     overflow-x: auto;
   }
 }
+
+/* Stage 2: domain chips, filter, and settings */
+
+.domain-chips {
+  display: inline-flex;
+  gap: 0.3rem;
+  flex-wrap: wrap;
+}
+
+.domain-chip {
+  display: inline-block;
+  padding: 0.1rem 0.55rem;
+  border-radius: 999px;
+  color: #ffffff;
+  font-size: 0.75rem;
+  font-weight: 700;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.domain-filter {
+  margin: 1rem 0;
+  padding: 0.6rem 0.9rem;
+  border: 1px solid #22355c;
+  border-radius: 0.6rem;
+}
+
+.domain-filter legend {
+  padding: 0 0.4rem;
+  color: #82b8ff;
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.domain-filter-options {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.domain-toggle {
+  padding: 0.15rem;
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  cursor: pointer;
+}
+
+.domain-toggle.selected {
+  border-color: #82b8ff;
+}
+
+.reclassify-hint {
+  font-size: 0.9rem;
+}
+
+.domain-settings-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);
+  gap: 1.5rem;
+  margin-top: 1rem;
+}
+
+.domain-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 0.8rem;
+}
+
+.domain-rule {
+  padding: 0.9rem 1rem;
+  border: 1px solid #22355c;
+  border-radius: 0.6rem;
+  background: #101c33;
+}
+
+.domain-rule.disabled {
+  opacity: 0.55;
+}
+
+.domain-rule header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.domain-rule-meta {
+  color: #7789a7;
+  font-size: 0.8rem;
+}
+
+.domain-rule p {
+  margin: 0.5rem 0 0;
+  font-size: 0.85rem;
+  color: #d9e6ff;
+  overflow-wrap: anywhere;
+}
+
+.domain-rule-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+
+.domain-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  padding: 0.9rem 1rem;
+  border: 1px solid #22355c;
+  border-radius: 0.6rem;
+  background: #101c33;
+  align-self: start;
+}
+
+.domain-form h3 {
+  margin: 0;
+}
+
+.domain-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: #aab8d4;
+}
+
+.domain-form label.checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.domain-form textarea {
+  resize: vertical;
+  font-family: ui-monospace, monospace;
+}
+
+.domain-form-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+@media (max-width: 900px) {
+  .domain-settings-layout {
+    grid-template-columns: 1fr;
+  }
+}

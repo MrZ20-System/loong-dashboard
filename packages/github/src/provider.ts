@@ -1,6 +1,20 @@
 import { execa } from "execa";
 import { z } from "zod";
 
+import {
+  chunkIntoBatches,
+  FILES_BATCH_SIZE,
+  FILES_PAGE_SIZE,
+  MAX_CONCURRENT_FILE_BATCHES,
+  MAX_FILES_PER_PULL_REQUEST,
+  normalizeChangeType,
+  runWithConcurrency,
+  type FetchedPullRequestFile,
+  type PullRequestFilesInput,
+  type PullRequestFilesResult,
+  type PullRequestFileRef,
+} from "./files.js";
+
 const PAGE_SIZE = 100;
 const WATERMARK_OVERLAP_MS = 2 * 60 * 1000;
 const DEFAULT_LOOKBACK_DAYS = 90;
@@ -102,6 +116,9 @@ export interface GitHubMetadataProvider {
     input: PullRequestSyncInput,
   ): AsyncIterable<PullRequestPage>;
   fetchIssueUpdates(input: IssueSyncInput): AsyncIterable<IssuePage>;
+  fetchPullRequestFiles(
+    input: PullRequestFilesInput,
+  ): Promise<PullRequestFilesResult[]>;
 }
 
 export interface GhGitHubMetadataProviderOptions {
@@ -135,13 +152,16 @@ export class GitHubCommandError extends Error {
   }
 }
 
+/** GraphQL/REST operations surfaced in provider error types. */
+export type GitHubOperation = "PullRequests" | "Issues" | "PullRequestFiles";
+
 export class GitHubResponseError extends Error {
   readonly repository: string;
-  readonly operation: "PullRequests" | "Issues";
+  readonly operation: GitHubOperation;
 
   constructor(
     repository: string,
-    operation: "PullRequests" | "Issues",
+    operation: GitHubOperation,
     message: string,
     cause?: unknown,
   ) {
@@ -156,12 +176,12 @@ export class GitHubResponseError extends Error {
 
 export class GitHubGraphQLError extends Error {
   readonly repository: string;
-  readonly operation: "PullRequests" | "Issues";
+  readonly operation: GitHubOperation;
   readonly messages: readonly string[];
 
   constructor(
     repository: string,
-    operation: "PullRequests" | "Issues",
+    operation: GitHubOperation,
     messages: readonly string[],
   ) {
     super(
@@ -304,6 +324,56 @@ const issueResponseSchema = z
   })
   .strict();
 
+const pullRequestFileNodeSchema = z
+  .object({
+    path: z.string().min(1),
+    additions: z.number().int().nonnegative(),
+    deletions: z.number().int().nonnegative(),
+    // PatchStatus enum (ADDED/CHANGED/COPIED/DELETED/MODIFIED/RENAMED); kept
+    // as an open string so a new GitHub state never breaks sync — it is
+    // normalized by `normalizeChangeType` instead.
+    changeType: z.string().min(1),
+  })
+  .strict();
+
+const pullRequestFilesNodeSchema = z
+  .object({
+    number: z.number().int().positive(),
+    files: z
+      .object({
+        nodes: z.array(pullRequestFileNodeSchema),
+        pageInfo: pageInfoSchema,
+      })
+      .strict()
+      .nullable(),
+  })
+  .strict()
+  .nullable();
+
+const pullRequestFilesResponseSchema = z
+  .object({
+    data: z
+      .object({
+        nodes: z.array(pullRequestFilesNodeSchema),
+        rateLimit: rateLimitSchema,
+      })
+      .strict()
+      .nullable()
+      .optional(),
+    errors: z.array(graphqlErrorSchema).optional(),
+  })
+  .strict();
+
+// REST payloads grow over time (sha, blob_url, patch, ...); only the fields
+// LoongBoard consumes are validated here, unknown fields are stripped.
+const restPullRequestFileSchema = z.object({
+  filename: z.string().min(1),
+  status: z.string().min(1),
+  additions: z.number().int().nonnegative(),
+  deletions: z.number().int().nonnegative(),
+  previous_filename: z.string().min(1).optional(),
+});
+
 const PULL_REQUEST_QUERY = `query PullRequests(
   $owner: String!
   $name: String!
@@ -375,6 +445,24 @@ const ISSUE_QUERY = `query Issues(
 
 type PullRequestResponse = z.infer<typeof pullRequestResponseSchema>;
 type IssueResponse = z.infer<typeof issueResponseSchema>;
+type PullRequestFilesResponse = z.infer<typeof pullRequestFilesResponseSchema>;
+type GraphQLResponseEnvelope =
+  | PullRequestResponse
+  | IssueResponse
+  | PullRequestFilesResponse;
+
+const PULL_REQUEST_FILES_QUERY = `query PullRequestFiles($ids: [ID!]!) {
+  nodes(ids: $ids) {
+    ... on PullRequest {
+      number
+      files(first: ${FILES_PAGE_SIZE}) {
+        nodes { path additions deletions changeType }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+  rateLimit { cost remaining resetAt }
+}`;
 
 interface NormalizedSyncInput {
   readonly repository: RepositoryRef;
@@ -384,12 +472,7 @@ interface NormalizedSyncInput {
   readonly lookbackDays: number;
 }
 
-interface GraphQLVariables {
-  readonly owner: string;
-  readonly name: string;
-  readonly cursor: string | null;
-  readonly states: readonly string[];
-}
+type GraphQLVariables = Readonly<Record<string, unknown>>;
 
 interface GhGitHubMetadataProviderOptionsInternal {
   readonly ghExecutable: string;
@@ -448,6 +531,234 @@ export class GhGitHubMetadataProvider implements GitHubMetadataProvider {
     }
 
     yield* this.iterateIssues(normalized, ["OPEN", "CLOSED"], cutoff);
+  }
+
+  /**
+   * Fetch the changed-file set for the given pull request heads (plan 9.6).
+   * Batches of up to 20 node ids go through one GraphQL `nodes(ids:)` call;
+   * PRs whose file connection reports `hasNextPage` fall back to the REST
+   * files endpoint. At most 2 batches run concurrently. Results preserve the
+   * input order; PRs the API no longer resolves return an empty file set.
+   */
+  async fetchPullRequestFiles(
+    input: PullRequestFilesInput,
+  ): Promise<PullRequestFilesResult[]> {
+    if (input === null || typeof input !== "object") {
+      throw new Error("GitHub files input must be an object");
+    }
+    const repository = input.repository;
+    if (
+      repository === null ||
+      typeof repository !== "object" ||
+      typeof repository.owner !== "string" ||
+      repository.owner.length === 0 ||
+      typeof repository.name !== "string" ||
+      repository.name.length === 0
+    ) {
+      throw new Error("GitHub files input repository must include owner and name");
+    }
+    if (!Array.isArray(input.pullRequests)) {
+      throw new Error("GitHub files input pullRequests must be an array");
+    }
+    const refs: PullRequestFileRef[] = input.pullRequests.map((ref) => {
+      if (
+        ref === null ||
+        typeof ref !== "object" ||
+        typeof ref.nodeId !== "string" ||
+        ref.nodeId.length === 0 ||
+        !Number.isInteger(ref.number) ||
+        ref.number <= 0
+      ) {
+        throw new Error(
+          "GitHub files input pullRequests must include nodeId and a positive number",
+        );
+      }
+      return { nodeId: ref.nodeId, number: ref.number };
+    });
+    if (refs.length === 0) {
+      return [];
+    }
+
+    const batches = chunkIntoBatches(refs, FILES_BATCH_SIZE);
+    const batchResults = await runWithConcurrency(
+      batches,
+      MAX_CONCURRENT_FILE_BATCHES,
+      (batch) => this.fetchFilesBatch(repository, batch),
+    );
+    const byNumber = new Map<number, PullRequestFilesResult>();
+    for (const results of batchResults) {
+      for (const result of results) {
+        byNumber.set(result.number, result);
+      }
+    }
+    return refs.map(
+      (ref) =>
+        byNumber.get(ref.number) ?? {
+          number: ref.number,
+          files: [],
+          truncated: false,
+        },
+    );
+  }
+
+  private async fetchFilesBatch(
+    repository: RepositoryRef,
+    batch: readonly PullRequestFileRef[],
+  ): Promise<PullRequestFilesResult[]> {
+    const response = await this.runGraphQL<PullRequestFilesResponse>(
+      repository,
+      "PullRequestFiles",
+      PULL_REQUEST_FILES_QUERY,
+      { ids: batch.map((ref) => ref.nodeId) },
+      pullRequestFilesResponseSchema,
+    );
+    const nodes = response.data?.nodes;
+    if (nodes === undefined) {
+      throw responseError(repository, "PullRequestFiles", "nodes is missing");
+    }
+    if (nodes.length !== batch.length) {
+      throw responseError(
+        repository,
+        "PullRequestFiles",
+        `nodes length ${nodes.length} does not match requested ids ${batch.length}`,
+      );
+    }
+
+    const results: PullRequestFilesResult[] = [];
+    for (const [index, node] of nodes.entries()) {
+      const ref = batch[index]!;
+      if (node === null) {
+        // Deleted or otherwise unresolvable pull request: keep an empty set
+        // so the head is recorded as enriched instead of retried forever.
+        results.push({ number: ref.number, files: [], truncated: false });
+        continue;
+      }
+      if (node.number !== ref.number) {
+        // File sets are keyed by number; never risk misattribution.
+        throw responseError(
+          repository,
+          "PullRequestFiles",
+          `nodes order mismatch: expected #${ref.number}, received #${node.number}`,
+        );
+      }
+      if (node.files === null) {
+        results.push({ number: ref.number, files: [], truncated: false });
+        continue;
+      }
+      if (node.files.pageInfo.hasNextPage) {
+        results.push(await this.fetchRestFiles(repository, ref.number));
+        continue;
+      }
+      results.push({
+        number: ref.number,
+        files: node.files.nodes.map((file) => ({
+          path: file.path,
+          previousPath: null,
+          changeType: normalizeChangeType(file.changeType),
+          additions: file.additions,
+          deletions: file.deletions,
+        })),
+        truncated: false,
+      });
+    }
+    return results;
+  }
+
+  /**
+   * REST fallback for PRs with more than 100 files. Pages through
+   * `per_page=100`; stops at the GitHub cap of 3000 files and marks the
+   * result truncated (plan 9.6 — V1 does not resolve further).
+   */
+  private async fetchRestFiles(
+    repository: RepositoryRef,
+    prNumber: number,
+  ): Promise<PullRequestFilesResult> {
+    const files: FetchedPullRequestFile[] = [];
+    let truncated = false;
+
+    for (let page = 1; ; page += 1) {
+      const endpoint =
+        `repos/${repository.owner}/${repository.name}` +
+        `/pulls/${prNumber}/files?per_page=${FILES_PAGE_SIZE}&page=${page}`;
+      const decoded = await this.runRest(repository, endpoint);
+      const parsed = z.array(restPullRequestFileSchema).safeParse(decoded);
+      if (!parsed.success) {
+        throw new GitHubResponseError(
+          formatRepository(repository),
+          "PullRequestFiles",
+          formatSchemaIssues(parsed.error),
+        );
+      }
+      for (const item of parsed.data) {
+        files.push({
+          path: item.filename,
+          previousPath: item.previous_filename ?? null,
+          changeType: normalizeChangeType(item.status),
+          additions: item.additions,
+          deletions: item.deletions,
+        });
+      }
+      // A short page is always the last one, so the set is complete even
+      // when it lands exactly on the 3000-file cap.
+      if (parsed.data.length < FILES_PAGE_SIZE) {
+        break;
+      }
+      if (files.length >= MAX_FILES_PER_PULL_REQUEST) {
+        files.length = MAX_FILES_PER_PULL_REQUEST;
+        truncated = true;
+        break;
+      }
+    }
+
+    return { number: prNumber, files, truncated };
+  }
+
+  private async runRest(
+    repository: RepositoryRef,
+    endpoint: string,
+  ): Promise<unknown> {
+    const repositoryLabel = formatRepository(repository);
+    let result: Awaited<ReturnType<typeof execa>>;
+
+    try {
+      result = await execa(
+        this.options.ghExecutable,
+        ["api", endpoint],
+        {
+          shell: false,
+          reject: false,
+          timeout: this.options.commandTimeoutMs,
+          maxBuffer: 10 * 1024 * 1024,
+        },
+      );
+    } catch (error) {
+      throw new GitHubCommandError(
+        repositoryLabel,
+        null,
+        error instanceof Error ? error.message : String(error),
+        error,
+      );
+    }
+
+    if (result.failed || result.exitCode !== 0) {
+      throw new GitHubCommandError(
+        repositoryLabel,
+        result.exitCode ?? null,
+        typeof result.stderr === "string" ? result.stderr : "",
+      );
+    }
+
+    const stdout = typeof result.stdout === "string" ? result.stdout : "";
+    try {
+      return JSON.parse(stdout) as unknown;
+    } catch (error) {
+      throw new GitHubResponseError(
+        repositoryLabel,
+        "PullRequestFiles",
+        "stdout is not valid JSON",
+        error,
+      );
+    }
   }
 
   private async *iteratePullRequests(
@@ -552,9 +863,9 @@ export class GhGitHubMetadataProvider implements GitHubMetadataProvider {
     }
   }
 
-  private async runGraphQL<TResponse extends PullRequestResponse | IssueResponse>(
+  private async runGraphQL<TResponse extends GraphQLResponseEnvelope>(
     repository: RepositoryRef,
-    operation: "PullRequests" | "Issues",
+    operation: GitHubOperation,
     query: string,
     variables: GraphQLVariables,
     schema: z.ZodType<TResponse>,
@@ -760,7 +1071,7 @@ function cutoffFor(input: NormalizedSyncInput): Date | null {
 
 function requireNextCursor(
   repository: RepositoryRef,
-  operation: "PullRequests" | "Issues",
+  operation: GitHubOperation,
   endCursor: string | null,
 ): string {
   if (endCursor === null) {
@@ -775,7 +1086,7 @@ function requireNextCursor(
 
 function responseError(
   repository: RepositoryRef,
-  operation: "PullRequests" | "Issues",
+  operation: GitHubOperation,
   message: string,
 ): GitHubResponseError {
   return new GitHubResponseError(formatRepository(repository), operation, message);

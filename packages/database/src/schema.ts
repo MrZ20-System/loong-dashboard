@@ -98,6 +98,9 @@ export const pullRequests = sqliteTable(
     deletions: integer("deletions").notNull(),
     changedFilesCount: integer("changed_files_count").notNull(),
     detailBody: text("detail_body"),
+    filesTruncated: integer("files_truncated", { mode: "boolean" })
+      .notNull()
+      .default(false),
   },
   (table) => [
     primaryKey({ columns: [table.repositoryId, table.number] }),
@@ -132,6 +135,10 @@ export const pullRequests = sqliteTable(
     check(
       "pull_requests_changed_files_count_check",
       sql`${table.changedFilesCount} >= 0`,
+    ),
+    check(
+      "pull_requests_files_truncated_check",
+      sql`${table.filesTruncated} IN (0, 1)`,
     ),
   ],
 );

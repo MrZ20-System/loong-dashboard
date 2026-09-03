@@ -25,11 +25,20 @@ import {
 } from "@loongboard/contracts";
 import Fastify, {
   type FastifyInstance,
-  type FastifyReply,
   type FastifyServerOptions,
 } from "fastify";
-import { ZodError, type ZodType } from "zod";
 
+import { registerDomainRoutes } from "./domains.js";
+import {
+  DomainReclassificationService,
+  type DomainReclassification,
+} from "./reclassification-service.js";
+import {
+  assertEmptyRequestBody,
+  InvalidRequestError,
+  parseRequest,
+  sendParsed,
+} from "./route-helpers.js";
 import type { SyncCoordinator } from "./sync-coordinator.js";
 
 const healthResponse: HealthResponse = healthResponseSchema.parse({
@@ -41,6 +50,8 @@ export interface BuildAppDependencies {
   database: DatabaseClient;
   timezone: string;
   syncCoordinator: SyncCoordinator;
+  /** Defaults to an in-process serial service owned by the app. */
+  reclassification?: DomainReclassification;
 }
 
 /**
@@ -53,6 +64,10 @@ export function buildApp(
   options: FastifyServerOptions = {},
 ): FastifyInstance {
   const { database, timezone, syncCoordinator } = dependencies;
+  const ownsReclassification = dependencies.reclassification === undefined;
+  const reclassification =
+    dependencies.reclassification ??
+    new DomainReclassificationService({ database });
   const app = Fastify(options);
   configureJsonParser(app);
 
@@ -61,6 +76,13 @@ export function buildApp(
   });
 
   registerStageOneRoutes(app, database, timezone, syncCoordinator);
+  registerDomainRoutes(app, { database, reclassification });
+
+  if (ownsReclassification) {
+    app.addHook("onClose", async () => {
+      await reclassification.close();
+    });
+  }
 
   app.setErrorHandler((error, _request, reply) => {
     if (reply.sent) return;
@@ -148,6 +170,7 @@ function registerStageOneRoutes(
       date: query.date,
       status: query.status,
       cursor: query.cursor,
+      domainIds: query.domain,
     });
     return sendParsed(reply, 200, pullRequestsResponseSchema, page);
   });
@@ -198,29 +221,6 @@ function configureJsonParser(app: FastifyInstance): void {
   );
 }
 
-function parseRequest<T>(schema: ZodType<T>, input: unknown): T {
-  const parsed = schema.safeParse(input);
-  if (!parsed.success) {
-    throw new InvalidRequestError(formatZodError(parsed.error));
-  }
-  return parsed.data;
-}
-
-function assertEmptyRequestBody(body: unknown): void {
-  if (body !== undefined) {
-    throw new InvalidRequestError("Request body must be empty");
-  }
-}
-
-function sendParsed<T>(
-  reply: FastifyReply,
-  statusCode: number,
-  schema: ZodType<T>,
-  value: unknown,
-): FastifyReply {
-  return reply.code(statusCode).send(schema.parse(value));
-}
-
 function toSyncStreamResponse(state: {
   entityKind: "pull_request" | "issue";
   status: "idle" | "running" | "failed";
@@ -243,15 +243,6 @@ function toSyncStreamResponse(state: {
   };
 }
 
-class InvalidRequestError extends Error {
-  readonly code = "INVALID_REQUEST" as const;
-
-  constructor(message: string) {
-    super(message);
-    this.name = "InvalidRequestError";
-  }
-}
-
 function errorResponse(error: unknown): {
   statusCode: number;
   body: unknown;
@@ -262,9 +253,11 @@ function errorResponse(error: unknown): {
       ? 400
       : code === "INVALID_CURSOR"
         ? 400
-        : code === "REPOSITORY_NOT_FOUND"
+        : code === "REPOSITORY_NOT_FOUND" ||
+            code === "DOMAIN_NOT_FOUND" ||
+            code === "PULL_REQUEST_NOT_FOUND"
           ? 404
-          : code === "SYNC_ALREADY_RUNNING"
+          : code === "SYNC_ALREADY_RUNNING" || code === "DOMAIN_NAME_CONFLICT"
             ? 409
             : 500;
   const message = requestErrorMessage(error, code);
@@ -282,6 +275,11 @@ function errorCode(error: unknown): ApiErrorCode {
   }
   if (hasCode(error, "INVALID_CURSOR")) return "INVALID_CURSOR";
   if (hasCode(error, "REPOSITORY_NOT_FOUND")) return "REPOSITORY_NOT_FOUND";
+  if (hasCode(error, "DOMAIN_NOT_FOUND")) return "DOMAIN_NOT_FOUND";
+  if (hasCode(error, "DOMAIN_NAME_CONFLICT")) return "DOMAIN_NAME_CONFLICT";
+  if (hasCode(error, "PULL_REQUEST_NOT_FOUND")) {
+    return "PULL_REQUEST_NOT_FOUND";
+  }
   if (hasCode(error, "SYNC_ALREADY_RUNNING")) return "SYNC_ALREADY_RUNNING";
   return "INTERNAL_ERROR";
 }
@@ -322,14 +320,4 @@ function hasCode(
     "code" in error &&
     error.code === code
   );
-}
-
-function formatZodError(error: ZodError): string {
-  return error.issues
-    .slice(0, 3)
-    .map((issue) => {
-      const path = issue.path.length === 0 ? "request" : issue.path.join(".");
-      return `${path} ${issue.message}`;
-    })
-    .join("; ");
 }

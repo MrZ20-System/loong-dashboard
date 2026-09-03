@@ -20,7 +20,7 @@ const repositoryB = { ...repository, id: "repo-b", key: "repo-b", displayName: "
 const pull = (number: number, title = `Pull ${number}`) => ({
   repositoryId: "repo", number, title, url: `https://github.com/acme/project/pull/${number}`,
   authorLogin: "author", status: "open" as const, updatedAt: "2026-09-03T02:03:04.000Z",
-  changedFilesCount: 0, additions: 0, deletions: 0,
+  changedFilesCount: 0, additions: 0, deletions: 0, domains: [] as Array<{ id: string; name: string; color: string }>,
 });
 
 const issue = (number: number, title = `Issue ${number}`) => ({
@@ -47,7 +47,7 @@ function json(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 }
 
-function mockApi(options: { pulls?: unknown[]; issues?: unknown[]; pullPages?: unknown[][]; issuePages?: unknown[][]; pullsByRepository?: Record<string, unknown[][]>; syncStatuses?: StreamStatus[]; syncSnapshots?: SyncSnapshot[]; syncSnapshotsByRepository?: Record<string, SyncSnapshot[]>; syncDelayMs?: number; syncRunIds?: string[]; repositories?: typeof repository[]; onSyncStatusAbort?: (repositoryId: string) => void } = {}) {
+function mockApi(options: { pulls?: unknown[]; issues?: unknown[]; pullPages?: unknown[][]; issuePages?: unknown[][]; pullsByRepository?: Record<string, unknown[][]>; syncStatuses?: StreamStatus[]; syncSnapshots?: SyncSnapshot[]; syncSnapshotsByRepository?: Record<string, SyncSnapshot[]>; syncDelayMs?: number; syncRunIds?: string[]; repositories?: typeof repository[]; onSyncStatusAbort?: (repositoryId: string) => void; domains?: unknown[]; reclassification?: { running: boolean; pendingCount: number | null }; onDomainMutation?: (method: string, url: string, body: unknown) => Response | undefined } = {}) {
   const pulls = options.pulls ?? [pull(2), pull(1)];
   const issues = options.issues ?? [issue(7)];
   let pullPage = 0;
@@ -60,6 +60,11 @@ function mockApi(options: { pulls?: unknown[]; issues?: unknown[]; pullPages?: u
   const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
     const url = new URL(String(input), "http://localhost");
     if (url.pathname === "/api/repositories") return json({ items: options.repositories ?? [repository] });
+    if (url.pathname.endsWith("/domains")) {
+      const mutation = options.onDomainMutation?.(init?.method ?? "GET", url.pathname, init?.body ? JSON.parse(String(init.body)) : undefined);
+      if (mutation) return mutation;
+      return json({ items: options.domains ?? [], reclassification: options.reclassification ?? { running: false, pendingCount: null } });
+    }
     if (url.pathname.endsWith("/sync") && init?.method === "POST") {
       const repositoryId = url.pathname.split("/")[3] ?? "repo";
       const syncRunIds = options.syncRunIds ?? ["run-1"];

@@ -1,6 +1,9 @@
 packages:
   - apps/*
   - packages/*
+# Dependencies are installed explicitly; do not auto-install before every
+# script run (the auto relink breaks under sandboxed symlink policies).
+verifyDepsBeforeRun: false
 # These are the native/runtime build scripts required by SQLite, the Vite
 # toolchain, DSH's local subprocess runtime, and the workspace test stack.
 allowBuilds:

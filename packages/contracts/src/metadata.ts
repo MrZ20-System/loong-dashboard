@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { domainRuleIdSchema, domainTagSchema } from "./domains.js";
 import {
   calendarDateSchema,
   issueStatusSchema,
@@ -23,6 +24,7 @@ export const pullRequestListItemSchema = z
     changedFilesCount: nonNegativeIntegerSchema,
     additions: nonNegativeIntegerSchema,
     deletions: nonNegativeIntegerSchema,
+    domains: z.array(domainTagSchema),
   })
   .strict();
 
@@ -74,6 +76,14 @@ export const pullRequestsQuerySchema = z
     date: calendarDateSchema.optional(),
     status: pullRequestStatusSchema.optional(),
     cursor: opaqueCursorSchema.optional(),
+    // Fastify surfaces a repeated query key as an array; a single value is
+    // normalized so `?domain=a` and `?domain=a&domain=b` share one code path.
+    // Semantics: a pull request matches when it carries ANY selected domain.
+    domain: z.preprocess(
+      (value) =>
+        value === undefined ? undefined : typeof value === "string" ? [value] : value,
+      z.array(domainRuleIdSchema).max(20).optional(),
+    ),
   })
   .strict();
 

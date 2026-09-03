@@ -19,6 +19,8 @@ import {
   type IssueMetadata,
   type IssuePage,
   type IssueSyncInput,
+  type PullRequestFilesInput,
+  type PullRequestFilesResult,
   type PullRequestMetadata,
   type PullRequestPage,
   type PullRequestSyncInput,
@@ -172,6 +174,8 @@ function issuePage(items: readonly IssueMetadata[]): IssuePage {
 class RecordingProvider implements GitHubMetadataProvider {
   readonly pullInputs: PullRequestSyncInput[] = [];
   readonly issueInputs: IssueSyncInput[] = [];
+  readonly filesInputs: PullRequestFilesInput[] = [];
+  filesResults: PullRequestFilesResult[] = [];
   pullFactory: (input: PullRequestSyncInput) => AsyncIterable<PullRequestPage> =
     async function* () {
       yield pullPage([]);
@@ -191,6 +195,13 @@ class RecordingProvider implements GitHubMetadataProvider {
   fetchIssueUpdates(input: IssueSyncInput): AsyncIterable<IssuePage> {
     this.issueInputs.push(input);
     return this.issueFactory(input);
+  }
+
+  async fetchPullRequestFiles(
+    input: PullRequestFilesInput,
+  ): Promise<PullRequestFilesResult[]> {
+    this.filesInputs.push(input);
+    return this.filesResults;
   }
 }
 

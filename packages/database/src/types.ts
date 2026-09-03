@@ -2,9 +2,11 @@ import type Database from "better-sqlite3";
 
 import type {
   ActivityDay,
+  DomainRule,
   EntityKind,
   IssueListItem,
   IssueStatus,
+  PullRequestFileItem,
   PullRequestListItem,
   PullRequestStatus,
   SyncStatus,
@@ -12,9 +14,12 @@ import type {
 
 export type {
   ActivityDay,
+  DomainRule,
+  DomainTag,
   EntityKind,
   IssueListItem,
   IssueStatus,
+  PullRequestFileItem,
   PullRequestListItem,
   PullRequestStatus,
   SyncStatus,
@@ -124,6 +129,21 @@ export interface ListQueryOptions {
 
 export interface PullRequestListOptions extends ListQueryOptions {
   status?: PullRequestStatus | null;
+  /** Match pull requests carrying ANY of these domain rules (plan 10.3). */
+  domainIds?: readonly string[] | null;
+}
+
+/** Stored domain rule row; identical in shape to the shared contract. */
+export type DomainRuleRecord = DomainRule;
+
+/** Stored current-head file row; identical in shape to the shared contract. */
+export type PullRequestFileRecord = PullRequestFileItem;
+
+/** Current-head file paths of one pull request, used by the classifier. */
+export interface PullRequestFileSet {
+  prNumber: number;
+  headSha: string;
+  paths: string[];
 }
 
 export interface IssueListOptions extends ListQueryOptions {

@@ -21,6 +21,8 @@ import type {
   PullRequestSyncInput,
 } from "@loongboard/github";
 
+import type { PullRequestFileEnricher } from "./enrichment-service.js";
+
 const DEFAULT_MAX_CONCURRENT_REPOSITORIES = 2;
 
 export interface SyncCoordinatorLogger {
@@ -34,6 +36,12 @@ export interface RepositorySyncCoordinatorOptions {
   lookbackDays?: number;
   now?: () => Date;
   logger?: SyncCoordinatorLogger;
+  /**
+   * Changed-file enrichment run after a successful PR metadata stream
+   * (plan 9.6). Optional so metadata-only embedders stay valid; enrichment
+   * failures are logged and never fail the metadata stream (plan 9.9).
+   */
+  enricher?: PullRequestFileEnricher;
 }
 
 /** The narrow dependency consumed by the HTTP application factory. */
@@ -111,6 +119,7 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
   private readonly lookbackDays: number | undefined;
   private readonly now: () => Date;
   private readonly logger: SyncCoordinatorLogger;
+  private readonly enricher: PullRequestFileEnricher | undefined;
   private readonly pending = new Set<Promise<void>>();
   private closed = false;
 
@@ -135,6 +144,7 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
     this.lookbackDays = options.lookbackDays;
     this.now = options.now ?? (() => new Date());
     this.logger = options.logger ?? console;
+    this.enricher = options.enricher;
   }
 
   get activeRepositoryCount(): number {
@@ -236,8 +246,27 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
       }
 
       this.complete(job, "pull_request", latestRateLimit);
+      await this.enrichPullRequestFiles(job, latestRateLimit);
     } catch (error: unknown) {
       this.fail(job, "pull_request", error);
+    }
+  }
+
+  /**
+   * Plan 9.6/9.9: enrichment runs after the metadata stream succeeded; its
+   * failure is logged and never transitions the completed stream to failed.
+   */
+  private async enrichPullRequestFiles(
+    job: RepositorySyncJob,
+    rateLimit: GitHubRateLimit | undefined,
+  ): Promise<void> {
+    if (this.enricher === undefined) return;
+    try {
+      await this.enricher.enrich(job.repository, rateLimit);
+    } catch (error: unknown) {
+      this.logError("Pull request file enrichment failed", error, {
+        repositoryId: job.repository.id,
+      });
     }
   }
 

@@ -39,16 +39,46 @@ export {
   upsertIssuePage,
   upsertPullRequestPage,
 } from "./metadata-service.js";
+export {
+  createDomainRule,
+  deleteDomainRule,
+  DomainNameConflictError,
+  DomainNotFoundError,
+  getDomainRule,
+  listDomainRules,
+  updateDomainRule,
+} from "./domain-service.js";
+export type {
+  DomainRuleCreateInput,
+  DomainRuleUpdateInput,
+} from "./domain-service.js";
+export {
+  getPullRequestFiles,
+  listDomainTagsForPullRequests,
+  listPullRequestFileSets,
+  listPullRequestsNeedingFileEnrichment,
+  PullRequestNotFoundError,
+  replacePullRequestDomains,
+  replacePullRequestFiles,
+} from "./classification-service.js";
+export type {
+  PullRequestEnrichmentTarget,
+  StoredPullRequestFiles,
+} from "./classification-service.js";
 export type {
   ActivityDay,
   ConfiguredRepository,
   DatabaseClient,
+  DomainRuleRecord,
+  DomainTag,
   EntityKind,
   IssueListItem,
   IssueMetadata,
   IssueStatus,
   IssueListOptions,
   ListPage,
+  PullRequestFileRecord,
+  PullRequestFileSet,
   PullRequestListItem,
   PullRequestListOptions,
   PullRequestMetadata,

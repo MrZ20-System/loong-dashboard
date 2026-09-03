@@ -87,6 +87,7 @@ describe("database migrations", () => {
         { id: "001_initial_schema" },
         { id: "002_metadata_list_indexes" },
         { id: "003_issue_state_constraint" },
+        { id: "004_domain_classification" },
       ]);
     } finally {
       database.close();
@@ -111,6 +112,7 @@ describe("database migrations", () => {
         { id: "001_initial_schema", applied_at: firstAppliedAt },
         expect.objectContaining({ id: "002_metadata_list_indexes" }),
         expect.objectContaining({ id: "003_issue_state_constraint" }),
+        expect.objectContaining({ id: "004_domain_classification" }),
       ]);
     } finally {
       database.close();

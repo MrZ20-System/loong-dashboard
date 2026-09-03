@@ -79,6 +79,38 @@ describe("architecture boundary fixtures", () => {
     ).toEqual([]);
   });
 
+  it("does not mistake HTTP method strings or UI copy for raw SQL", () => {
+    const root = makeFixture(
+      "apps/web/src/client.ts",
+      [
+        'export const remove = () => fetch("/api/x", { method: "DELETE" });',
+        'const message = `Delete failed: ${new Error("boom").message}`;',
+        'if (message.startsWith("Save") || message.startsWith("Delete")) { throw new Error("Delete rule?"); }',
+        'const query = "SELECT";',
+        'const label = "Update failed";',
+        "",
+      ].join("\n"),
+    );
+
+    expect(
+      checkArchitecture(root, { rules: new Set(["raw-sql"]) }),
+    ).toEqual([]);
+  });
+
+  it("rejects raw DELETE FROM and INSERT INTO outside the database package", () => {
+    const root = makeFixture(
+      "packages/github/src/query.ts",
+      'export const remove = "DELETE FROM pull_request_files";\nexport const add = "INSERT INTO t VALUES (1)";\n',
+    );
+
+    const violations = checkArchitecture(root, { rules: new Set(["raw-sql"]) });
+
+    expect(violations).toHaveLength(1);
+    expect(violations[0]).toEqual(
+      expect.objectContaining({ file: "packages/github/src/query.ts", rule: "raw-sql" }),
+    );
+  });
+
   it("rejects GitHub CLI execution outside the GitHub package", () => {
     const root = makeFixture(
       "packages/server/src/sync.ts",

@@ -63,6 +63,7 @@ const pullRequest = {
   changedFilesCount: 0,
   additions: 10,
   deletions: 2,
+  domains: [{ id: "dom_ci", name: "CI", color: "#5b8def" }],
 };
 
 const issue = {

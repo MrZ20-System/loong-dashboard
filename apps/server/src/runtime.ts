@@ -19,6 +19,8 @@ import {
   resolveSystemConfigPath,
   type SystemConfig,
 } from "./config.js";
+import { PullRequestEnrichmentService } from "./enrichment-service.js";
+import { DomainReclassificationService } from "./reclassification-service.js";
 import {
   RepositorySyncCoordinator,
   type SyncCoordinatorLogger,
@@ -43,6 +45,7 @@ export interface ServerRuntime {
   readonly database: DatabaseClient;
   readonly databasePath: string;
   readonly coordinator: RepositorySyncCoordinator;
+  readonly reclassification: DomainReclassificationService;
 }
 
 /** Resolve the one SQLite path owned by the Server runtime. */
@@ -68,17 +71,25 @@ export function createServerRuntime(
 
     const provider =
       options.provider ?? new GhGitHubMetadataProvider(options.providerOptions);
+    const enricher = new PullRequestEnrichmentService({
+      database,
+      provider,
+      logger: options.coordinatorLogger,
+    });
     const coordinator = new RepositorySyncCoordinator({
       database,
       provider,
       now: options.now,
       logger: options.coordinatorLogger,
+      enricher,
     });
+    const reclassification = new DomainReclassificationService({ database });
     const app = buildApp(
       {
         database,
         timezone: config.timezone,
         syncCoordinator: coordinator,
+        reclassification,
       },
       options.appOptions,
     );
@@ -87,12 +98,13 @@ export function createServerRuntime(
     app.addHook("onClose", async () => {
       closePromise ??= (async () => {
         await coordinator.close();
+        await reclassification.close();
         database.close();
       })();
       await closePromise;
     });
 
-    return { app, config, database, databasePath, coordinator };
+    return { app, config, database, databasePath, coordinator, reclassification };
   } catch (error) {
     database.close();
     throw error;
