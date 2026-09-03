@@ -18,6 +18,7 @@ import {
   type IssueStatus,
   type IssueListOptions,
   type ListPage,
+  type PullRequestDetail,
   type PullRequestListItem,
   type PullRequestMetadata,
   type PullRequestListOptions,
@@ -292,6 +293,37 @@ export function listPullRequests(
         ? encodeListCursor({ updatedAt: last.updatedAt, number: last.number })
         : null,
     calendarTimeZone,
+  };
+}
+
+export function getPullRequestDetail(
+  database: DatabaseClient,
+  repositoryId: string,
+  number: number,
+): PullRequestDetail | null {
+  requireRepository(database, repositoryId);
+  const row = database
+    .prepare(
+      `SELECT repository_id, number, title, url, author_login, status,
+              updated_at, changed_files_count, additions, deletions,
+              created_at, closed_at, merged_at, base_ref_name,
+              head_ref_name, head_sha, detail_body
+       FROM pull_requests
+       WHERE repository_id = ? AND number = ?`,
+    )
+    .get(repositoryId, number) as Record<string, unknown> | undefined;
+  if (row === undefined) return null;
+  const domains = listDomainTagsForPullRequests(database, repositoryId, [number]).get(number) ?? [];
+  return {
+    ...mapPullRequest(row),
+    domains,
+    createdAt: row.created_at as string,
+    closedAt: (row.closed_at as string | null) ?? null,
+    mergedAt: (row.merged_at as string | null) ?? null,
+    baseRefName: row.base_ref_name as string,
+    headRefName: row.head_ref_name as string,
+    headSha: row.head_sha as string,
+    detailBody: (row.detail_body as string | null) ?? null,
   };
 }
 

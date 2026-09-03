@@ -38,6 +38,7 @@ export {
   listPullRequests,
   upsertIssuePage,
   upsertPullRequestPage,
+  getPullRequestDetail,
 } from "./metadata-service.js";
 export {
   createDomainRule,

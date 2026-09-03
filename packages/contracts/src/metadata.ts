@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import { domainRuleIdSchema, domainTagSchema } from "./domains.js";
+import { fullShaSchema } from "./diff.js";
 import {
   calendarDateSchema,
   issueStatusSchema,
@@ -95,6 +96,17 @@ export const issuesQuerySchema = z
   })
   .strict();
 
+/** Full stored PR row used by the detail page (plan 17.2, 18.2). */
+export const pullRequestDetailSchema = pullRequestListItemSchema.extend({
+  createdAt: utcDateTimeSchema,
+  closedAt: utcDateTimeSchema.nullable(),
+  mergedAt: utcDateTimeSchema.nullable(),
+  baseRefName: z.string().min(1),
+  headRefName: z.string().min(1),
+  headSha: fullShaSchema,
+  detailBody: z.string().nullable(),
+});
+
 export const activityDaysQuerySchema = z
   .object({
     from: calendarDateSchema,
@@ -107,6 +119,7 @@ export const activityDaysQuerySchema = z
   });
 
 export type PullRequestListItem = z.infer<typeof pullRequestListItemSchema>;
+export type PullRequestDetail = z.infer<typeof pullRequestDetailSchema>;
 export type IssueListItem = z.infer<typeof issueListItemSchema>;
 export type ActivityDay = z.infer<typeof activityDaySchema>;
 export type PullRequestsResponse = z.infer<typeof pullRequestsResponseSchema>;

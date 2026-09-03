@@ -15,6 +15,7 @@ export {
   issueListItemSchema,
   issuesQuerySchema,
   issuesResponseSchema,
+  pullRequestDetailSchema,
   pullRequestListItemSchema,
   pullRequestsQuerySchema,
   pullRequestsResponseSchema,
@@ -24,10 +25,25 @@ export {
   type IssueListItem,
   type IssuesQuery,
   type IssuesResponse,
+  type PullRequestDetail,
   type PullRequestListItem,
   type PullRequestsQuery,
   type PullRequestsResponse,
 } from "./metadata.js";
+export {
+  changedFileEntrySchema,
+  fileContentQuerySchema,
+  fileContentResponseSchema,
+  fullShaSchema,
+  localCommandResponseSchema,
+  preparePullResponseSchema,
+  type ChangedFileEntry,
+  type FileContentQuery,
+  type FileContentResponse,
+  type FullSha,
+  type LocalCommandResponse,
+  type PreparePullResponse,
+} from "./diff.js";
 export {
   apiErrorCodeSchema,
   apiErrorSchema,

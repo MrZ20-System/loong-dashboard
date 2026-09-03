@@ -17,6 +17,7 @@
     "@loongboard/contracts": "workspace:*",
     "@loongboard/database": "workspace:*",
     "@loongboard/github": "workspace:*",
+    "@loongboard/git-workspace": "workspace:*",
     "fastify": "5.6.0",
     "picomatch": "4.0.7",
     "yaml": "2.9.0",

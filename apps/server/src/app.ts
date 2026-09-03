@@ -23,12 +23,17 @@ import {
   type ApiErrorCode,
   type HealthResponse,
 } from "@loongboard/contracts";
+import {
+  LocalGitWorkspace,
+  type GitWorkspace,
+} from "@loongboard/git-workspace";
 import Fastify, {
   type FastifyInstance,
   type FastifyServerOptions,
 } from "fastify";
 
 import { registerDomainRoutes } from "./domains.js";
+import { registerDiffRoutes } from "./diff.js";
 import {
   DomainReclassificationService,
   type DomainReclassification,
@@ -52,6 +57,8 @@ export interface BuildAppDependencies {
   syncCoordinator: SyncCoordinator;
   /** Defaults to an in-process serial service owned by the app. */
   reclassification?: DomainReclassification;
+  /** Defaults to a real local Git workspace. */
+  gitWorkspace?: GitWorkspace;
 }
 
 /**
@@ -68,6 +75,7 @@ export function buildApp(
   const reclassification =
     dependencies.reclassification ??
     new DomainReclassificationService({ database });
+  const gitWorkspace = dependencies.gitWorkspace ?? new LocalGitWorkspace();
   const app = Fastify(options);
   configureJsonParser(app);
 
@@ -77,6 +85,7 @@ export function buildApp(
 
   registerStageOneRoutes(app, database, timezone, syncCoordinator);
   registerDomainRoutes(app, { database, reclassification });
+  registerDiffRoutes(app, { database, gitWorkspace });
 
   if (ownsReclassification) {
     app.addHook("onClose", async () => {
@@ -255,7 +264,8 @@ function errorResponse(error: unknown): {
         ? 400
         : code === "REPOSITORY_NOT_FOUND" ||
             code === "DOMAIN_NOT_FOUND" ||
-            code === "PULL_REQUEST_NOT_FOUND"
+            code === "PULL_REQUEST_NOT_FOUND" ||
+            code === "FILE_NOT_FOUND"
           ? 404
           : code === "SYNC_ALREADY_RUNNING" || code === "DOMAIN_NAME_CONFLICT"
             ? 409
@@ -280,6 +290,7 @@ function errorCode(error: unknown): ApiErrorCode {
   if (hasCode(error, "PULL_REQUEST_NOT_FOUND")) {
     return "PULL_REQUEST_NOT_FOUND";
   }
+  if (hasCode(error, "FILE_NOT_FOUND")) return "FILE_NOT_FOUND";
   if (hasCode(error, "SYNC_ALREADY_RUNNING")) return "SYNC_ALREADY_RUNNING";
   return "INTERNAL_ERROR";
 }

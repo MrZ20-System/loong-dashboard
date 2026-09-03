@@ -7,6 +7,7 @@ export const apiErrorCodeSchema = z.enum([
   "DOMAIN_NOT_FOUND",
   "DOMAIN_NAME_CONFLICT",
   "PULL_REQUEST_NOT_FOUND",
+  "FILE_NOT_FOUND",
   "SYNC_ALREADY_RUNNING",
   "SYNC_FAILED",
   "INTERNAL_ERROR",
