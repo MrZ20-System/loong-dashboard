@@ -72,6 +72,7 @@ export {
   listAgentSessions,
   listBusyWorkspacePaths,
   listRunningKnowledgeSessionIds,
+  recoverInterruptedAgentSessions,
   requireAgentSession,
   touchAgentSession,
   updateAgentMessage,

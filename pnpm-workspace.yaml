@@ -230,3 +230,4 @@ minimumReleaseAgeExclude:
   - '@deepseek-ai/dsh-workflow@0.1.2-alpha.5'
   - '@deepseek-ai/dsh-workspace@0.1.2-alpha.5'
   - '@deepseek-ai/dsh@0.1.2-alpha.5'
+storeDir: /Users/lonng/system/.pnpm-store

@@ -252,6 +252,22 @@ export function listRunningKnowledgeSessionIds(database: DatabaseClient): string
   return rows.map((row) => row.id);
 }
 
+/**
+ * Startup recovery (plan 12.2/13 lifecycle): sessions a previous process left
+ * `running` would otherwise keep their worktree slot busy forever and hold
+ * knowledge agent-version aggregation open. Mark them interrupted so the next
+ * turn starts fresh; messages already persisted stay untouched.
+ */
+export function recoverInterruptedAgentSessions(database: DatabaseClient): number {
+  const result = database
+    .prepare(
+      `UPDATE agent_sessions SET status = 'interrupted'
+       WHERE status = 'running'`,
+    )
+    .run();
+  return result.changes;
+}
+
 /** Update the markdown/metadata of one persisted message (tool completion). */
 export function updateAgentMessage(
   database: DatabaseClient,

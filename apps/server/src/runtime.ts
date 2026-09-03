@@ -4,6 +4,7 @@ import { join } from "node:path";
 import {
   openDatabase,
   reconcileRepositories,
+  recoverInterruptedAgentSessions,
   type DatabaseClient,
 } from "@loongboard/database";
 import {
@@ -81,6 +82,10 @@ export function createServerRuntime(
 
   try {
     reconcileRepositories(database, config.repositories);
+    // Startup recovery: mark sessions a previous process left running as
+    // interrupted so their worktree slots are recyclable and knowledge
+    // agent-version aggregation is not held open forever (plan 12.2/16.2).
+    recoverInterruptedAgentSessions(database);
 
     const provider =
       options.provider ?? new GhGitHubMetadataProvider(options.providerOptions);
