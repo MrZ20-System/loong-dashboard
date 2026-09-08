@@ -31,6 +31,7 @@ export {
   activityDaysQuerySchema,
   activityDaysResponseSchema,
   activityDaySchema,
+  issueCommentSchema,
   issueListItemSchema,
   issueParamsSchema,
   issueDetailSchema,
@@ -43,6 +44,7 @@ export {
   type ActivityDay,
   type ActivityDaysQuery,
   type ActivityDaysResponse,
+  type IssueComment,
   type IssueDetail,
   type IssueListItem,
   type IssueParams,
@@ -54,6 +56,7 @@ export {
   type PullRequestsResponse,
 } from "./metadata.js";
 export {
+  knowledgeAssetPathQuerySchema,
   knowledgeDocumentCreateSchema,
   knowledgeDocumentParamsSchema,
   knowledgeDocumentResponseSchema,
@@ -67,6 +70,7 @@ export {
   knowledgeVersionParamsSchema,
   knowledgeVersionSchema,
   knowledgeVersionsResponseSchema,
+  type KnowledgeAssetPathQuery,
   type KnowledgeDocument,
   type KnowledgeDocumentCreate,
   type KnowledgeDocumentParams,
@@ -115,12 +119,14 @@ export {
   fullShaSchema,
   localCommandResponseSchema,
   preparePullResponseSchema,
+  repositoryTreeResponseSchema,
   type ChangedFileEntry,
   type FileContentQuery,
   type FileContentResponse,
   type FullSha,
   type LocalCommandResponse,
   type PreparePullResponse,
+  type RepositoryTreeResponse,
 } from "./diff.js";
 export {
   apiErrorCodeSchema,

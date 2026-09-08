@@ -1,0 +1,44 @@
+.change-file-icon {
+  position: relative;
+  display: inline-grid;
+  width: 14px;
+  height: 17px;
+  flex: none;
+  place-items: end center;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+  color: var(--text-secondary);
+  line-height: 1;
+}
+
+.change-file-icon__fold {
+  position: absolute;
+  top: -1.5px;
+  right: -1.5px;
+  width: 5px;
+  height: 5px;
+  border-bottom: 1.5px solid currentColor;
+  border-left: 1.5px solid currentColor;
+  background: var(--surface);
+}
+
+.change-file-icon__mark {
+  position: relative;
+  z-index: 1;
+  margin-bottom: 1px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 9px;
+  font-weight: 800;
+}
+
+.change-file-icon--added {
+  color: var(--green);
+}
+
+.change-file-icon--removed {
+  color: var(--red);
+}
+
+.change-file-icon--modified {
+  color: var(--text-secondary);
+}

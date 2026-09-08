@@ -1,6 +1,14 @@
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, renameSync, unlinkSync, watch } from "node:fs";
-import { resolve } from "node:path";
+import {
+  existsSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  watch,
+} from "node:fs";
+import { extname, resolve } from "node:path";
 
 import type {
   AgentSessionResponse,
@@ -10,6 +18,7 @@ import type {
 } from "@loongboard/contracts";
 import {
   agentSessionResponseSchema,
+  knowledgeAssetPathQuerySchema,
   knowledgeDocumentCreateSchema,
   knowledgeDocumentParamsSchema,
   knowledgeDocumentSchema,
@@ -43,14 +52,18 @@ import {
   isWithinRoot,
   parseMarkdown,
   scanKnowledgeFiles,
-  serializeDocument,
-  type KnowledgeFileInfo,
+  withDocumentId,
+  type KnowledgeFileSnapshot,
 } from "@loongboard/knowledge";
 
 import { runCheckpoint } from "@loongboard/git-workspace";
 
 import type { FastifyInstance } from "fastify";
-import { parseRequest, sendParsed } from "./route-helpers.js";
+import {
+  InvalidRequestError,
+  parseRequest,
+  sendParsed,
+} from "./route-helpers.js";
 import type { AgentChatController } from "./agent-chat.js";
 
 function sha256(content: string): string {
@@ -61,11 +74,6 @@ function deriveTitle(path: string, content: string): string {
   const parsed = parseMarkdown(content);
   if (parsed.title !== null) return parsed.title;
   return path.split("/").at(-1)?.replace(/\.md$/, "") ?? path;
-}
-
-/** Remove a leading `---` front matter block, if present. */
-function stripFrontMatter(content: string): string {
-  return content.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, "");
 }
 
 export class KnowledgeDocumentNotFoundError extends Error {
@@ -83,6 +91,25 @@ export class KnowledgeDocumentConflictError extends Error {
   constructor(path: string) {
     super(`A knowledge document already exists at: ${path}`);
     this.name = "KnowledgeDocumentConflictError";
+  }
+}
+
+/** Image MIME types served for Markdown references (plan 17.6, image assets). */
+const KNOWLEDGE_ASSET_MIME_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+};
+
+export class KnowledgeAssetNotFoundError extends Error {
+  readonly code = "FILE_NOT_FOUND" as const;
+
+  constructor(reference: string) {
+    super(`Knowledge asset was not found: ${reference}`);
+    this.name = "KnowledgeAssetNotFoundError";
   }
 }
 
@@ -125,6 +152,8 @@ export class KnowledgeController {
   private watcher: ReturnType<typeof watch> | null = null;
   private rescanTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingAgentVersions = new Map<string, string>();
+  private snapshots = new Map<string, KnowledgeFileSnapshot>();
+  private indexDirty = true;
   private closed = false;
 
   constructor(options: KnowledgeControllerOptions) {
@@ -165,11 +194,8 @@ export class KnowledgeController {
       }
     });
   }
-
-
   tree(): KnowledgeTreeItem[] {
-    this.indexExternalChanges();
-    return scanKnowledgeFiles(this.knowledgePath).map((file) => ({
+    return this.currentFiles().map((file) => ({
       path: file.path,
       documentId: file.documentId,
       title: file.title,
@@ -180,13 +206,53 @@ export class KnowledgeController {
 
   /** Read by repository path; documents without an id stay unindexed. */
   readByPath(repositoryPath: string): KnowledgeDocument {
-    this.indexExternalChanges();
-    return this.readByPathUnchecked(repositoryPath);
+    const file = this.currentFiles().find(
+      (candidate) => candidate.path === repositoryPath,
+    );
+    if (file === undefined) {
+      throw new KnowledgeDocumentNotFoundError(repositoryPath);
+    }
+    return this.toReadDocument(file.path, file.content);
   }
 
   readById(documentIdValue: string): KnowledgeDocument {
     this.requireIndexed(documentIdValue);
     return this.readByPath(this.indexedPath(documentIdValue));
+  }
+
+  /**
+   * Serve a Markdown-referenced image from the knowledge root (plan 17.6).
+   * The repository-relative path must stay inside the root after symlink
+   * resolution and name a regular file with a supported image extension.
+   */
+  readAsset(repositoryPath: string): { bytes: Buffer; mimeType: string } {
+    const absolute = resolve(this.knowledgePath, repositoryPath);
+    if (!isWithinRoot(this.knowledgePath, absolute)) {
+      throw new InvalidRequestError(
+        `Knowledge asset path escapes the knowledge root: ${repositoryPath}`,
+      );
+    }
+    const mimeType =
+      KNOWLEDGE_ASSET_MIME_TYPES[extname(repositoryPath).toLowerCase()];
+    if (mimeType === undefined) {
+      throw new InvalidRequestError(
+        `Unsupported knowledge asset type: ${repositoryPath}`,
+      );
+    }
+    let realPath: string;
+    try {
+      realPath = realpathSync(absolute);
+    } catch {
+      throw new KnowledgeAssetNotFoundError(repositoryPath);
+    }
+    if (!isWithinRoot(realpathSync(this.knowledgePath), realPath)) {
+      throw new InvalidRequestError(
+        `Knowledge asset path escapes the knowledge root: ${repositoryPath}`,
+      );
+    }
+    const stats = statSync(realPath);
+    if (!stats.isFile()) throw new KnowledgeAssetNotFoundError(repositoryPath);
+    return { bytes: readFileSync(realPath), mimeType };
   }
 
   create(input: { path: string; title: string; content: string }): KnowledgeDocument {
@@ -195,6 +261,7 @@ export class KnowledgeController {
     const id = documentId();
     const content = createMarkdown(id, input.title, input.content);
     atomicWrite(absolute, content);
+    this.indexDirty = true;
     const row = upsertKnowledgeDocument(this.database, {
       id,
       path: input.path,
@@ -211,28 +278,39 @@ export class KnowledgeController {
     const absolute = this.fsPath(repositoryPath);
     if (!existsSync(absolute)) throw new KnowledgeDocumentNotFoundError(repositoryPath);
     // A path keeps its document identity: an existing index row wins over any
-    // id written into the incoming content (a stale copy must not fork).
+    // id written into the incoming content (a stale copy must not fork). Only
+    // the `loongboard_id` line is ever rewritten; other front matter bytes
+    // stay untouched.
     const existing = getKnowledgeDocumentByPath(this.database, repositoryPath);
     const parsed = parseMarkdown(content);
-    const normalized =
-      existing !== null && parsed.documentId !== existing.id
-        ? serializeDocument(existing.id, stripFrontMatter(content))
-        : content;
-    const adopted = ensureDocumentId(normalized);
-    atomicWrite(absolute, adopted.content);
+    let normalized: string;
+    let documentIdValue: string;
+    if (existing !== null && parsed.documentId !== existing.id) {
+      normalized = withDocumentId(content, existing.id);
+      documentIdValue = existing.id;
+    } else if (parsed.documentId !== null) {
+      normalized = content;
+      documentIdValue = parsed.documentId;
+    } else {
+      const adopted = ensureDocumentId(content);
+      normalized = adopted.content;
+      documentIdValue = adopted.documentId;
+    }
+    atomicWrite(absolute, normalized);
+    this.indexDirty = true;
     const row = upsertKnowledgeDocument(this.database, {
-      id: adopted.documentId,
+      id: documentIdValue,
       path: repositoryPath,
-      title: deriveTitle(repositoryPath, adopted.content),
-      contentHash: sha256(adopted.content),
+      title: deriveTitle(repositoryPath, normalized),
+      contentHash: sha256(normalized),
     });
     addDocumentVersion(this.database, {
-      documentId: adopted.documentId,
-      content: adopted.content,
+      documentId: documentIdValue,
+      content: normalized,
       source: "manual",
     });
     this.maybeCheckpoint();
-    return this.toDocument(repositoryPath, adopted.documentId, adopted.content, row.defaultSessionId);
+    return this.toDocument(repositoryPath, documentIdValue, normalized, row.defaultSessionId);
   }
 
   saveById(documentIdValue: string, content: string): KnowledgeDocument {
@@ -247,6 +325,7 @@ export class KnowledgeController {
     if (!existsSync(source)) throw new KnowledgeDocumentNotFoundError(row.path);
     if (existsSync(target)) throw new KnowledgeDocumentConflictError(newPath);
     renameSync(source, target);
+    this.indexDirty = true;
     const updated = updateKnowledgeDocumentPath(this.database, documentIdValue, newPath);
     const content = readFileSync(target, "utf8");
     this.maybeCheckpoint();
@@ -258,6 +337,7 @@ export class KnowledgeController {
     if (row === null) throw new KnowledgeDocumentNotFoundError(documentIdValue);
     const absolute = this.fsPath(row.path);
     if (existsSync(absolute)) unlinkSync(absolute);
+    this.indexDirty = true;
     deleteKnowledgeDocument(this.database, documentIdValue);
   }
 
@@ -272,6 +352,7 @@ export class KnowledgeController {
     const { content } = getDocumentVersion(this.database, documentIdValue, versionId);
     const absolute = this.fsPath(row.path);
     atomicWrite(absolute, content);
+    this.indexDirty = true;
     upsertKnowledgeDocument(this.database, {
       id: documentIdValue,
       path: row.path,
@@ -305,15 +386,26 @@ export class KnowledgeController {
 
   start(): void {
     if (this.watcher !== null) return;
+    // Register the watcher before the synchronous initial scan. Any event
+    // raised during that scan is delivered on the next event-loop turn and
+    // marks the completed snapshot dirty, closing the scan/watch race.
     try {
       this.watcher = watch(this.knowledgePath, { recursive: true }, (_event, fileName) => {
         if (typeof fileName !== "string") return;
         if (!fileName.endsWith(".md") && !fileName.endsWith(".markdown")) return;
+        this.indexDirty = true;
         this.scheduleRescan();
       });
     } catch {
       // Recursive watching is unavailable on some platforms; every read
       // re-runs indexExternalChanges so content stays fresh.
+    }
+    // Markdown may already exist when the state DB is new; index it before
+    // start returns so id-based routes resolve immediately.
+    try {
+      this.indexExternalChanges();
+    } catch {
+      // Best-effort startup scan; every read re-runs it.
     }
   }
 
@@ -341,12 +433,20 @@ export class KnowledgeController {
     }, 1_000);
   }
 
+  private currentFiles(): KnowledgeFileSnapshot[] {
+    if (this.watcher !== null && !this.indexDirty) {
+      return [...this.snapshots.values()];
+    }
+    return this.indexExternalChanges();
+  }
+
   /**
-   * Create versions for changes that arrived outside LoongBoard (plan 15.4).
-   * While a knowledge agent session runs, changes per document are aggregated
-   * and flushed as one `agent` version when the agent becomes idle.
+   * Index Markdown found before/outside LoongBoard and create versions for
+   * changes that arrived outside LoongBoard (plan 15.4). While a knowledge
+   * agent session runs, changes per document are aggregated and flushed as
+   * one `agent` version when the agent becomes idle.
    */
-  private indexExternalChanges(): void {
+  private indexExternalChanges(): KnowledgeFileSnapshot[] {
     const files = scanKnowledgeFiles(this.knowledgePath);
     const indexed = new Map(
       listKnowledgeDocuments(this.database).map((row) => [row.path, row] as const),
@@ -356,9 +456,30 @@ export class KnowledgeController {
     for (const file of files) {
       if (file.documentId === null) continue;
       const row = indexed.get(file.path);
-      const hash = this.fileHash(file.path);
-      if (row === undefined || row.contentHash === hash) continue;
-      const content = readFileSync(this.fsPath(file.path), "utf8");
+      if (row !== undefined && row.contentHash === file.contentHash) continue;
+      const content = file.content;
+      if (row === undefined) {
+        // Fresh state DB or a file added outside LoongBoard: the durable
+        // index row is needed immediately; its baseline version follows the
+        // same aggregation rules as any other external arrival.
+        const inserted = upsertKnowledgeDocument(this.database, {
+          id: file.documentId,
+          path: file.path,
+          title: file.title,
+          contentHash: sha256(content),
+        });
+        if (agentRunning) {
+          this.pendingAgentVersions.set(file.path, content);
+          continue;
+        }
+        addDocumentVersion(this.database, {
+          documentId: inserted.id,
+          content,
+          source: "external",
+        });
+        this.maybeCheckpoint();
+        continue;
+      }
       if (agentRunning) {
         this.pendingAgentVersions.set(file.path, content);
         continue;
@@ -374,6 +495,9 @@ export class KnowledgeController {
         if (row !== undefined) this.flushVersion(row.id, row.path, content, "agent");
       }
     }
+    this.snapshots = new Map(files.map((file) => [file.path, file] as const));
+    this.indexDirty = false;
+    return files;
   }
 
   private flushVersion(
@@ -392,14 +516,6 @@ export class KnowledgeController {
     this.maybeCheckpoint();
   }
 
-  private fileHash(path: string): string {
-    try {
-      return sha256(readFileSync(this.fsPath(path), "utf8"));
-    } catch {
-      return "";
-    }
-  }
-
   private requireIndexed(documentIdValue: string) {
     const row = getKnowledgeDocument(this.database, documentIdValue);
     if (row === null) throw new KnowledgeDocumentNotFoundError(documentIdValue);
@@ -410,10 +526,8 @@ export class KnowledgeController {
     return this.requireIndexed(documentIdValue).path;
   }
 
-  private readByPathUnchecked(repositoryPath: string): KnowledgeDocument {
-    const absolute = this.fsPath(repositoryPath);
-    if (!existsSync(absolute)) throw new KnowledgeDocumentNotFoundError(repositoryPath);
-    const parsed = parseMarkdown(readFileSync(absolute, "utf8"));
+  private toReadDocument(repositoryPath: string, content: string): KnowledgeDocument {
+    const parsed = parseMarkdown(content);
     const row =
       parsed.documentId === null ? null : getKnowledgeDocument(this.database, parsed.documentId);
     return {
@@ -455,6 +569,15 @@ export function registerKnowledgeRoutes(
   app.get("/api/knowledge/tree", async (_request, reply) => {
     const items = controller.tree();
     return sendParsed(reply, 200, knowledgeTreeResponseSchema, { items });
+  });
+
+  app.get("/api/knowledge/assets", async (request, reply) => {
+    const { path } = parseRequest(knowledgeAssetPathQuerySchema, request.query);
+    const asset = controller.readAsset(path);
+    return reply
+      .header("content-type", asset.mimeType)
+      .header("x-content-type-options", "nosniff")
+      .send(asset.bytes);
   });
 
   app.get("/api/knowledge/documents", async (request, reply) => {

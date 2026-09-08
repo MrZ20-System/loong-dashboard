@@ -34,6 +34,7 @@ import {
   RepositorySyncCoordinator,
   type SyncCoordinatorLogger,
 } from "./sync-coordinator.js";
+import { WorkspaceRunCoordinator } from "./workspace-run-coordinator.js";
 
 export interface CreateServerRuntimeOptions {
   /** Use a prevalidated config in tests or an embedding process. */
@@ -102,8 +103,10 @@ export function createServerRuntime(
       enricher,
     });
     const reclassification = new DomainReclassificationService({ database });
+    const workspaceRuns = new WorkspaceRunCoordinator();
     const agentChat = new AgentChatController({
       database,
+      workspaceRuns,
       agentSessionsPath: join(config.runtime.statePath, "agent-sessions"),
       worktreesPath: config.runtime.worktreesPath,
       knowledgePath: config.knowledge.path,
@@ -128,6 +131,7 @@ export function createServerRuntime(
     const scheduler = new SchedulerEngine({
       database,
       chats: agentChat,
+      workspaceRuns,
       agentSessionsPath: join(config.runtime.statePath, "agent-sessions"),
     });
     scheduler.start();
@@ -136,6 +140,7 @@ export function createServerRuntime(
         database,
         timezone: config.timezone,
         syncCoordinator: coordinator,
+        github: provider,
         reclassification,
         agentChat,
         knowledge,

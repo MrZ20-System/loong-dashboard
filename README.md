@@ -13,9 +13,13 @@ Team Lead accepts that foundation.
 
 ```bash
 pnpm install
+pnpm test
 pnpm check
 pnpm dev
 ```
+
+`pnpm test` runs UT only. `pnpm test:regression` is a separate, small critical
+flow suite for major changes or explicit requests.
 
 The `/api/health` endpoint is the first frozen HTTP contract. Its response is
 owned by `packages/contracts` and is `{ "status": "ok" }`.

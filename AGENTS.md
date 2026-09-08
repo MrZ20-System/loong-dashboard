@@ -69,19 +69,28 @@ Fail fast with an error that includes the operation and relevant repository/sess
 Every behavioral change must include the smallest useful test:
 
 - pure logic: unit/property test;
-- command adapter: integration fixture;
-- API boundary: contract/integration test;
-- user-visible critical path: E2E.
+- command adapter and API boundary: an in-process unit test with injected dependencies when possible;
+- user-visible behavior: a focused component unit test.
 
 Do not write tests for trivial getters solely to increase coverage.
-
-Before completion run:
+Do not recreate broad stage suites or fixture-heavy E2E coverage. The normal
+development loop is UT-only:
 
 ```bash
-pnpm check
+pnpm test:ut
 ```
 
-Run `pnpm check:full` when changing a complete user flow, DSH integration, Git worktrees, Knowledge history, or Scheduler.
+The small `tests/regression` suite is reserved for major cross-module changes
+or an explicit user request. It is not part of `pnpm test` or `pnpm check`.
+Run it directly, or through the full gate, only in those cases:
+
+```bash
+pnpm test:regression
+pnpm check:full
+```
+
+Before ordinary completion run `pnpm check`. Browser or live-provider smoke is
+manual acceptance, not a routine automated test.
 
 ## Task completion report
 
@@ -93,4 +102,3 @@ Report:
 - commit SHA.
 
 Do not claim completion while checks are failing.
-

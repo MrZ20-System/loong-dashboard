@@ -11,6 +11,7 @@ import {
   preparePullResponseSchema,
   pullRequestDetailSchema,
   pullRequestParamsSchema,
+  repositoryTreeResponseSchema,
 } from "@loongboard/contracts";
 import {
   GitCommandError,
@@ -25,6 +26,7 @@ import {
   parseRequest,
   sendParsed,
 } from "./route-helpers.js";
+import { FileContentCache } from "./file-content-cache.js";
 
 export class PullRequestNotFoundError extends Error {
   readonly code = "PULL_REQUEST_NOT_FOUND" as const;
@@ -81,6 +83,7 @@ export function registerDiffRoutes(
   dependencies: DiffRoutesDependencies,
 ): void {
   const { database, gitWorkspace } = dependencies;
+  const fileContentCache = new FileContentCache(gitWorkspace);
 
   app.get("/api/repositories/:id/pulls/:number", async (request, reply) => {
     const { id, number } = parseRequest(pullRequestParamsSchema, request.params);
@@ -132,7 +135,7 @@ export function registerDiffRoutes(
       const detail = requirePullRequest(database, id, number);
       const repository = requireRepositoryLocal(database, id);
       try {
-        const content = await gitWorkspace.readFile({
+        const content = await fileContentCache.get({
           repositoryPath: repository.localPath,
           ref: query.ref,
           path: query.path,
@@ -151,6 +154,28 @@ export function registerDiffRoutes(
         }
         throw error;
       }
+    },
+  );
+
+  app.get(
+    "/api/repositories/:id/pulls/:number/tree",
+    async (request, reply) => {
+      const { id, number } = parseRequest(
+        pullRequestParamsSchema,
+        request.params,
+      );
+      const detail = requirePullRequest(database, id, number);
+      const repository = requireRepositoryLocal(database, id);
+      const files = await gitWorkspace.listFilesAtRef({
+        repositoryPath: repository.localPath,
+        ref: detail.headSha,
+      });
+      return sendParsed(reply, 200, repositoryTreeResponseSchema, {
+        repositoryId: id,
+        number,
+        ref: detail.headSha,
+        files,
+      });
     },
   );
 

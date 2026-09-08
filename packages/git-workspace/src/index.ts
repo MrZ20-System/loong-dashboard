@@ -1,6 +1,7 @@
 import type {
   ChangedFileEntry,
   FileContent,
+  ListFilesAtRefInput,
   PreparePullInput,
   PreparePullResult,
   ReadFileInput,
@@ -19,7 +20,14 @@ import {
   type LocalGitWorkspaceOptions,
 } from "./local-git-workspace.js";
 
-export type { ChangedFileEntry, FileContent, PreparePullInput, PreparePullResult, ReadFileInput } from "./diff-types.js";
+export type {
+  ChangedFileEntry,
+  FileContent,
+  ListFilesAtRefInput,
+  PreparePullInput,
+  PreparePullResult,
+  ReadFileInput,
+} from "./diff-types.js";
 export { MAX_DIFF_FILE_BYTES } from "./diff-types.js";
 export { GitCommandError, runGitBuffer, runGitOptionalText, runGitText, type RunGitOptions } from "./git-command.js";
 export { GitObjectMissingError, GitPathUnsafeError, LocalGitWorkspace, type LocalGitWorkspaceOptions } from "./local-git-workspace.js";
@@ -30,6 +38,8 @@ export {
   WorktreePoolError,
   type AllocatedSlot,
   type AllocateSlotInput,
+  type WorktreeSlotMetadata,
+  type WorktreeSlotUsage,
 } from "./worktree-pool.js";
 
 /**
@@ -44,6 +54,8 @@ export interface GitWorkspace {
     mergeBase: string;
     headSha: string;
   }): Promise<ChangedFileEntry[]>;
+  /** Every file path present at one validated repository ref. */
+  listFilesAtRef(input: ListFilesAtRefInput): Promise<string[]>;
   readFile(input: ReadFileInput): Promise<FileContent>;
 }
 
@@ -54,4 +66,5 @@ export const isGitWorkspace = (
   typeof value === "object" &&
   typeof (value as GitWorkspace).preparePull === "function" &&
   typeof (value as GitWorkspace).listChangedFiles === "function" &&
+  typeof (value as GitWorkspace).listFilesAtRef === "function" &&
   typeof (value as GitWorkspace).readFile === "function";

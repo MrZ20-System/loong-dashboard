@@ -153,6 +153,33 @@ describe("LocalGitWorkspace real fixture", () => {
     expect(binary?.deletions).toBeNull();
   });
 
+  it("lists the full head file tree at one ref without deleted or later paths", async () => {
+    const service = new LocalGitWorkspace();
+    const prepare = await service.preparePull({
+      repositoryPath: workspace,
+      remote: "origin",
+      baseBranch: "main",
+      prNumber: 1,
+      headSha,
+    });
+    const files = await service.listFilesAtRef({
+      repositoryPath: workspace,
+      ref: prepare.headSha,
+    });
+
+    expect(files).toEqual(
+      expect.arrayContaining([
+        "alpha-renamed.txt",
+        "added.txt",
+        "blob.bin",
+      ]),
+    );
+    expect(files).not.toContain("kept.txt");
+    expect(files).not.toContain("alpha.txt");
+    // The PR head predates the commit later added to main.
+    expect(files).not.toContain("main-only.txt");
+  });
+
   it("reads complete base and head file content and flags binary", async () => {
     const service = new LocalGitWorkspace();
     const prepare = await service.preparePull({

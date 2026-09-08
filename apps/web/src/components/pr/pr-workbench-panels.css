@@ -1,0 +1,101 @@
+/*
+ * Reusable PR workbench side-panel mechanics: resizable wrapper, vertical
+ * separator grip, and the shared Codicon collapse control. Global workbench
+ * colors come from styles.css when present; the fallbacks keep the component
+ * usable in isolation.
+ */
+
+.pr-resize-panel {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.pr-resize-panel__content {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.pr-resize-panel__content > * {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+/* Existing workbench cards keep their chrome but fill the wrapper height. */
+.pr-resize-panel .agent-panel,
+.pr-resize-panel .pr-file-tree {
+  min-height: 0;
+  max-height: none;
+}
+
+.pr-resize-panel__grip {
+  position: relative;
+  flex: 0 0 9px;
+  align-self: stretch;
+  z-index: 1;
+  cursor: col-resize;
+  touch-action: none;
+  outline: none;
+}
+
+.pr-resize-panel__grip::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--border-soft, rgba(55, 65, 81, 0.2));
+  transform: translateX(-50%);
+}
+
+.pr-resize-panel__grip:hover::after,
+.pr-resize-panel__grip:focus-visible::after,
+.pr-resize-panel__grip--active::after {
+  background: var(--accent, #2f9e8f);
+}
+
+.pr-resize-panel__grip:focus-visible {
+  box-shadow: var(--focus-ring, 0 0 0 2px rgba(47, 158, 143, 0.35));
+}
+
+.pr-resize-panel--dragging {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.pr-panel-collapse {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--border, rgba(55, 65, 81, 0.25));
+  border-radius: 8px;
+  background: var(--control-bg, #ffffff);
+  color: var(--text-secondary, #4b5563);
+  cursor: pointer;
+}
+
+.pr-panel-collapse:hover {
+  border-color: var(--accent, #2f9e8f);
+  background: var(--accent-soft, rgba(47, 158, 143, 0.1));
+  color: var(--accent-dark, #1f6f65);
+}
+
+.pr-panel-collapse:focus-visible {
+  outline: 0;
+  box-shadow: var(--focus-ring, 0 0 0 2px rgba(47, 158, 143, 0.35));
+}
+
+.pr-panel-collapse-icon {
+  font-size: 20px;
+  line-height: 1;
+}

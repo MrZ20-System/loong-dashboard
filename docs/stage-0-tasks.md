@@ -48,7 +48,7 @@ The frozen decisions above and the baseline sections 2, 3, 5, 6, 7, 17, 23, and 
 
 #### Required behavior
 
-Root scripts expose `dev`, `build`, `lint`, `typecheck`, `test`, `test:integration`, `test:e2e`, `check:architecture`, `check:dsh-boundary`, `check`, and `check:full`. Architecture checks report the violating file, rule, and repair direction. `packages/contracts` owns a Zod schema for `{ status: 'ok' }`. The DSH dependency is exactly pinned and represented in `dsh.lock.json` and `pnpm-lock.yaml`.
+Root scripts expose `dev`, `build`, `lint`, `typecheck`, `test`, `test:ut`, `test:regression`, `check:architecture`, `check:dsh-boundary`, `check`, and `check:full`. Architecture checks report the violating file, rule, and repair direction. `packages/contracts` owns a Zod schema for `{ status: 'ok' }`. The DSH dependency is exactly pinned and represented in `dsh.lock.json` and `pnpm-lock.yaml`.
 
 #### Required tests
 
@@ -142,4 +142,3 @@ GET /api/health = 200
 ```
 
 Only then may Stage 0 be marked accepted or Stage 1 begin.
-

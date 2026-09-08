@@ -13,6 +13,9 @@ import {
 import {
   type ActivityDay,
   type DatabaseClient,
+  type IssueComment,
+  type IssueCommentInput,
+  type IssueDetailCacheInput,
   type IssueDetail,
   type IssueListItem,
   type IssueMetadata,
@@ -27,6 +30,12 @@ import {
 } from "./types.js";
 
 const DEFAULT_PAGE_SIZE = 50;
+
+type ListDateRangeOptions = {
+  from?: string | null;
+  to?: string | null;
+};
+
 export class InvalidCursorError extends Error {
   readonly code = "INVALID_CURSOR" as const;
 
@@ -152,6 +161,132 @@ export function upsertIssuePage(
   return changes;
 }
 
+/**
+ * Replace the cached Issue body/comments and refresh the summary row in one
+ * transaction (plan 7.9). The fetched `updatedAt` doubles as the cache
+ * marker so a later list update with a newer timestamp forces one fetch.
+ */
+export function replaceIssueDetailCache(
+  database: DatabaseClient,
+  repositoryId: string,
+  detail: IssueDetailCacheInput,
+): void {
+  requireRepository(database, repositoryId);
+  const updateIssue = database.prepare(
+    `UPDATE issues SET
+       title = @title,
+       url = @url,
+       author_login = @authorLogin,
+       state = @state,
+       comments_count = @commentsCount,
+       created_at = @createdAt,
+       updated_at = @updatedAt,
+       closed_at = @closedAt,
+       detail_body = @body,
+       detail_synced_updated_at = @updatedAt
+     WHERE repository_id = @repositoryId AND number = @number`,
+  );
+  const deleteComments = database.prepare(
+    `DELETE FROM issue_comments
+     WHERE repository_id = ? AND issue_number = ?`,
+  );
+  const insertComment = database.prepare(
+    `INSERT INTO issue_comments (
+       repository_id, issue_number, github_comment_id, author_login, body,
+       created_at, updated_at, url
+     ) VALUES (
+       @repositoryId, @issueNumber, @id, @authorLogin, @body,
+       @createdAt, @updatedAt, @url
+     )`,
+  );
+  const sortedComments = [...detail.comments].sort(compareComments);
+
+  database.transaction(() => {
+    const result = updateIssue.run({
+      repositoryId,
+      number: detail.number,
+      title: detail.title,
+      url: detail.url,
+      authorLogin: detail.authorLogin,
+      state: detail.state,
+      commentsCount: detail.commentsCount,
+      createdAt: detail.createdAt,
+      updatedAt: detail.updatedAt,
+      closedAt: detail.closedAt,
+      body: detail.body,
+    });
+    if (result.changes !== 1) {
+      throw new Error(
+        `Cannot cache detail for missing issue #${detail.number} in repository ${repositoryId}`,
+      );
+    }
+    deleteComments.run(repositoryId, detail.number);
+    for (const comment of sortedComments) {
+      insertComment.run({
+        repositoryId,
+        issueNumber: detail.number,
+        id: comment.id,
+        authorLogin: comment.authorLogin,
+        body: comment.body,
+        createdAt: comment.createdAt,
+        updatedAt: comment.updatedAt,
+        url: comment.url,
+      });
+    }
+  })();
+}
+
+/**
+ * The issue.updatedAt value whose body/comments are currently cached.
+ * The Issue detail route fetches only when this differs from the stored
+ * issue row's updated_at.
+ */
+export function getIssueDetailSyncedUpdatedAt(
+  database: DatabaseClient,
+  repositoryId: string,
+  number: number,
+): string | null {
+  requireRepository(database, repositoryId);
+  const row = database
+    .prepare(
+      `SELECT detail_synced_updated_at
+       FROM issues
+       WHERE repository_id = ? AND number = ?`,
+    )
+    .get(repositoryId, number) as
+    | { detail_synced_updated_at: string | null }
+    | undefined;
+  return row?.detail_synced_updated_at ?? null;
+}
+
+export interface IssueDetailCacheState {
+  updatedAt: string;
+  syncedUpdatedAt: string | null;
+}
+
+/** Lightweight cache check that does not load the Issue body or comments. */
+export function getIssueDetailCacheState(
+  database: DatabaseClient,
+  repositoryId: string,
+  number: number,
+): IssueDetailCacheState | null {
+  requireRepository(database, repositoryId);
+  const row = database
+    .prepare(
+      `SELECT updated_at, detail_synced_updated_at
+       FROM issues
+       WHERE repository_id = ? AND number = ?`,
+    )
+    .get(repositoryId, number) as
+    | { updated_at: string; detail_synced_updated_at: string | null }
+    | undefined;
+  if (row === undefined) return null;
+  return {
+    updatedAt: row.updated_at,
+    syncedUpdatedAt: row.detail_synced_updated_at ?? null,
+  };
+}
+
 function resolveTimeZone(options: { calendarTimeZone: string }): string {
   try {
     new Intl.DateTimeFormat("en-CA", { timeZone: options.calendarTimeZone }).format();
@@ -182,13 +317,21 @@ function cursorValues(value: string | null | undefined): ListCursorPayload | nul
 function datePredicate(
   clauses: string[],
   parameters: unknown[],
-  date: string | null | undefined,
+  from: string | null | undefined,
+  to: string | null | undefined,
   timeZone: string,
 ): void {
-  if (!date) return;
-  const range = calendarDateToUtc(date, timeZone);
-  clauses.push("updated_at >= ?", "updated_at < ?");
-  parameters.push(range.from, range.to);
+  if (from && to && from > to) {
+    throw new Error("Date range from must be on or before to");
+  }
+  if (from) {
+    clauses.push("updated_at >= ?");
+    parameters.push(calendarDateToUtc(from, timeZone).from);
+  }
+  if (to) {
+    clauses.push("updated_at < ?");
+    parameters.push(calendarDateToUtc(to, timeZone).to);
+  }
 }
 
 function cursorPredicate(
@@ -231,10 +374,31 @@ function mapIssue(row: Record<string, unknown>): IssueListItem {
   };
 }
 
+function mapIssueComment(row: Record<string, unknown>): IssueComment {
+  return {
+    id: row.github_comment_id as number,
+    authorLogin: (row.author_login as string | null) ?? null,
+    body: row.body as string,
+    createdAt: row.created_at as string,
+    updatedAt: row.updated_at as string,
+    url: row.url as string,
+  };
+}
+
+function compareComments(
+  left: IssueCommentInput,
+  right: IssueCommentInput,
+): number {
+  return (
+    left.createdAt.localeCompare(right.createdAt) ||
+    left.id - right.id
+  );
+}
+
 export function listPullRequests(
   database: DatabaseClient,
   repositoryId: string,
-  options: PullRequestListOptions,
+  options: PullRequestListOptions & ListDateRangeOptions,
 ): ListPage<PullRequestListItem> {
   requireRepository(database, repositoryId);
   const calendarTimeZone = resolveTimeZone(options);
@@ -242,7 +406,13 @@ export function listPullRequests(
   const cursor = cursorValues(options.cursor);
   const clauses = ["repository_id = ?"];
   const parameters: unknown[] = [repositoryId];
-  datePredicate(clauses, parameters, options.date, calendarTimeZone);
+  datePredicate(
+    clauses,
+    parameters,
+    options.from ?? options.date,
+    options.to ?? options.date,
+    calendarTimeZone,
+  );
   if (options.status) {
     clauses.push("status = ?");
     parameters.push(options.status);
@@ -331,7 +501,7 @@ export function getPullRequestDetail(
 export function listIssues(
   database: DatabaseClient,
   repositoryId: string,
-  options: IssueListOptions,
+  options: IssueListOptions & ListDateRangeOptions,
 ): ListPage<IssueListItem> {
   requireRepository(database, repositoryId);
   const calendarTimeZone = resolveTimeZone(options);
@@ -339,7 +509,13 @@ export function listIssues(
   const cursor = cursorValues(options.cursor);
   const clauses = ["repository_id = ?"];
   const parameters: unknown[] = [repositoryId];
-  datePredicate(clauses, parameters, options.date, calendarTimeZone);
+  datePredicate(
+    clauses,
+    parameters,
+    options.from ?? options.date,
+    options.to ?? options.date,
+    calendarTimeZone,
+  );
   if (options.status) {
     clauses.push("state = ?");
     parameters.push(options.status);
@@ -386,11 +562,20 @@ export function getIssueDetail(
     )
     .get(repositoryId, number) as Record<string, unknown> | undefined;
   if (row === undefined) return null;
+  const commentRows = database
+    .prepare(
+      `SELECT github_comment_id, author_login, body, created_at, updated_at, url
+       FROM issue_comments
+       WHERE repository_id = ? AND issue_number = ?
+       ORDER BY created_at ASC, github_comment_id ASC`,
+    )
+    .all(repositoryId, number) as Array<Record<string, unknown>>;
   return {
     ...mapIssue(row),
     createdAt: row.created_at as string,
     closedAt: (row.closed_at as string | null) ?? null,
     detailBody: (row.detail_body as string | null) ?? null,
+    comments: commentRows.map(mapIssueComment),
   };
 }
 

@@ -69,6 +69,21 @@ export const fileContentQuerySchema = z
   })
   .strict();
 
+/**
+ * Response of GET .../pulls/:number/tree (full head file list). The server
+ * resolves the ref from the stored PR detail so callers can never ask for an
+ * arbitrary object; paths are the complete repository-relative file set at
+ * that head commit.
+ */
+export const repositoryTreeResponseSchema = z
+  .object({
+    repositoryId: repositoryIdSchema,
+    number: z.number().int().positive(),
+    ref: fullShaSchema,
+    files: z.array(safeRepositoryPathSchema),
+  })
+  .strict();
+
 /** Response of GET .../pulls/:number/local-command (plan 11.5). */
 export const localCommandResponseSchema = z
   .object({
@@ -81,4 +96,5 @@ export type ChangedFileEntry = z.infer<typeof changedFileEntrySchema>;
 export type PreparePullResponse = z.infer<typeof preparePullResponseSchema>;
 export type FileContentResponse = z.infer<typeof fileContentResponseSchema>;
 export type FileContentQuery = z.infer<typeof fileContentQuerySchema>;
+export type RepositoryTreeResponse = z.infer<typeof repositoryTreeResponseSchema>;
 export type LocalCommandResponse = z.infer<typeof localCommandResponseSchema>;

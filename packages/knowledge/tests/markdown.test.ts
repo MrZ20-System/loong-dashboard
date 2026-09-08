@@ -10,6 +10,7 @@ import {
   parseMarkdown,
   scanKnowledgeFiles,
   serializeDocument,
+  withDocumentId,
 } from "../src/index.js";
 
 const temporaryDirectories: string[] = [];
@@ -49,6 +50,56 @@ describe("knowledge markdown utilities", () => {
     const adopted = ensureDocumentId("---\nloongboard_id: doc_keep\n---\n\n# Old");
     expect(adopted.content).toContain("doc_keep");
     expect(adopted.documentId).toBe("doc_keep");
+  });
+
+  it("adds loongboard_id without touching other front matter bytes", () => {
+    const raw =
+      "---\ntitle: Scheduler\ntags:\n  - vllm\ndraft: false\n---\n\n# Scheduler\n\nbody";
+    expect(withDocumentId(raw, "doc_adopted")).toBe(
+      "---\ntitle: Scheduler\ntags:\n  - vllm\ndraft: false\nloongboard_id: doc_adopted\n---\n\n# Scheduler\n\nbody",
+    );
+  });
+
+  it("adopts an id-less front-matter document without stripping metadata", () => {
+    const raw = "---\ntitle: Legacy\ntags:\n  - vllm\n---\n\n# Legacy\n\nbody";
+    const adopted = ensureDocumentId(raw, "doc_adopt");
+    expect(adopted.documentId).toBe("doc_adopt");
+    expect(adopted.content).toBe(
+      "---\ntitle: Legacy\ntags:\n  - vllm\nloongboard_id: doc_adopt\n---\n\n# Legacy\n\nbody",
+    );
+  });
+
+  it("leaves the document untouched when the id already matches", () => {
+    const raw = "---\ntitle: Scheduler\nloongboard_id: doc_same\n---\n\nbody";
+    expect(withDocumentId(raw, "doc_same")).toBe(raw);
+  });
+
+  it("replaces only the stale loongboard_id line", () => {
+    const raw =
+      "---\ntitle: Scheduler\ntags:\n  - vllm\nloongboard_id: doc_stale\ndraft: false\n---\n\n# Scheduler\n\nbody";
+    const updated = withDocumentId(raw, "doc_winner");
+    expect(updated).toBe(
+      "---\ntitle: Scheduler\ntags:\n  - vllm\nloongboard_id: doc_winner\ndraft: false\n---\n\n# Scheduler\n\nbody",
+    );
+    const originalLines = raw.split("\n");
+    const updatedLines = updated.split("\n");
+    expect(updatedLines.filter((line, index) => line !== originalLines[index])).toEqual([
+      "loongboard_id: doc_winner",
+    ]);
+  });
+
+  it("preserves CRLF line endings while adding loongboard_id", () => {
+    const raw = "---\r\ntitle: Scheduler\r\n---\r\n\r\n# Scheduler";
+    expect(withDocumentId(raw, "doc_crlf")).toBe(
+      "---\r\ntitle: Scheduler\r\nloongboard_id: doc_crlf\r\n---\r\n\r\n# Scheduler",
+    );
+  });
+
+  it("prepends minimal front matter when the document has none", () => {
+    const raw = "# Legacy\n\nnotes";
+    expect(withDocumentId(raw, "doc_plain")).toBe(
+      "---\nloongboard_id: doc_plain\n---\n\n# Legacy\n\nnotes",
+    );
   });
 
   it("creates documents with an id and optional heading", () => {

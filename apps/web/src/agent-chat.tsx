@@ -12,6 +12,7 @@ import {
   syncAgentWorkspace,
 } from "./agent-chat-client";
 import { MarkdownView } from "./markdown";
+import { PanelCollapseButton } from "./components/pr/ResizableSidePanel";
 
 interface LiveTool {
   callId: string;
@@ -38,9 +39,18 @@ function emptyLive(): LiveTurn {
 export function AgentChatPanel({
   scope,
   heading = "Agent",
+  collapsed,
+  onToggleCollapsed,
+  panelId,
+  showCollapseControl = true,
 }: {
   scope: AgentScope;
   heading?: string;
+  /** Optional controlled collapsed state for layouts whose grid shrinks the rail. */
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
+  panelId?: string;
+  showCollapseControl?: boolean;
 }) {
   const queryClient = useQueryClient();
   const scopeKey = useMemo(() => JSON.stringify(scope), [scope]);
@@ -49,7 +59,12 @@ export function AgentChatPanel({
   const [live, setLive] = useState<LiveTurn | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [collapsed, setCollapsed] = useState(false);
+  const [internalCollapsed, setInternalCollapsed] = useState(false);
+  const isCollapsed = collapsed ?? internalCollapsed;
+  const toggleCollapsed = () => {
+    if (onToggleCollapsed !== undefined) onToggleCollapsed();
+    else setInternalCollapsed((value) => !value);
+  };
   const eventCleanup = useRef<(() => void) | null>(null);
 
   const ensure = useMutation({
@@ -207,17 +222,28 @@ export function AgentChatPanel({
   const revisionMismatch =
     session.data !== undefined &&
     session.data.targetRevision !== null &&
-    session.data.workspaceRevision !== null &&
-    session.data.targetRevision !== session.data.workspaceRevision;
+    session.data.workspaceRevision !== session.data.targetRevision;
 
   const send = () => {
     const content = prompt.trim();
-    if (content.length === 0 || currentSessionId === null || running) return;
+    if (
+      content.length === 0 ||
+      currentSessionId === null ||
+      running ||
+      revisionMismatch
+    ) {
+      return;
+    }
     submit.mutate(content);
   };
+  const resolvedPanelId = panelId ?? "agent-chat-panel";
 
   return (
-    <aside className={`agent-panel${collapsed ? " collapsed" : ""}`} aria-label={heading}>
+    <aside
+      className={`agent-panel${isCollapsed ? " collapsed" : ""}`}
+      aria-label={heading}
+      id={resolvedPanelId}
+    >
       <header className="agent-panel-header">
         <h3>{heading}</h3>
         <div className="agent-panel-actions">
@@ -226,12 +252,19 @@ export function AgentChatPanel({
               Stop
             </button>
           )}
-          <button type="button" aria-label={collapsed ? "Expand chat" : "Collapse chat"} onClick={() => setCollapsed((value) => !value)}>
-            {collapsed ? "◂" : "▸"}
-          </button>
+          {showCollapseControl && (
+            <PanelCollapseButton
+              panelId={resolvedPanelId}
+              label={heading}
+              expanded={!isCollapsed}
+              side="right"
+              onToggle={toggleCollapsed}
+              className="agent-panel-collapse"
+            />
+          )}
         </div>
       </header>
-      {!collapsed && (
+      {!isCollapsed && (
         <>
           {currentSession !== undefined && session.data !== undefined && (
             <div className="agent-session-meta">
@@ -244,9 +277,15 @@ export function AgentChatPanel({
                 </div>
               )}
               {session.data.targetRevision !== null && revisionMismatch && (
-                <button type="button" disabled={running || syncWorkspace.isPending} onClick={() => syncWorkspace.mutate()}>
-                  {syncWorkspace.isPending ? "Syncing…" : "Sync workspace"}
-                </button>
+                <>
+                  <p role="alert" className="agent-note">
+                    Workspace does not match this PR revision. Sync the workspace
+                    before continuing this chat.
+                  </p>
+                  <button type="button" disabled={running || syncWorkspace.isPending} onClick={() => syncWorkspace.mutate()}>
+                    {syncWorkspace.isPending ? "Syncing…" : "Sync workspace"}
+                  </button>
+                </>
               )}
               <span className={`agent-status agent-status-${currentSession.status}`}>{(currentSession.status)}</span>
             </div>
@@ -326,7 +365,7 @@ export function AgentChatPanel({
               }}
             />
             <div className="agent-composer-actions">
-              <button type="submit" disabled={prompt.trim().length === 0 || currentSessionId === null || running || submit.isPending}>
+              <button type="submit" disabled={prompt.trim().length === 0 || currentSessionId === null || running || revisionMismatch || submit.isPending}>
                 {submit.isPending ? "Sending…" : "Send"}
               </button>
               <span className="agent-composer-hint">Ctrl/⌘ + Enter to send</span>

@@ -1,0 +1,183 @@
+.continuous-changes {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.continuous-changes__heading {
+  margin: 0 0 10px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 720;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.continuous-changes__list {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.continuous-changes__card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  /* clip, not hidden: hidden would make the card its own scroll container and
+     break the sticky card header against .pr-diff-main. */
+  overflow: clip;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+
+.continuous-changes__card[aria-current="true"] {
+  border-color: rgba(85, 197, 190, 0.55);
+}
+
+.continuous-changes__card-header {
+  display: flex;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  min-height: 40px;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--surface-muted);
+}
+
+.continuous-changes__file {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: center;
+  gap: 7px;
+}
+
+.continuous-changes__path {
+  overflow: hidden;
+  min-width: 0;
+  flex: 0 1 auto;
+  color: var(--text);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 640;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.continuous-changes__copy-wrap {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 5px;
+}
+
+.continuous-changes__copy {
+  display: inline-grid;
+  width: 26px;
+  height: 26px;
+  flex: none;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.continuous-changes__copy:hover {
+  border-color: var(--border-strong);
+  background: var(--surface);
+  color: var(--accent-dark);
+}
+
+.continuous-changes__copy-icon {
+  font-size: 14px;
+}
+
+.continuous-changes__file-icon {
+  flex: none;
+  font-size: 13px;
+}
+
+.continuous-changes__stats {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+  font-size: 11.5px;
+  font-weight: 680;
+  white-space: nowrap;
+}
+
+.continuous-changes__stats .diff-stat-add {
+  color: var(--green);
+}
+
+.continuous-changes__stats .diff-stat-del {
+  color: var(--red);
+}
+
+.continuous-changes__binary {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 560;
+}
+
+.continuous-changes__action {
+  min-height: 26px;
+  flex: none;
+  padding: 0 9px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--control-bg);
+  color: var(--text-secondary);
+  font-size: 11.5px;
+}
+
+.continuous-changes__action:hover {
+  color: var(--accent-dark);
+}
+
+.continuous-changes__action[aria-expanded="true"] {
+  color: var(--accent-dark);
+}
+
+.continuous-changes__copied {
+  color: var(--green);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.continuous-changes__copy-error {
+  color: var(--red);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.continuous-changes__card-body {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+  z-index: 0;
+  flex-direction: column;
+}
+
+.continuous-changes__waiting {
+  margin: 0;
+  padding: 12px 12px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}

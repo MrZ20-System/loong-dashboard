@@ -15,6 +15,13 @@ export type {
   CreateServerRuntimeOptions,
   ServerRuntime,
 } from "./runtime.js";
+export { IssueDetailService } from "./issue-detail-service.js";
+export type { IssueDetailServiceOptions } from "./issue-detail-service.js";
+export { KnowledgeController } from "./knowledge.js";
+export type {
+  KnowledgeCheckpointOptions,
+  KnowledgeControllerOptions,
+} from "./knowledge.js";
 export {
   createShutdownHandler,
   installSignalHandlers,

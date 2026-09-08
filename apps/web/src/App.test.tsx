@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { App, appQueryClient } from "./App";
@@ -129,34 +129,128 @@ function renderApp(path: string) {
   return render(<MemoryRouter initialEntries={[path]}><App /></MemoryRouter>);
 }
 
+function mainContent() {
+  return within(screen.getByRole("main"));
+}
+
+function appSidebar() {
+  return within(screen.getByRole("complementary", { name: "Primary" }));
+}
+
+function primaryNavigation() {
+  return within(screen.getByRole("navigation", { name: "Primary navigation" }));
+}
+
 describe("LoongBoard metadata routes", () => {
   afterEach(() => {
     appQueryClient.clear();
     vi.unstubAllGlobals();
   });
 
-  it("offers open PR and Issue actions for one configured repository", async () => {
-    mockApi();
+  it("uses the Board selector as the only repository entry point and opens Activity", async () => {
+    mockApi({ repositories: [repository, repositoryB] });
     renderApp("/");
-    expect(await screen.findByRole("link", { name: "Open Pull Requests" })).toHaveAttribute("href", "/repositories/repo/pulls");
-    expect(screen.getByRole("link", { name: "Open Issues" })).toHaveAttribute("href", "/repositories/repo/issues");
+    const selector = await screen.findByRole("combobox", { name: "Repository" });
+    expect(mainContent().queryByRole("link", { name: "Open Pull Requests" })).not.toBeInTheDocument();
+    expect(mainContent().queryByRole("link", { name: "Open Issues" })).not.toBeInTheDocument();
+    fireEvent.change(selector, { target: { value: "repo-b" } });
+    expect(await screen.findByRole("heading", { name: "Repository activity" })).toBeInTheDocument();
   });
 
-  it("renders a PR route and discoverable sibling Issue navigation", async () => {
+  it("renders a PR route without duplicated repository sibling navigation", async () => {
     mockApi();
-    renderApp("/repositories/repo/pulls?date=2026-09-03&status=merged&cursor=stale");
+    renderApp("/repositories/repo/pulls?from=2026-09-03&to=2026-09-03&status=merged&cursor=stale");
     expect(await screen.findByRole("heading", { name: "Pull requests" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Issues" })).toHaveAttribute("href", "/repositories/repo/issues?date=2026-09-03");
-    expect(screen.getByRole("link", { name: "Pull 2" })).toHaveAttribute("href", "https://github.com/acme/project/pull/2");
+    expect(mainContent().queryByRole("navigation", { name: "Repository metadata navigation" })).not.toBeInTheDocument();
+    expect(mainContent().queryByRole("link", { name: "Issues" })).not.toBeInTheDocument();
+    expect(primaryNavigation().getByRole("link", { name: "Issues" })).toHaveAttribute("href", "/repositories/repo/issues");
+    const feed = await screen.findByRole("list", { name: "Pull request feed" });
+    const pullRow = within(feed).getByRole("link", {
+      name: "Pull request #2: Pull 2",
+    });
+    expect(pullRow).toHaveAttribute("tabindex", "0");
+    expect(within(pullRow).queryByRole("link", { name: "Pull 2" })).not.toBeInTheDocument();
+    expect(
+      within(pullRow).getByRole("link", {
+        name: "Open pull request #2 on GitHub",
+      }),
+    ).toHaveAttribute("href", "https://github.com/acme/project/pull/2");
+    expect(within(pullRow).queryByRole("link", { name: "Open GitHub" })).not.toBeInTheDocument();
+    fireEvent.click(pullRow);
+    expect(await screen.findByRole("heading", { name: "Pull request unavailable" })).toBeInTheDocument();
   });
 
-  it("renders Issue fields and zero-valued metrics", async () => {
+  it("renders Issue fields without the redundant summary metrics row", async () => {
     mockApi({ issues: [issue(7, "A tracked issue")] });
     renderApp("/repositories/repo/issues");
     expect(await screen.findByRole("heading", { name: "Issues" })).toBeInTheDocument();
-    expect(screen.getByText("A tracked issue")).toBeInTheDocument();
-    expect(screen.getAllByText("Comments")[0].nextElementSibling).toHaveTextContent("0");
-    expect(screen.getByText("Line changes").nextElementSibling).toHaveTextContent("0");
+    const feed = await screen.findByRole("list", { name: "Issue feed" });
+    const issueRow = within(feed).getByRole("link", {
+      name: "Issue #7: A tracked issue",
+    });
+    expect(issueRow).toHaveAttribute("tabindex", "0");
+    expect(within(issueRow).queryByRole("link", { name: "A tracked issue" })).not.toBeInTheDocument();
+    expect(
+      within(issueRow).getByRole("link", {
+        name: "Open issue #7 on GitHub",
+      }),
+    ).toHaveAttribute("href", "https://github.com/acme/project/issues/7");
+    expect(within(issueRow).queryByRole("link", { name: "Open" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("List metrics")).not.toBeInTheDocument();
+    fireEvent.click(issueRow);
+    expect(await screen.findByRole("heading", { name: "Issue unavailable" })).toBeInTheDocument();
+  });
+
+  it("searches issues only by exact number, author, or contiguous title", async () => {
+    mockApi({
+      issues: [
+        { ...issue(7, "Track scheduler latency"), authorLogin: "IssueOwner" },
+        { ...issue(70, "Unrelated report"), authorLogin: "someone-else" },
+      ],
+    });
+    renderApp("/repositories/repo/issues");
+    const search = await screen.findByRole("searchbox", { name: "Search list" });
+    expect(search).toHaveAttribute(
+      "placeholder",
+      "Issue number, author, or title",
+    );
+
+    fireEvent.change(search, { target: { value: "7" } });
+    expect(screen.getByText("Track scheduler latency")).toBeInTheDocument();
+    expect(screen.queryByText("Unrelated report")).not.toBeInTheDocument();
+
+    fireEvent.change(search, { target: { value: "issueowner" } });
+    expect(screen.getByText("Track scheduler latency")).toBeInTheDocument();
+
+    fireEvent.change(search, { target: { value: "scheduler latency" } });
+    expect(screen.getByText("Track scheduler latency")).toBeInTheDocument();
+
+    fireEvent.change(search, { target: { value: "scheduler track" } });
+    expect(screen.queryByText("Track scheduler latency")).not.toBeInTheDocument();
+  });
+
+  it("searches pull requests only by exact number, author, or contiguous title", async () => {
+    mockApi({
+      pulls: [
+        { ...pull(53_906, "Add GLM flash support"), authorLogin: "ZJY0516" },
+        { ...pull(5_390, "Unrelated change"), authorLogin: "someone-else" },
+      ],
+    });
+    renderApp("/repositories/repo/pulls");
+    const search = await screen.findByRole("searchbox", { name: "Search list" });
+
+    fireEvent.change(search, { target: { value: "53906" } });
+    expect(screen.getByText("Add GLM flash support")).toBeInTheDocument();
+    expect(screen.queryByText("Unrelated change")).not.toBeInTheDocument();
+
+    fireEvent.change(search, { target: { value: "zjy0516" } });
+    expect(screen.getByText("Add GLM flash support")).toBeInTheDocument();
+
+    fireEvent.change(search, { target: { value: "GLM flash" } });
+    expect(screen.getByText("Add GLM flash support")).toBeInTheDocument();
+
+    fireEvent.change(search, { target: { value: "GLM support" } });
+    expect(screen.queryByText("Add GLM flash support")).not.toBeInTheDocument();
   });
 
   it("sanitizes invalid URL filters and resets cursor", async () => {
@@ -166,15 +260,31 @@ describe("LoongBoard metadata routes", () => {
     await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input) === "/api/repositories/repo/pulls")).toBe(true));
   });
 
+  it("keeps legacy date URLs compatible while requesting from/to", async () => {
+    const fetchMock = mockApi();
+    renderApp("/repositories/repo/pulls?date=2026-09-03&cursor=stale");
+    await screen.findByRole("heading", { name: "Pull requests" });
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.some(
+          ([input]) =>
+            String(input).includes(
+              "/api/repositories/repo/pulls?from=2026-09-03&to=2026-09-03",
+            ),
+        ),
+      ).toBe(true),
+    );
+  });
+
   it("keeps Server order, paginates, and preserves stored status", async () => {
     const rows = [pull(9), { ...pull(8), status: "merged" as const }];
     mockApi({ pullPages: [[rows[0]], [rows[1]]] });
     renderApp("/repositories/repo/pulls");
     expect(await screen.findByText("Pull 9")).toBeInTheDocument();
-    expect(screen.getAllByText("open").some((element) => element.tagName === "TD")).toBe(true);
+    expect(screen.getAllByText("open").some((element) => element.closest(".feed-row") !== null)).toBe(true);
     fireEvent.click(screen.getByRole("button", { name: "Load more" }));
     expect(await screen.findByText("Pull 8")).toBeInTheDocument();
-    expect(screen.getAllByText("merged").some((element) => element.tagName === "TD")).toBe(true);
+    expect(screen.getAllByText("merged").some((element) => element.closest(".feed-row") !== null)).toBe(true);
   });
 
   it("refreshes metadata after an accepted sync that is immediately idle", async () => {
@@ -215,7 +325,7 @@ describe("LoongBoard metadata routes", () => {
         { pullRequests: "idle", issues: "failed" },
       ],
     });
-    appQueryClient.setQueryData(["metadata", "repo", "issues", ":", null], {
+    appQueryClient.setQueryData(["metadata", "repo", "issues", "::", null], {
       pages: [{ items: [oldIssue], nextCursor: null, calendarTimeZone: "Asia/Shanghai" }],
       pageParams: [null],
     });
@@ -225,7 +335,7 @@ describe("LoongBoard metadata routes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
     expect(await screen.findByText("Synced pull", {}, { timeout: 4_000 })).toBeInTheDocument();
     expect(fetchMock.mock.calls.filter(([input]) => String(input).includes("/issues")).length).toBe(0);
-    fireEvent.click(screen.getByRole("link", { name: "Issues" }));
+    fireEvent.click(primaryNavigation().getByRole("link", { name: "Issues" }));
     expect(await screen.findByText("Existing Issue")).toBeInTheDocument();
     expect(fetchMock.mock.calls.filter(([input]) => String(input).includes("/issues")).length).toBe(0);
   });
@@ -242,7 +352,7 @@ describe("LoongBoard metadata routes", () => {
         { pullRequests: "failed", issues: "idle" },
       ],
     });
-    appQueryClient.setQueryData(["metadata", "repo", "pulls", ":", null], {
+    appQueryClient.setQueryData(["metadata", "repo", "pulls", "::", null], {
       pages: [{ items: [oldPull], nextCursor: null, calendarTimeZone: "Asia/Shanghai" }],
       pageParams: [null],
     });
@@ -251,7 +361,7 @@ describe("LoongBoard metadata routes", () => {
     expect(await screen.findByText("Sync idle")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
     expect(await screen.findByText("Synced issue", {}, { timeout: 4_000 })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("link", { name: "Pull requests" }));
+    fireEvent.click(primaryNavigation().getByRole("link", { name: "Pull requests" }));
     expect(await screen.findByText("Existing pull")).toBeInTheDocument();
     expect(fetchMock.mock.calls.filter(([input]) => String(input).includes("/pulls")).length).toBe(0);
   });
@@ -269,7 +379,7 @@ describe("LoongBoard metadata routes", () => {
         { pullRequests: "idle", issues: "failed" },
       ],
     });
-    appQueryClient.setQueryData(["metadata", "repo", "issues", ":", null], {
+    appQueryClient.setQueryData(["metadata", "repo", "issues", "::", null], {
       pages: [{ items: [oldIssue], nextCursor: null, calendarTimeZone: "Asia/Shanghai" }],
       pageParams: [null],
     });
@@ -279,10 +389,10 @@ describe("LoongBoard metadata routes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
     expect(await screen.findByText("Delayed synced pull", {}, { timeout: 4_000 })).toBeInTheDocument();
     expect(await screen.findByText(/Last sync failed/, {}, { timeout: 4_000 })).toBeInTheDocument();
-    const issueQuery = appQueryClient.getQueryCache().find({ queryKey: ["metadata", "repo", "issues", ":", null] });
+    const issueQuery = appQueryClient.getQueryCache().find({ queryKey: ["metadata", "repo", "issues", "::", null] });
     expect(issueQuery?.state.isInvalidated).toBe(false);
     expect(issueQuery?.state.data).toMatchObject({ pages: [{ items: [oldIssue] }] });
-    fireEvent.click(screen.getByRole("link", { name: "Issues" }));
+    fireEvent.click(primaryNavigation().getByRole("link", { name: "Issues" }));
     expect(await screen.findByText("Existing Issue")).toBeInTheDocument();
   });
 
@@ -299,7 +409,7 @@ describe("LoongBoard metadata routes", () => {
         { pullRequests: "failed", issues: "idle" },
       ],
     });
-    appQueryClient.setQueryData(["metadata", "repo", "pulls", ":", null], {
+    appQueryClient.setQueryData(["metadata", "repo", "pulls", "::", null], {
       pages: [{ items: [oldPull], nextCursor: null, calendarTimeZone: "Asia/Shanghai" }],
       pageParams: [null],
     });
@@ -309,10 +419,10 @@ describe("LoongBoard metadata routes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
     expect(await screen.findByText("Delayed synced issue", {}, { timeout: 4_000 })).toBeInTheDocument();
     expect(await screen.findByText(/Last sync failed/, {}, { timeout: 4_000 })).toBeInTheDocument();
-    const pullQuery = appQueryClient.getQueryCache().find({ queryKey: ["metadata", "repo", "pulls", ":", null] });
+    const pullQuery = appQueryClient.getQueryCache().find({ queryKey: ["metadata", "repo", "pulls", "::", null] });
     expect(pullQuery?.state.isInvalidated).toBe(false);
     expect(pullQuery?.state.data).toMatchObject({ pages: [{ items: [oldPull] }] });
-    fireEvent.click(screen.getByRole("link", { name: "Pull requests" }));
+    fireEvent.click(primaryNavigation().getByRole("link", { name: "Pull requests" }));
     expect(await screen.findByText("Existing pull")).toBeInTheDocument();
   });
 
@@ -358,14 +468,143 @@ describe("LoongBoard metadata routes", () => {
     expect(await screen.findByText("Sync idle")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
     expect(await screen.findByText("Sync started.")).toBeInTheDocument();
-    fireEvent.change(screen.getByRole("combobox", { name: "Repository" }), { target: { value: "repo-b" } });
+    const nav = await screen.findByRole("navigation", { name: "Primary navigation" });
+    expect(within(nav).getByRole("button", { name: /LoongBoard acme\/project/ })).toHaveAttribute("aria-expanded", "true");
+    expect(within(nav).getByRole("button", { name: /LoongBoard B/ })).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(within(nav).getByRole("button", { name: /LoongBoard B/ }));
+    const bSections = within(nav).getByRole("navigation", {
+      name: "LoongBoard B sections",
+    });
+    fireEvent.click(within(bSections).getByRole("link", { name: "Pull requests" }));
     await waitFor(() => expect(abortedSyncStatusRepositories).toEqual(["repo"]));
     expect(await screen.findByText("B pull")).toBeInTheDocument();
-    fireEvent.change(screen.getByRole("combobox", { name: "Repository" }), { target: { value: "repo" } });
+    expect(within(nav).getByRole("button", { name: /LoongBoard acme\/project/ })).toHaveAttribute("aria-expanded", "true");
+    expect(within(nav).getByRole("button", { name: /LoongBoard B/ })).toHaveAttribute("aria-expanded", "true");
+    const aSections = within(nav).getByRole("navigation", {
+      name: "LoongBoard sections",
+    });
+    fireEvent.click(within(aSections).getByRole("link", { name: "Pull requests" }));
     expect(await screen.findByText("A synced pull", {}, { timeout: 4_000 })).toBeInTheDocument();
     expect(screen.queryByText("A synced pull")).toBeInTheDocument();
     expect(fetchMock.mock.calls.filter(([input]) => String(input).includes("/repositories/repo/pulls")).length).toBe(2);
     expect(fetchMock.mock.calls.filter(([input]) => String(input).includes("/repositories/repo-b/pulls")).length).toBe(1);
     expect(abortedSyncStatusRepositories.filter((repositoryId) => repositoryId === "repo")).toHaveLength(1);
+  });
+});
+
+describe("LoongBoard app shell", () => {
+  afterEach(() => {
+    appQueryClient.clear();
+    vi.unstubAllGlobals();
+  });
+
+  it("groups workspace and repository routes with the active repository expanded", async () => {
+    mockApi({ repositories: [repository, repositoryB] });
+    renderApp("/repositories/repo/issues");
+    const nav = await screen.findByRole("navigation", { name: "Primary navigation" });
+    expect(within(nav).getByRole("link", { name: "Board" })).toHaveAttribute("href", "/");
+    expect(within(nav).getByRole("link", { name: "Knowledge" })).toHaveAttribute("href", "/knowledge");
+    const repoNav = await within(nav).findByRole("navigation", { name: "LoongBoard sections" });
+    expect(within(repoNav).getByRole("link", { name: "Activity" })).toHaveAttribute("href", "/repositories/repo");
+    expect(within(repoNav).getByRole("link", { name: "Pull requests" })).toHaveAttribute("href", "/repositories/repo/pulls");
+    expect(within(repoNav).getByRole("link", { name: "Issues" })).toHaveAttribute("aria-current", "page");
+    expect(within(nav).getByRole("button", { name: /LoongBoard acme\/project/ })).toHaveAttribute("aria-expanded", "true");
+    expect(within(nav).getByRole("button", { name: /LoongBoard B/ })).toHaveAttribute("aria-expanded", "false");
+    const settingsLink = appSidebar().getByRole("link", { name: "Settings" });
+    expect(settingsLink).toHaveAttribute("href", "/settings");
+    expect(appSidebar().queryByRole("navigation", { name: "Settings sections" })).not.toBeInTheDocument();
+  });
+
+  it("enters Settings through one direct footer link", async () => {
+    mockApi();
+    renderApp("/");
+    const settingsLink = await screen.findByRole("link", { name: "Settings" });
+    expect(settingsLink).toHaveAttribute("href", "/settings");
+    expect(settingsLink).not.toHaveAttribute("aria-expanded");
+    expect(appSidebar().queryByRole("navigation", { name: "Settings sections" })).not.toBeInTheDocument();
+    fireEvent.click(settingsLink);
+    expect(await screen.findByRole("heading", { name: "LoongBoard settings" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Settings" })).toHaveClass("sidebar-settings__trigger--active");
+  });
+
+  it("marks direct Settings active and closes the mobile drawer", async () => {
+    mockApi();
+    renderApp("/");
+    fireEvent.click(screen.getByRole("button", { name: "Open navigation" }));
+    fireEvent.click(appSidebar().getByRole("link", { name: "Settings" }));
+    expect(
+      await screen.findByRole("heading", { name: "LoongBoard settings" }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Settings" })).toHaveClass("sidebar-settings__trigger--active");
+    expect(appSidebar().queryByRole("navigation", { name: "Settings sections" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Open navigation" })).toHaveAttribute("aria-expanded", "false");
+  });
+
+  it("shows repository context and sync action in the contextual topbar", async () => {
+    mockApi();
+    renderApp("/repositories/repo/pulls");
+    expect(await screen.findByText("Pull 2")).toBeInTheDocument();
+    const banner = await screen.findByRole("banner");
+    expect(within(banner).getByText("acme/project")).toBeInTheDocument();
+    expect(
+      within(banner).getByText("LoongBoard · Pull requests"),
+    ).toBeInTheDocument();
+    expect(await within(banner).findByText("Sync idle")).toBeInTheDocument();
+    expect(
+      within(banner).getByRole("button", { name: "Sync now" }),
+    ).toBeInTheDocument();
+  });
+
+  it("redirects the legacy health route into Settings > Health", async () => {
+    mockApi();
+    renderApp("/health");
+    expect(
+      await screen.findByRole("heading", { name: "LoongBoard settings" }),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByRole("heading", { name: "Service health" }),
+    ).toBeInTheDocument();
+  });
+
+  it("lists PR rows as an accessible community-style feed", async () => {
+    mockApi();
+    renderApp("/repositories/repo/pulls");
+    const feed = await screen.findByRole("list", { name: "Pull request feed" });
+    const pullRows = within(feed).getAllByRole("link", {
+      name: /^Pull request #\d+: /,
+    });
+    expect(pullRows).toHaveLength(2);
+    const pullRow = pullRows[0] as HTMLElement;
+    expect(pullRow).toHaveAttribute("tabindex", "0");
+    expect(within(pullRow).queryByRole("link", { name: "Pull 2" })).not.toBeInTheDocument();
+    expect(
+      within(pullRow).getByRole("link", {
+        name: "Open pull request #2 on GitHub",
+      }),
+    ).toHaveAttribute("href", "https://github.com/acme/project/pull/2");
+    expect(within(pullRow).queryByRole("link", { name: "Open GitHub" })).not.toBeInTheDocument();
+    expect(within(feed).getAllByText("open").some((element) => element.closest(".status-pill") !== null)).toBe(true);
+    fireEvent.click(pullRow);
+    expect(await screen.findByRole("heading", { name: "Pull request unavailable" })).toBeInTheDocument();
+  });
+
+  it("switches the shell theme from the default light tokens", async () => {
+    mockApi();
+    renderApp("/");
+    const shell = document.querySelector(".app-shell");
+    expect(shell).toHaveAttribute("data-theme", "light");
+    fireEvent.click(screen.getByRole("button", { name: "Dark" }));
+    expect(shell).toHaveAttribute("data-theme", "dark");
+    expect(screen.getByRole("button", { name: "Dark" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("retains the app chrome on non-PR repository routes", async () => {
+    mockApi();
+    renderApp("/repositories/repo/issues");
+    expect(await screen.findByRole("heading", { name: "Issues" })).toBeInTheDocument();
+    expect(screen.getByRole("navigation", { name: "Primary navigation" })).toBeInTheDocument();
+    expect(screen.getByRole("banner")).toBeInTheDocument();
+    expect(screen.getByText("LoongBoard · local-first engineering workspace")).toBeInTheDocument();
+    expect(document.querySelector(".app-shell")).not.toHaveClass("app-shell--pr-focus");
   });
 });

@@ -78,7 +78,7 @@ Invalid request data returns HTTP 400. An invalid cursor uses
 | S1-T1 contracts and persistence | Luna Max | `packages/contracts/**`, `packages/database/**` |
 | S1-T2 GitHub provider | Luna High | `packages/github/**` |
 | S1-T3 Web metadata lists | Luna High | `apps/web/**` |
-| S1-T4 Server integration | Integration Lead after T1/T2 | `apps/server/**`, Stage 1 integration fixtures |
+| S1-T4 Server integration | Integration Lead after T1/T2 | `apps/server/**`, focused server UT |
 | S1-T5 review and acceptance | Team Lead and independent reviewer | fixes assigned after review |
 
 No two implementation tasks may modify the same package. Root manifests and

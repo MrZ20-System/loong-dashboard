@@ -20,12 +20,13 @@ import {
 import { nextOccurrence } from "@loongboard/scheduler";
 
 import type { AgentChatController } from "./agent-chat.js";
+import type { WorkspaceRunCoordinator } from "./workspace-run-coordinator.js";
 
 export class ScheduledTaskWorkspaceBusyError extends Error {
   readonly code = "SCHEDULED_TASK_WORKSPACE_BUSY" as const;
 
   constructor(workspacePath: string) {
-    super(`Another scheduled agent run is already using the workspace: ${workspacePath}`);
+    super(`Another agent run is already using the workspace: ${workspacePath}`);
     this.name = "ScheduledTaskWorkspaceBusyError";
   }
 }
@@ -33,6 +34,8 @@ export class ScheduledTaskWorkspaceBusyError extends Error {
 export interface SchedulerEngineOptions {
   database: DatabaseClient;
   chats: AgentChatController;
+  /** Shared in-process ownership guard for every agent workspace. */
+  workspaceRuns: WorkspaceRunCoordinator;
   /** Root for per-run DSH homes (plan 13.2). */
   agentSessionsPath: string;
   now?: () => Date;
@@ -49,10 +52,10 @@ export interface SchedulerEngineOptions {
 export class SchedulerEngine {
   private readonly database: DatabaseClient;
   private readonly chats: AgentChatController;
+  private readonly workspaceRuns: WorkspaceRunCoordinator;
   private readonly agentSessionsPath: string;
   private readonly now: () => Date;
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
-  private readonly workspaceLocks = new Set<string>();
   private readonly runningRuns = new Map<string, Promise<void>>();
   private readonly runContext = new Map<string, { workspacePath: string }>();
   private closed = false;
@@ -60,6 +63,7 @@ export class SchedulerEngine {
   constructor(options: SchedulerEngineOptions) {
     this.database = options.database;
     this.chats = options.chats;
+    this.workspaceRuns = options.workspaceRuns;
     this.agentSessionsPath = options.agentSessionsPath;
     this.now = options.now ?? (() => new Date());
   }
@@ -101,7 +105,6 @@ export class SchedulerEngine {
     while (this.runningRuns.size > 0) {
       await Promise.all([...this.runningRuns.values()]);
     }
-    this.workspaceLocks.clear();
   }
 
   listRuns(taskId: string): ScheduledRunRow[] {
@@ -114,17 +117,26 @@ export class SchedulerEngine {
    */
   async runNow(taskId: string): Promise<{ runId: string }> {
     const task = requireScheduledTask(this.database, taskId);
-    if (this.workspaceLocks.has(task.workspacePath)) {
+    const release = this.workspaceRuns.acquire(task.workspacePath);
+    if (release === null) {
       throw new ScheduledTaskWorkspaceBusyError(task.workspacePath);
     }
-    const run = insertScheduledRun(this.database, task.id, this.timestamp());
-    this.runContext.set(run.id, { workspacePath: task.workspacePath });
-    const promise = this.executeRun(run.id).catch((error: unknown) => {
-      this.failRun(run.id, error);
-    });
-    this.runningRuns.set(run.id, promise);
-    void promise.finally(() => this.runningRuns.delete(run.id));
-    return { runId: run.id };
+    try {
+      const run = insertScheduledRun(this.database, task.id, this.timestamp());
+      this.runContext.set(run.id, { workspacePath: task.workspacePath });
+      const promise = this.executeRun(run.id).catch((error: unknown) => {
+        this.failRun(run.id, error);
+      });
+      this.runningRuns.set(run.id, promise);
+      void promise.finally(() => {
+        this.runningRuns.delete(run.id);
+        release();
+      });
+      return { runId: run.id };
+    } catch (error) {
+      release();
+      throw error;
+    }
   }
 
   private databaseTask(taskId: string): ScheduledTaskRow {
@@ -175,7 +187,10 @@ export class SchedulerEngine {
     }
     // A busy workspace defers the SAME occurrence without advancing the
     // schedule: retry later instead of silently skipping or running early.
-    if (this.workspaceLocks.has(task.workspacePath)) {
+    // Acquire before inserting the run so an interleaved manual chat cannot
+    // create a run that immediately fails as busy.
+    const release = this.workspaceRuns.acquire(task.workspacePath);
+    if (release === null) {
       const retry = setTimeout(() => {
         this.timers.delete(taskId);
         void this.fire(taskId).catch(() => undefined);
@@ -183,23 +198,30 @@ export class SchedulerEngine {
       this.timers.set(taskId, retry);
       return;
     }
-    // Arm the next future occurrence before running so a crash cannot replay
-    // the missed run (plan 16.2 restart semantics).
-    const updated = this.storeNextRun(task);
-    this.schedule(taskId);
+    try {
+      // Arm the next future occurrence before running so a crash cannot
+      // replay the missed run (plan 16.2 restart semantics).
+      const updated = this.storeNextRun(task);
+      this.schedule(taskId);
 
-    const run = insertScheduledRun(this.database, task.id, scheduledFor);
-    this.runContext.set(run.id, { workspacePath: updated.workspacePath });
-    const promise = this.executeRun(run.id);
-    this.runningRuns.set(run.id, promise);
-    void promise.finally(() => this.runningRuns.delete(run.id));
+      const run = insertScheduledRun(this.database, task.id, scheduledFor);
+      this.runContext.set(run.id, { workspacePath: updated.workspacePath });
+      const promise = this.executeRun(run.id);
+      this.runningRuns.set(run.id, promise);
+      void promise.finally(() => {
+        this.runningRuns.delete(run.id);
+        release();
+      });
+    } catch (error) {
+      release();
+      throw error;
+    }
   }
 
   private async executeRun(runId: string): Promise<void> {
     const run = this.requireRun(runId);
     const task = requireScheduledTask(this.database, run.taskId);
     const workspace = this.runContext.get(runId)?.workspacePath ?? task.workspacePath;
-    this.workspaceLocks.add(workspace);
     updateScheduledRun(this.database, run.id, { startedAt: this.timestamp() });
     const sessionId = `sess_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
     let finishedStatus: ScheduledRunRow["status"] = "completed";
@@ -223,7 +245,9 @@ export class SchedulerEngine {
         role: "user",
         contentMarkdown: task.prompt,
       });
-      const session = await this.chats.runSessionTurn(sessionId, task.prompt);
+      const session = await this.chats.runSessionTurn(sessionId, task.prompt, {
+        workspaceOwned: true,
+      });
       if (session.status !== "idle") {
         finishedStatus = "failed";
         failureMessage = `Agent session ended with status: ${session.status}`;
@@ -232,7 +256,6 @@ export class SchedulerEngine {
       finishedStatus = "failed";
       failureMessage = error instanceof Error ? error.message : String(error);
     } finally {
-      this.workspaceLocks.delete(workspace);
       this.runContext.delete(runId);
       updateScheduledRun(this.database, run.id, {
         status: finishedStatus,
@@ -256,8 +279,6 @@ export class SchedulerEngine {
   private failRun(runId: string, error: unknown): void {
     try {
       const run = this.requireRun(runId);
-      const workspace = this.runContext.get(runId)?.workspacePath;
-      if (workspace !== undefined) this.workspaceLocks.delete(workspace);
       this.runContext.delete(runId);
       updateScheduledRun(this.database, run.id, {
         status: "failed",

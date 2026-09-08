@@ -12,6 +12,7 @@ export {
   getRepository,
   listRepositories,
   reconcileRepositories,
+  requireRepository,
   RepositoryNotFoundError,
 } from "./repository-service.js";
 export {
@@ -31,16 +32,28 @@ export type {
   FailStreamInput,
 } from "./sync-service.js";
 export {
+  listWorktreeSlots,
+  recordWorktreeSlotUse,
+} from "./worktree-slot-service.js";
+export type {
+  RecordWorktreeSlotUseInput,
+  WorktreeSlotRow,
+} from "./worktree-slot-service.js";
+export {
   getIssueActivityDays,
   getIssueDetail,
+  getIssueDetailCacheState,
+  getIssueDetailSyncedUpdatedAt,
   getPullRequestActivityDays,
   InvalidCursorError,
   listIssues,
   listPullRequests,
+  replaceIssueDetailCache,
   upsertIssuePage,
   upsertPullRequestPage,
   getPullRequestDetail,
 } from "./metadata-service.js";
+export type { IssueDetailCacheState } from "./metadata-service.js";
 export {
   createDomainRule,
   deleteDomainRule,
@@ -137,6 +150,10 @@ export type {
   DomainRuleRecord,
   DomainTag,
   EntityKind,
+  IssueComment,
+  IssueCommentInput,
+  IssueDetail,
+  IssueDetailCacheInput,
   IssueListItem,
   IssueMetadata,
   IssueStatus,

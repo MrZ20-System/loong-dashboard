@@ -5,10 +5,12 @@ import {
   preparePullResponseSchema,
   pullRequestDetailSchema,
   pullRequestParamsSchema,
+  repositoryTreeResponseSchema,
   type FileContentResponse,
   type LocalCommandResponse,
   type PreparePullResponse,
   type PullRequestDetail,
+  type RepositoryTreeResponse,
 } from "@loongboard/contracts";
 
 import { request } from "./metadata-client";
@@ -69,6 +71,19 @@ export function fetchFileContent(
   return readQuery(
     `${pullRequestUrl(params.id, params.number)}/file?${search}`,
     fileContentResponseSchema,
+    signal,
+  );
+}
+
+export function fetchRepositoryTree(
+  repositoryId: string,
+  number: number,
+  signal?: AbortSignal,
+): Promise<RepositoryTreeResponse> {
+  const params = pullRequestParamsSchema.parse({ id: repositoryId, number });
+  return readQuery(
+    `${pullRequestUrl(params.id, params.number)}/tree`,
+    repositoryTreeResponseSchema,
     signal,
   );
 }

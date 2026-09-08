@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, extname, join, relative, resolve, sep } from "node:path";
 
@@ -12,6 +12,12 @@ export interface KnowledgeFileInfo {
   sizeBytes: number;
   /** ISO-8601 mtime of the file. */
   updatedAt: string;
+}
+
+/** One scan result, including the bytes already read while parsing metadata. */
+export interface KnowledgeFileSnapshot extends KnowledgeFileInfo {
+  content: string;
+  contentHash: string;
 }
 
 export interface ParsedDocument {
@@ -29,6 +35,22 @@ const EXCLUDED_DIRECTORIES = new Set([".git", "node_modules", ".loong"]);
 const isMarkdown = (path: string): boolean =>
   [".md", ".markdown"].includes(extname(path).toLowerCase());
 
+/**
+ * Leading `---` front matter block. Capture groups:
+ * 1. line ending after the opening delimiter,
+ * 2. header text,
+ * 3. line ending before the closing delimiter,
+ * 4. optional line ending after the closing delimiter.
+ */
+const FRONT_MATTER_BLOCK = /^---(\r?\n)([\s\S]*?)(\r?\n)---(\r?\n|$)/;
+
+const LOONGBOARD_ID_LINE = /^loongboard_id:[ \t]*(.*)$/;
+
+interface SplitLine {
+  text: string;
+  ending: string;
+}
+
 export function documentId(): string {
   return `doc_${randomBytes(10).toString("hex")}`;
 }
@@ -44,8 +66,8 @@ export function isWithinRoot(root: string, path: string): boolean {
  * Recursively list Markdown files under `root` (plan 15.1). Document titles
  * come from the front matter heading when present, otherwise the file name.
  */
-export function scanKnowledgeFiles(root: string): KnowledgeFileInfo[] {
-  const entries: KnowledgeFileInfo[] = [];
+export function scanKnowledgeFiles(root: string): KnowledgeFileSnapshot[] {
+  const entries: KnowledgeFileSnapshot[] = [];
   const walk = (directory: string): void => {
     let children: string[] = [];
     try {
@@ -69,7 +91,8 @@ export function scanKnowledgeFiles(root: string): KnowledgeFileInfo[] {
       }
       if (!stats.isFile() || !isMarkdown(child)) continue;
       const repositoryPath = toPosix(relative(root, absolute));
-      const parsed = parseMarkdown(readUtf8(absolute));
+      const content = readUtf8(absolute);
+      const parsed = parseMarkdown(content);
       const fallbackTitle = repositoryPath.split("/").at(-1)?.replace(/\.md$/, "") ?? repositoryPath;
       entries.push({
         path: repositoryPath,
@@ -77,6 +100,8 @@ export function scanKnowledgeFiles(root: string): KnowledgeFileInfo[] {
         title: parsed.title ?? fallbackTitle,
         sizeBytes: stats.size,
         updatedAt: new Date(stats.mtimeMs).toISOString(),
+        content,
+        contentHash: createHash("sha256").update(content).digest("hex"),
       });
     }
   };
@@ -106,11 +131,11 @@ function firstHeadingTitle(body: string): string | null {
  * else is left untouched by save operations.
  */
 export function parseMarkdown(raw: string): ParsedDocument {
-  const match = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(raw);
+  const match = FRONT_MATTER_BLOCK.exec(raw);
   if (match === null) {
     return { documentId: null, title: null, body: raw, raw };
   }
-  const header = match[1] ?? "";
+  const header = match[2] ?? "";
   const body = raw.slice((match[0] ?? "").length);
   const fields = new Map<string, string>();
   for (const line of header.split(/\r?\n/)) {
@@ -142,7 +167,69 @@ export function createMarkdown(
   return serializeDocument(documentIdValue, `${headingPrefix}${normalizedBody}`);
 }
 
-/** Insert a front-matter id into Markdown that has none (first LoongBoard save). */
+function splitLinesWithEndings(value: string): SplitLine[] {
+  const lines: SplitLine[] = [];
+  const lineEnding = /\r?\n/g;
+  let cursor = 0;
+  for (let match = lineEnding.exec(value); match !== null; match = lineEnding.exec(value)) {
+    lines.push({ text: value.slice(cursor, match.index), ending: match[0] });
+    cursor = match.index + match[0].length;
+  }
+  if (cursor < value.length) lines.push({ text: value.slice(cursor), ending: "" });
+  return lines;
+}
+
+function joinLinesWithEndings(lines: readonly SplitLine[]): string {
+  let joined = "";
+  for (const line of lines) joined += line.text + line.ending;
+  return joined;
+}
+
+function loongboardIdValue(line: string): string | null {
+  const match = LOONGBOARD_ID_LINE.exec(line);
+  return match === null ? null : (match[1] ?? "").trim();
+}
+
+/**
+ * Return `raw` with exactly one `loongboard_id` front-matter field set to
+ * `id`, preserving every other front matter byte. When the document has no
+ * front matter a minimal block is prepended; when the front matter has no id
+ * the line is inserted just before the closing delimiter; a matching id
+ * leaves `raw` unchanged; a stale id is replaced in place.
+ */
+export function withDocumentId(raw: string, id: string): string {
+  const block = FRONT_MATTER_BLOCK.exec(raw);
+  if (block === null) {
+    return serializeDocument(id, raw);
+  }
+  const prefix = block[0] ?? "";
+  const lines = splitLinesWithEndings(prefix);
+  // The closing delimiter is the last line of the matched prefix.
+  const closingLineIndex = lines.length - 1;
+  let idLineIndex = -1;
+  for (let index = closingLineIndex - 1; index >= 0; index -= 1) {
+    if (loongboardIdValue(lines[index]?.text ?? "") !== null) {
+      idLineIndex = index;
+      break;
+    }
+  }
+  if (idLineIndex === -1) {
+    lines.splice(closingLineIndex, 0, {
+      text: `loongboard_id: ${id}`,
+      ending: block[1] ?? "\n",
+    });
+    return `${joinLinesWithEndings(lines)}${raw.slice(prefix.length)}`;
+  }
+  if (loongboardIdValue(lines[idLineIndex]?.text ?? "") === id) return raw;
+  lines[idLineIndex] = { text: `loongboard_id: ${id}`, ending: lines[idLineIndex]?.ending ?? "" };
+  return `${joinLinesWithEndings(lines)}${raw.slice(prefix.length)}`;
+}
+
+/**
+ * Ensure Markdown carries a front-matter id. Existing content keeps its id;
+ * otherwise `preferredId` is adopted (or generated) without stripping any
+ * existing front matter fields.
+ */
 export function ensureDocumentId(
   raw: string,
   preferredId: string = documentId(),
@@ -151,9 +238,8 @@ export function ensureDocumentId(
   if (parsed.documentId !== null) {
     return { content: raw, documentId: parsed.documentId };
   }
-  const withoutFrontMatter = raw.replace(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/, "");
   return {
-    content: serializeDocument(preferredId, withoutFrontMatter),
+    content: withDocumentId(raw, preferredId),
     documentId: preferredId,
   };
 }

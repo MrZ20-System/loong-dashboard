@@ -8,6 +8,8 @@ import {
   completeSyncStream,
   failSyncStream,
   getIssueActivityDays,
+  getIssueDetail,
+  getIssueDetailSyncedUpdatedAt,
   getPullRequestActivityDays,
   getRepositorySyncStatus,
   getRepositorySyncState,
@@ -16,6 +18,7 @@ import {
   listPullRequests,
   openDatabase,
   reconcileRepositories,
+  replaceIssueDetailCache,
   startRepositorySync,
   upsertIssuePage,
   upsertPullRequestPage,
@@ -274,6 +277,158 @@ describe("sync state persistence", () => {
   });
 });
 
+describe("Issue detail cache", () => {
+  it("replaces body/comments transactionally, sorts them, and keeps lists summary-only", () => {
+    withDatabase((database) => {
+      reconcileRepositories(database, [repository("repo")]);
+      upsertIssuePage(database, "repo", [
+        issue(7, "2026-09-03T00:00:00.000Z"),
+      ]);
+      replaceIssueDetailCache(database, "repo", {
+        number: 7,
+        title: "Issue 7",
+        url: "https://github.com/example/repo/issues/7",
+        state: "open",
+        authorLogin: "author",
+        commentsCount: 3,
+        createdAt: "2026-09-01T00:00:00.000Z",
+        updatedAt: "2026-09-03T00:00:00.000Z",
+        closedAt: null,
+        body: "The issue body.",
+        comments: [
+          comment(3, "2026-09-03T00:02:00.000Z", "third"),
+          comment(1, "2026-09-03T00:01:00.000Z", "first"),
+          comment(2, "2026-09-03T00:01:00.000Z", "second"),
+        ],
+      });
+
+      expect(getIssueDetailSyncedUpdatedAt(database, "repo", 7)).toBe(
+        "2026-09-03T00:00:00.000Z",
+      );
+      expect(getIssueDetail(database, "repo", 7)).toMatchObject({
+        number: 7,
+        title: "Issue 7",
+        detailBody: "The issue body.",
+        commentsCount: 3,
+        comments: [
+          { id: 1, authorLogin: "alice", body: "first" },
+          { id: 2, authorLogin: "bob", body: "second" },
+          { id: 3, authorLogin: null, body: "third" },
+        ],
+      });
+
+      const list = listIssues(database, "repo", { calendarTimeZone: "UTC" });
+      expect(list.items[0]).toEqual({
+        repositoryId: "repo",
+        number: 7,
+        title: "Issue 7",
+        url: "https://github.com/example/repo/issues/7",
+        authorLogin: "author",
+        status: "open",
+        commentsCount: 3,
+        updatedAt: "2026-09-03T00:00:00.000Z",
+      });
+      expect(JSON.stringify(list)).not.toContain("comment body text");
+      expect(JSON.stringify(list)).not.toContain("issue_body_marker");
+    });
+  });
+
+  it("keeps the cached body/comments when a later summary upsert advances updated_at", () => {
+    withDatabase((database) => {
+      reconcileRepositories(database, [repository("repo")]);
+      upsertIssuePage(database, "repo", [
+        issue(7, "2026-09-03T00:00:00.000Z"),
+      ]);
+      replaceIssueDetailCache(database, "repo", {
+        number: 7,
+        title: "Issue 7",
+        url: "https://github.com/example/repo/issues/7",
+        state: "open",
+        authorLogin: "author",
+        commentsCount: 1,
+        createdAt: "2026-09-01T00:00:00.000Z",
+        updatedAt: "2026-09-03T00:00:00.000Z",
+        closedAt: null,
+        body: "cached body marker",
+        comments: [comment(1, "2026-09-02T00:00:00.000Z", "cached comment")],
+      });
+
+      upsertIssuePage(database, "repo", [
+        issue(7, "2026-09-04T00:00:00.000Z", {
+          title: "Updated by sync",
+          commentsCount: 5,
+        }),
+      ]);
+
+      expect(getIssueDetailSyncedUpdatedAt(database, "repo", 7)).toBe(
+        "2026-09-03T00:00:00.000Z",
+      );
+      expect(getIssueDetail(database, "repo", 7)).toMatchObject({
+        title: "Updated by sync",
+        updatedAt: "2026-09-04T00:00:00.000Z",
+        detailBody: "cached body marker",
+        comments: [{ id: 1, body: "cached comment" }],
+      });
+    });
+  });
+
+  it("cascades comment rows when the owning Issue is deleted", () => {
+    withDatabase((database) => {
+      reconcileRepositories(database, [repository("repo")]);
+      upsertIssuePage(database, "repo", [
+        issue(7, "2026-09-03T00:00:00.000Z"),
+      ]);
+      replaceIssueDetailCache(database, "repo", {
+        number: 7,
+        title: "Issue 7",
+        url: "https://github.com/example/repo/issues/7",
+        state: "open",
+        authorLogin: "author",
+        commentsCount: 1,
+        createdAt: "2026-09-01T00:00:00.000Z",
+        updatedAt: "2026-09-03T00:00:00.000Z",
+        closedAt: null,
+        body: "body",
+        comments: [comment(1, "2026-09-02T00:00:00.000Z")],
+      });
+
+      database
+        .prepare("DELETE FROM issues WHERE repository_id = ? AND number = ?")
+        .run("repo", 7);
+
+      expect(
+        database
+          .prepare(
+            "SELECT COUNT(*) AS count FROM issue_comments WHERE repository_id = ? AND issue_number = ?",
+          )
+          .get("repo", 7),
+      ).toEqual({ count: 0 });
+    });
+  });
+});
+
+function comment(
+  id: number,
+  createdAt: string,
+  body = "comment body text",
+): {
+  id: number;
+  authorLogin: string | null;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  url: string;
+} {
+  return {
+    id,
+    authorLogin: id === 1 ? "alice" : id === 2 ? "bob" : null,
+    body,
+    createdAt,
+    updatedAt: createdAt,
+    url: `https://github.com/example/repo/issues/7#issuecomment-${id}`,
+  };
+}
+
 describe("metadata upserts and queries", () => {
   it("replays PR and Issue pages idempotently while updating metadata", () => {
     withDatabase((database) => {
@@ -400,6 +555,13 @@ describe("metadata upserts and queries", () => {
           date: "2026-03-09",
         }).items.map((item) => item.number),
       ).toEqual([3]);
+      expect(
+        listPullRequests(database, "repo", {
+          calendarTimeZone: "America/New_York",
+          from: "2026-03-08",
+          to: "2026-03-09",
+        }).items.map((item) => item.number),
+      ).toEqual([3, 2]);
     });
   });
 

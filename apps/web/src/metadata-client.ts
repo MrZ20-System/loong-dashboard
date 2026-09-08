@@ -23,8 +23,14 @@ import {
 
 export type { IssueListItem, PullRequestListItem, RepositorySummary } from "@loongboard/contracts";
 
+export type DateRange = {
+  from: string | null;
+  to: string | null;
+};
+
 export type MetadataFilters = {
-  date: string | null;
+  from: string | null;
+  to: string | null;
   status: string | null;
   /** Repeated `?domain=` values; pull request lists only. */
   domains: string[];
@@ -46,30 +52,60 @@ export function isValidDate(value: string | null): value is string {
   return calendarDateSchema.safeParse(value).success;
 }
 
+/** Read a complete range, with a fallback for malformed or legacy URLs. */
+export function readDateRange(
+  params: URLSearchParams,
+  fallback: DateRange,
+): DateRange {
+  const legacyDate = params.get("date");
+  const rawFrom = params.get("from");
+  const rawTo = params.get("to");
+  if (rawFrom === null && rawTo === null) {
+    if (legacyDate !== null && isValidDate(legacyDate)) {
+      return { from: legacyDate, to: legacyDate };
+    }
+    return fallback;
+  }
+  if (!isValidDate(rawFrom) || !isValidDate(rawTo) || rawFrom > rawTo) {
+    return fallback;
+  }
+  return { from: rawFrom, to: rawTo };
+}
+
 export function readMetadataFilters(
   kind: "pulls" | "issues",
   params: URLSearchParams,
 ): MetadataFilters {
+  const fromValue = params.get("from");
+  const toValue = params.get("to");
   const dateValue = params.get("date");
   const statusValue = params.get("status");
   const rawDomainValues = kind === "pulls" ? params.getAll("domain") : [];
   const querySchema = kind === "pulls" ? pullRequestsQuerySchema : issuesQuerySchema;
   const candidate: Record<string, unknown> = {};
+  if (fromValue !== null) candidate.from = fromValue;
+  if (toValue !== null) candidate.to = toValue;
   if (dateValue !== null) candidate.date = dateValue;
   if (statusValue !== null) candidate.status = statusValue;
   if (rawDomainValues.length > 0) candidate.domain = rawDomainValues;
   const parsed = querySchema.safeParse(candidate);
   if (parsed.success) {
-    const data = parsed.data as { date?: string; status?: string; domain?: string[] };
+    const data = parsed.data as { from?: string; to?: string; status?: string; domain?: string[] };
     return {
-      date: data.date ?? null,
+      from: data.from ?? null,
+      to: data.to ?? null,
       status: data.status ?? null,
       domains: kind === "pulls" ? (data.domain ?? []) : [],
     };
   }
   const statusSchema = kind === "pulls" ? pullRequestStatusSchema : issueStatusSchema;
+  const legacyDate = isValidDate(dateValue) ? dateValue : null;
+  const from = fromValue === null ? legacyDate : isValidDate(fromValue) ? fromValue : null;
+  const to = toValue === null ? legacyDate : isValidDate(toValue) ? toValue : null;
+  const validOrder = from === null || to === null || from <= to;
   return {
-    date: isValidDate(dateValue) ? dateValue : null,
+    from: validOrder ? from : null,
+    to: validOrder ? to : null,
     status: statusSchema.safeParse(statusValue).success ? statusValue : null,
     domains: rawDomainValues
       .filter((value) => domainRuleIdSchema.safeParse(value).success)
@@ -80,10 +116,21 @@ export function readMetadataFilters(
 export function buildListUrl(
   repositoryId: string,
   kind: "pulls" | "issues",
-  filters: { date?: string | null; status?: string | null; cursor?: string | null; domains?: string[] | null },
+  filters: {
+    from?: string | null;
+    to?: string | null;
+    /** Accepted for callers that still pass the pre-range shape. */
+    date?: string | null;
+    status?: string | null;
+    cursor?: string | null;
+    domains?: string[] | null;
+  },
 ): string {
   const query = new URLSearchParams();
-  if (filters.date) query.set("date", filters.date);
+  const from = filters.from ?? filters.date ?? null;
+  const to = filters.to ?? filters.date ?? null;
+  if (from) query.set("from", from);
+  if (to) query.set("to", to);
   if (filters.status) query.set("status", filters.status);
   for (const domain of filters.domains ?? []) query.append("domain", domain);
   if (filters.cursor) query.set("cursor", filters.cursor);
@@ -150,7 +197,14 @@ export function fetchRepositories(
 export function fetchList(
   repositoryId: string,
   kind: "pulls" | "issues",
-  filters: { date?: string | null; status?: string | null; cursor?: string | null; domains?: string[] | null },
+  filters: {
+    from?: string | null;
+    to?: string | null;
+    date?: string | null;
+    status?: string | null;
+    cursor?: string | null;
+    domains?: string[] | null;
+  },
   signal?: AbortSignal,
   fetchImpl: typeof fetch = globalThis.fetch,
 ): Promise<PullRequestsResponse | IssuesResponse> {

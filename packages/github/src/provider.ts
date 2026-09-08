@@ -19,6 +19,10 @@ const PAGE_SIZE = 100;
 const WATERMARK_OVERLAP_MS = 2 * 60 * 1000;
 const DEFAULT_LOOKBACK_DAYS = 90;
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
+const DEFAULT_API_BASE_URL = "https://api.github.com";
+const GRAPHQL_PATH = "graphql";
+const GITHUB_API_VERSION = "2022-11-28";
+const GITHUB_USER_AGENT = "loongboard-github-provider";
 
 /** The repository coordinates accepted by the GitHub GraphQL API. */
 export interface RepositoryRef {
@@ -99,6 +103,35 @@ export interface IssueMetadata {
   readonly closedAt: string | null;
 }
 
+export interface IssueDetailInput {
+  readonly repository: RepositoryRef;
+  readonly number: number;
+}
+
+export interface FetchedIssueComment {
+  readonly id: number;
+  readonly authorLogin: string | null;
+  readonly body: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly url: string;
+}
+
+/** Lazily fetched Issue body and comments, normalized to LoongBoard fields. */
+export interface FetchedIssueDetail {
+  readonly number: number;
+  readonly title: string;
+  readonly url: string;
+  readonly state: IssueStatus;
+  readonly authorLogin: string | null;
+  readonly commentsCount: number;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly closedAt: string | null;
+  readonly body: string;
+  readonly comments: readonly FetchedIssueComment[];
+}
+
 export interface PullRequestPage {
   readonly items: readonly PullRequestMetadata[];
   readonly pageInfo: GitHubPageInfo;
@@ -119,17 +152,37 @@ export interface GitHubMetadataProvider {
   fetchPullRequestFiles(
     input: PullRequestFilesInput,
   ): Promise<PullRequestFilesResult[]>;
+  fetchIssueDetail(input: IssueDetailInput): Promise<FetchedIssueDetail>;
 }
 
 export interface GhGitHubMetadataProviderOptions {
-  /** Override only for tests or an explicitly configured gh installation. */
+  /**
+   * gh executable. Used only to resolve `gh auth token` when no other token
+   * source is available; kept under the original name for compatibility.
+   */
   readonly ghExecutable?: string;
+  /**
+   * Injectable token source used verbatim by this provider. When omitted,
+   * the provider prefers `GITHUB_TOKEN` and then runs `gh auth token`
+   * exactly once per successful resolution.
+   */
+  readonly tokenResolver?: GitHubTokenResolver;
+  /** Injectable fetch implementation, mainly for deterministic tests. */
+  readonly fetch?: GitHubFetch;
+  /** GraphQL/REST API origin. Defaults to the public GitHub API. */
+  readonly apiBaseUrl?: string;
+  /** Timeout for token resolution and each HTTP request. */
   readonly commandTimeoutMs?: number;
   readonly lookbackDays?: number;
 }
 
+/** Signature compatible with Node's global fetch. */
+export type GitHubFetch = typeof fetch;
+/** Token resolution seam; the returned token is cached in memory only. */
+export type GitHubTokenResolver = () => string | Promise<string>;
+
 export class GitHubCommandError extends Error {
-  readonly command = "gh api graphql";
+  readonly command = "gh auth token";
   readonly repository: string;
   readonly exitCode: number | null;
   readonly stderr: string;
@@ -142,7 +195,7 @@ export class GitHubCommandError extends Error {
   ) {
     const detail = stderr.length > 0 ? `: ${truncate(stderr)}` : "";
     super(
-      `GitHub GraphQL command failed for ${repository} (exit code ${exitCode ?? "unknown"})${detail}`,
+      `GitHub auth token command failed for ${repository} (exit code ${exitCode ?? "unknown"})${detail}`,
       { cause },
     );
     this.name = "GitHubCommandError";
@@ -153,7 +206,11 @@ export class GitHubCommandError extends Error {
 }
 
 /** GraphQL/REST operations surfaced in provider error types. */
-export type GitHubOperation = "PullRequests" | "Issues" | "PullRequestFiles";
+export type GitHubOperation =
+  | "PullRequests"
+  | "Issues"
+  | "PullRequestFiles"
+  | "IssueDetail";
 
 export class GitHubResponseError extends Error {
   readonly repository: string;
@@ -193,6 +250,38 @@ export class GitHubGraphQLError extends Error {
     this.repository = repository;
     this.operation = operation;
     this.messages = messages.map(truncate);
+  }
+}
+
+/** An HTTP request to GitHub failed at the transport or status layer. */
+export class GitHubHttpError extends Error {
+  readonly repository: string;
+  readonly operation: GitHubOperation;
+  readonly method: string;
+  readonly url: string;
+  readonly status: number | null;
+
+  constructor(
+    repository: string,
+    operation: GitHubOperation,
+    method: string,
+    url: string,
+    status: number | null,
+    detail: string,
+    cause?: unknown,
+  ) {
+    const statusLabel = status === null ? "without an HTTP response" : `HTTP ${status}`;
+    const suffix = detail.length > 0 ? `: ${truncate(detail)}` : "";
+    super(
+      `GitHub ${operation} request ${statusLabel} failed for ${repository} (${method} ${url})${suffix}`,
+      { cause },
+    );
+    this.name = "GitHubHttpError";
+    this.repository = repository;
+    this.operation = operation;
+    this.method = method;
+    this.url = url;
+    this.status = status;
   }
 }
 
@@ -374,6 +463,34 @@ const restPullRequestFileSchema = z.object({
   previous_filename: z.string().min(1).optional(),
 });
 
+const restUserSchema = z
+  .object({
+    login: z.string().min(1),
+  })
+  .nullable();
+
+const restIssueSchema = z.object({
+  number: z.number().int().positive(),
+  title: z.string(),
+  html_url: z.string().url(),
+  state: z.enum(["open", "closed"]),
+  user: restUserSchema,
+  body: z.string().nullable(),
+  comments: z.number().int().nonnegative(),
+  created_at: dateTimeSchema,
+  updated_at: dateTimeSchema,
+  closed_at: nullableDateTimeSchema,
+});
+
+const restIssueCommentSchema = z.object({
+  id: z.number().int().positive(),
+  user: restUserSchema,
+  body: z.string(),
+  created_at: dateTimeSchema,
+  updated_at: dateTimeSchema,
+  html_url: z.string().url(),
+});
+
 const PULL_REQUEST_QUERY = `query PullRequests(
   $owner: String!
   $name: String!
@@ -476,20 +593,36 @@ type GraphQLVariables = Readonly<Record<string, unknown>>;
 
 interface GhGitHubMetadataProviderOptionsInternal {
   readonly ghExecutable: string;
+  readonly apiBaseUrl: string;
+  readonly fetch: GitHubFetch;
+  readonly tokenResolver: GitHubTokenResolver | null;
   readonly commandTimeoutMs: number;
   readonly lookbackDays: number;
 }
 
 export class GhGitHubMetadataProvider implements GitHubMetadataProvider {
   private readonly options: GhGitHubMetadataProviderOptionsInternal;
+  private tokenPromise: Promise<string> | null = null;
 
   constructor(options: GhGitHubMetadataProviderOptions = {}) {
     const ghExecutable = options.ghExecutable ?? "gh";
     const commandTimeoutMs = options.commandTimeoutMs ?? DEFAULT_COMMAND_TIMEOUT_MS;
     const lookbackDays = options.lookbackDays ?? DEFAULT_LOOKBACK_DAYS;
+    const apiBaseUrl = options.apiBaseUrl ?? DEFAULT_API_BASE_URL;
+    const fetchImplementation = options.fetch ?? fetch;
+    const tokenResolver = options.tokenResolver ?? null;
 
     if (ghExecutable.length === 0) {
       throw new Error("ghExecutable must not be empty");
+    }
+    if (apiBaseUrl.length === 0) {
+      throw new Error("apiBaseUrl must not be empty");
+    }
+    if (typeof fetchImplementation !== "function") {
+      throw new Error("fetch must be a function");
+    }
+    if (tokenResolver !== null && typeof tokenResolver !== "function") {
+      throw new Error("tokenResolver must be a function");
     }
     if (!Number.isInteger(commandTimeoutMs) || commandTimeoutMs <= 0) {
       throw new Error("commandTimeoutMs must be a positive integer");
@@ -498,7 +631,14 @@ export class GhGitHubMetadataProvider implements GitHubMetadataProvider {
       throw new Error("lookbackDays must be a positive integer");
     }
 
-    this.options = { ghExecutable, commandTimeoutMs, lookbackDays };
+    this.options = {
+      ghExecutable,
+      apiBaseUrl,
+      fetch: fetchImplementation,
+      tokenResolver,
+      commandTimeoutMs,
+      lookbackDays,
+    };
   }
 
   async *fetchPullRequestUpdates(
@@ -599,6 +739,83 @@ export class GhGitHubMetadataProvider implements GitHubMetadataProvider {
           truncated: false,
         },
     );
+  }
+
+  /**
+   * Lazy Issue detail fetch (plan 7.9): one REST issue request for the body
+   * plus every REST comments page at 100 items/page. Results are canonical
+   * UTC strings with comments sorted by creation time, then comment id.
+   */
+  async fetchIssueDetail(
+    input: IssueDetailInput,
+  ): Promise<FetchedIssueDetail> {
+    const repository = input.repository;
+    if (
+      repository === null ||
+      typeof repository !== "object" ||
+      typeof repository.owner !== "string" ||
+      repository.owner.length === 0 ||
+      typeof repository.name !== "string" ||
+      repository.name.length === 0
+    ) {
+      throw new Error("GitHub issue detail input repository must include owner and name");
+    }
+    if (!Number.isInteger(input.number) || input.number <= 0) {
+      throw new Error("GitHub issue detail input number must be a positive integer");
+    }
+    const repositoryLabel = formatRepository(repository);
+    const issueEndpoint =
+      `repos/${repository.owner}/${repository.name}/issues/${input.number}`;
+    const decodedIssue = await this.runRest(
+      repository,
+      issueEndpoint,
+      "IssueDetail",
+    );
+    const parsedIssue = restIssueSchema.safeParse(decodedIssue);
+    if (!parsedIssue.success) {
+      throw new GitHubResponseError(
+        repositoryLabel,
+        "IssueDetail",
+        formatSchemaIssues(parsedIssue.error),
+      );
+    }
+    const issue = parsedIssue.data;
+
+    const comments: FetchedIssueComment[] = [];
+    for (let page = 1; ; page += 1) {
+      const endpoint =
+        `repos/${repository.owner}/${repository.name}/issues/${input.number}` +
+        `/comments?per_page=${PAGE_SIZE}&page=${page}`;
+      const decoded = await this.runRest(repository, endpoint, "IssueDetail");
+      const parsed = z.array(restIssueCommentSchema).safeParse(decoded);
+      if (!parsed.success) {
+        throw new GitHubResponseError(
+          repositoryLabel,
+          "IssueDetail",
+          formatSchemaIssues(parsed.error),
+        );
+      }
+      comments.push(...parsed.data.map(mapRestIssueComment));
+      // A short page is always the final page for the comments endpoint.
+      if (parsed.data.length < PAGE_SIZE) {
+        break;
+      }
+    }
+    comments.sort(compareFetchedComments);
+
+    return {
+      number: issue.number,
+      title: issue.title,
+      url: issue.html_url,
+      state: issue.state,
+      authorLogin: issue.user?.login ?? null,
+      commentsCount: issue.comments,
+      createdAt: canonicalUtc(issue.created_at),
+      updatedAt: canonicalUtc(issue.updated_at),
+      closedAt: issue.closed_at === null ? null : canonicalUtc(issue.closed_at),
+      body: issue.body ?? "",
+      comments,
+    };
   }
 
   private async fetchFilesBatch(
@@ -716,19 +933,52 @@ export class GhGitHubMetadataProvider implements GitHubMetadataProvider {
   private async runRest(
     repository: RepositoryRef,
     endpoint: string,
+    operation: GitHubOperation = "PullRequestFiles",
   ): Promise<unknown> {
-    const repositoryLabel = formatRepository(repository);
-    let result: Awaited<ReturnType<typeof execa>>;
+    return this.requestJson(repository, operation, "GET", endpoint, null);
+  }
 
+  /**
+   * Resolve the bearer token once and keep only the in-memory result. A
+   * failed resolution is cleared so a later runtime attempt can retry.
+   */
+  private async getToken(repositoryLabel: string): Promise<string> {
+    if (this.tokenPromise !== null) {
+      return this.tokenPromise;
+    }
+    const promise = this.resolveToken(repositoryLabel);
+    this.tokenPromise = promise;
+    promise.catch(() => {
+      if (this.tokenPromise === promise) {
+        this.tokenPromise = null;
+      }
+    });
+    return promise;
+  }
+
+  private async resolveToken(repositoryLabel: string): Promise<string> {
+    if (this.options.tokenResolver !== null) {
+      return requireToken(await this.options.tokenResolver());
+    }
+
+    const environmentToken = process.env.GITHUB_TOKEN;
+    if (environmentToken !== undefined && environmentToken.trim().length > 0) {
+      return environmentToken.trim();
+    }
+    return this.resolveGhAuthToken(repositoryLabel);
+  }
+
+  private async resolveGhAuthToken(repositoryLabel: string): Promise<string> {
+    let result: Awaited<ReturnType<typeof execa>>;
     try {
       result = await execa(
         this.options.ghExecutable,
-        ["api", endpoint],
+        ["auth", "token"],
         {
           shell: false,
           reject: false,
           timeout: this.options.commandTimeoutMs,
-          maxBuffer: 10 * 1024 * 1024,
+          maxBuffer: 1024 * 1024,
         },
       );
     } catch (error) {
@@ -748,14 +998,95 @@ export class GhGitHubMetadataProvider implements GitHubMetadataProvider {
       );
     }
 
-    const stdout = typeof result.stdout === "string" ? result.stdout : "";
+    return requireToken(
+      typeof result.stdout === "string" ? result.stdout : "",
+    );
+  }
+
+  private async requestJson(
+    repository: RepositoryRef,
+    operation: GitHubOperation,
+    method: string,
+    path: string,
+    body: Record<string, unknown> | null,
+  ): Promise<unknown> {
+    const repositoryLabel = formatRepository(repository);
+    const url = githubUrl(this.options.apiBaseUrl, path);
+    const token = await this.getToken(repositoryLabel);
+    const headers: Record<string, string> = {
+      accept: "application/vnd.github+json",
+      authorization: `Bearer ${token}`,
+      "user-agent": GITHUB_USER_AGENT,
+      "x-github-api-version": GITHUB_API_VERSION,
+    };
+    if (body !== null) {
+      headers["content-type"] = "application/json";
+    }
+
+    const controller = new AbortController();
+    const timer = setTimeout(
+      () => controller.abort(),
+      this.options.commandTimeoutMs,
+    );
+    let response: Response;
     try {
-      return JSON.parse(stdout) as unknown;
+      response = await this.options.fetch(url, {
+        method,
+        headers,
+        body: body === null ? undefined : JSON.stringify(body),
+        signal: controller.signal,
+      });
     } catch (error) {
-      throw new GitHubResponseError(
+      clearTimeout(timer);
+      throw new GitHubHttpError(
         repositoryLabel,
-        "PullRequestFiles",
-        "stdout is not valid JSON",
+        operation,
+        method,
+        url,
+        null,
+        error instanceof Error ? error.message : String(error),
+        error,
+      );
+    }
+
+    let responseText: string;
+    try {
+      responseText = await response.text();
+    } catch (error) {
+      clearTimeout(timer);
+      throw new GitHubHttpError(
+        repositoryLabel,
+        operation,
+        method,
+        url,
+        response.status,
+        error instanceof Error ? error.message : String(error),
+        error,
+      );
+    }
+    clearTimeout(timer);
+
+    if (!response.ok) {
+      throw new GitHubHttpError(
+        repositoryLabel,
+        operation,
+        method,
+        url,
+        response.status,
+        responseText,
+      );
+    }
+
+    try {
+      return JSON.parse(responseText) as unknown;
+    } catch (error) {
+      throw new GitHubHttpError(
+        repositoryLabel,
+        operation,
+        method,
+        url,
+        response.status,
+        "response body is not valid JSON",
         error,
       );
     }
@@ -871,50 +1202,13 @@ export class GhGitHubMetadataProvider implements GitHubMetadataProvider {
     schema: z.ZodType<TResponse>,
   ): Promise<TResponse> {
     const repositoryLabel = formatRepository(repository);
-    const requestBody = JSON.stringify({ query, variables });
-    let result: Awaited<ReturnType<typeof execa>>;
-
-    try {
-      result = await execa(
-        this.options.ghExecutable,
-        ["api", "graphql", "--input", "-"],
-        {
-          input: requestBody,
-          shell: false,
-          reject: false,
-          timeout: this.options.commandTimeoutMs,
-          maxBuffer: 10 * 1024 * 1024,
-        },
-      );
-    } catch (error) {
-      throw new GitHubCommandError(
-        repositoryLabel,
-        null,
-        error instanceof Error ? error.message : String(error),
-        error,
-      );
-    }
-
-    if (result.failed || result.exitCode !== 0) {
-      throw new GitHubCommandError(
-        repositoryLabel,
-        result.exitCode ?? null,
-        typeof result.stderr === "string" ? result.stderr : "",
-      );
-    }
-
-    const stdout = typeof result.stdout === "string" ? result.stdout : "";
-    let decoded: unknown;
-    try {
-      decoded = JSON.parse(stdout) as unknown;
-    } catch (error) {
-      throw new GitHubResponseError(
-        repositoryLabel,
-        operation,
-        "stdout is not valid JSON",
-        error,
-      );
-    }
+    const decoded = await this.requestJson(
+      repository,
+      operation,
+      "POST",
+      GRAPHQL_PATH,
+      { query, variables },
+    );
 
     const parsed = schema.safeParse(decoded);
     if (!parsed.success) {
@@ -1002,6 +1296,28 @@ function mapIssue(node: z.infer<typeof issueNodeSchema>): IssueMetadata {
     updatedAt: canonicalUtc(node.updatedAt),
     closedAt: node.closedAt === null ? null : canonicalUtc(node.closedAt),
   };
+}
+
+function mapRestIssueComment(
+  comment: z.infer<typeof restIssueCommentSchema>,
+): FetchedIssueComment {
+  return {
+    id: comment.id,
+    authorLogin: comment.user?.login ?? null,
+    body: comment.body,
+    createdAt: canonicalUtc(comment.created_at),
+    updatedAt: canonicalUtc(comment.updated_at),
+    url: comment.html_url,
+  };
+}
+
+function compareFetchedComments(
+  left: FetchedIssueComment,
+  right: FetchedIssueComment,
+): number {
+  return (
+    left.createdAt.localeCompare(right.createdAt) || left.id - right.id
+  );
 }
 
 function normalizeSyncInput(
@@ -1115,6 +1431,23 @@ function isDateTime(value: string): boolean {
 
 function formatRepository(repository: RepositoryRef): string {
   return `${repository.owner}/${repository.name}`;
+}
+
+function githubUrl(apiBaseUrl: string, path: string): string {
+  const base =
+    apiBaseUrl.length > 0 && apiBaseUrl.endsWith("/")
+      ? apiBaseUrl.slice(0, -1)
+      : apiBaseUrl;
+  const normalizedPath = path.startsWith("/") ? path.slice(1) : path;
+  return `${base}/${normalizedPath}`;
+}
+
+function requireToken(token: string): string {
+  const value = token.trim();
+  if (value.length === 0) {
+    throw new Error("GitHub token resolution returned an empty token");
+  }
+  return value;
 }
 
 function formatSchemaIssues(error: z.ZodError): string {

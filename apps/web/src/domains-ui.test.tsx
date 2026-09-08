@@ -61,12 +61,13 @@ describe("Stage 2 domain UI", () => {
     renderApp("/repositories/repo/pulls");
     expect(await screen.findByText("Pull 2")).toBeInTheDocument();
     expect(screen.getByText("CI")).toBeInTheDocument();
-    const docsToggle = await screen.findByRole("button", { name: /Docs/ });
-    fireEvent.click(docsToggle);
+    const domainsFilter = await screen.findByRole("button", { name: /Domains All domains/ });
+    fireEvent.click(domainsFilter);
+    fireEvent.click(screen.getByRole("option", { name: /Docs/ }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input).includes("domain=dom_docs"))).toBe(true));
-    expect(screen.getByRole("button", { name: /Docs/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("option", { name: /Docs/ })).toHaveAttribute("aria-selected", "true");
     // selecting two rules keeps both repeated params (ANY semantics)
-    fireEvent.click(screen.getByRole("button", { name: /CI/ }));
+    fireEvent.click(screen.getByRole("option", { name: /CI/ }));
     await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input).includes("domain=dom_ci&domain=dom_docs") || String(input).includes("domain=dom_docs&domain=dom_ci"))).toBe(true));
   });
 
@@ -81,6 +82,15 @@ describe("Stage 2 domain UI", () => {
     const fetchMock = mockApi({ domains: [] });
     renderApp("/settings/domains");
     expect(await screen.findByRole("heading", { name: "Domain rules" })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("Documentation")).toBeInTheDocument();
+    expect(screen.getByLabelText("Include patterns")).toHaveAttribute(
+      "placeholder",
+      "docs/**\nREADME.md",
+    );
+    expect(screen.getByLabelText("Exclude patterns")).toHaveAttribute(
+      "placeholder",
+      "docs/generated/**\n**/*.snap",
+    );
     fireEvent.change(screen.getByLabelText("Rule name"), { target: { value: "CI" } });
     fireEvent.change(screen.getByLabelText("Include patterns"), { target: { value: ".github/**\n" } });
     fireEvent.click(screen.getByRole("button", { name: "Create rule" }));

@@ -34,6 +34,47 @@ export const knowledgePathQuerySchema = z
   })
   .strict();
 
+/** Image extensions that Markdown may reference from the knowledge repo. */
+const KNOWLEDGE_ASSET_EXTENSIONS = [
+  ".png",
+  ".jpg",
+  ".jpeg",
+  ".gif",
+  ".webp",
+  ".svg",
+] as const;
+
+function isSafeRelativeAssetPath(value: string): boolean {
+  return (
+    !value.startsWith("/") &&
+    !value.includes("\\") &&
+    !value.includes("\0") &&
+    !value.split("/").includes("..") &&
+    !value.split("/").includes(".")
+  );
+}
+
+/** Query for GET /api/knowledge/assets (relative image inside the root). */
+export const knowledgeAssetPathQuerySchema = z
+  .object({
+    path: z
+      .string()
+      .trim()
+      .min(1)
+      .max(2000)
+      .refine(isSafeRelativeAssetPath, {
+        message: "Knowledge asset paths must stay inside the knowledge root",
+      })
+      .refine(
+        (path) =>
+          KNOWLEDGE_ASSET_EXTENSIONS.some((extension) =>
+            path.toLowerCase().endsWith(extension),
+          ),
+        { message: "Knowledge asset paths must reference a supported image" },
+      ),
+  })
+  .strict();
+
 /** Full document read: front-matter id, repository path, and raw content. */
 export const knowledgeDocumentSchema = z
   .object({
@@ -107,6 +148,7 @@ export const knowledgeVersionParamsSchema = knowledgeDocumentParamsSchema.extend
   versionId: z.string().trim().min(1).max(128),
 });
 
+export type KnowledgeAssetPathQuery = z.infer<typeof knowledgeAssetPathQuerySchema>;
 export type KnowledgeTreeItem = z.infer<typeof knowledgeTreeItemSchema>;
 export type KnowledgeTreeResponse = z.infer<typeof knowledgeTreeResponseSchema>;
 export type KnowledgeDocument = z.infer<typeof knowledgeDocumentSchema>;

@@ -1,59 +1,45 @@
 # Testing
 
-The root workspace exposes focused and aggregate checks:
+LoongBoard uses a unit-first test model. Normal development runs only fast,
+local tests with injected process/network boundaries:
 
 ```bash
-pnpm install
-pnpm --filter @loongboard/contracts test
-pnpm check:architecture
-pnpm typecheck
+pnpm test
+pnpm test:ut
 pnpm check
-pnpm check:full
-pnpm test:e2e:stage1
 ```
 
-Contract tests parse and reject the exact health response. Architecture tests
-exercise the DSH import and raw-SQL boundaries and report the violating file,
-rule, and repair direction. Future command adapters use recorded or fake
-executables; future user flows use Playwright and temporary Git fixtures.
+`pnpm test` is an alias for `pnpm test:ut`. The unit runner executes each
+workspace package's local suite plus the architecture checker tests. `pnpm
+check` adds lint, type checks, architecture/DSH pin checks, and production
+builds; it does not run regression tests or browser automation.
 
-Static checks prove only their executed layer. A passing local check does not
-claim GitHub, hardware, remote runner, or live DSH evidence unless that test
-actually ran it.
+## Critical regression suite
 
-## Stage 1 browser acceptance
+`tests/regression` is intentionally small and independent of the removed
+historical stage/E2E fixtures. It currently protects only three high-impact
+contracts:
 
-`pnpm test:e2e:stage1` creates one disposable root containing two initialized
-fixture repositories, a temporary `system.yaml`, runtime directories, an
-executable fake GitHub CLI, and an append-only command log. It starts the
-non-watch Server and Vite on strict temporary loopback ports, runs the serial
-Playwright flow, and then terminates each owned process tree before removing
-only that root.
+- concurrent stale Issue reads share one GitHub refresh;
+- an external Knowledge edit is indexed and versioned;
+- a dirty bound worktree is never recycled.
 
-The runner uses the Playwright-managed browser by default. If that browser is
-not installed on a development host, set `LOONGBOARD_E2E_BROWSER_PATH` to an
-installed Chromium-compatible executable for the run.
-
-The fake command selects responses by repository, operation, requested states,
-cursor, and sync generation. It never uses process-global call ordering and it
-does not record request bodies or raw responses. The browser flow proves that
-repository and metadata reads make zero GitHub calls, bootstrap fills all four
-streams, list pagination is SQLite-only, tie ordering and filters are stable,
-incremental equality/early-stop behavior is honored, and a failed Issue stream
-leaves old rows available while Pull Requests complete independently.
-
-The real smoke is deliberately separate and is never run by the E2E command:
+Run it only for a major cross-module change or when explicitly requested:
 
 ```bash
-pnpm smoke:stage1:real
+pnpm test:regression
+pnpm check:full
 ```
 
-It reads only `vllm` and `vllm-ascend` from the parent `system.yaml`, uses a
-temporary LoongBoard state/config, and puts an executable recording wrapper in
-front of an absolute real `gh`. It performs two Server-API syncs per source
-repository, checks non-empty sorted lists and zero command increments for
-SQLite reads, records both watermarks, and byte-compares each source checkout's
-Git `HEAD` and status before/after. The wrapper records command metadata only;
-tokens, request bodies, and raw GitHub responses are not persisted or printed.
-The wrapper records only parsed repository/operation/state/cursor metadata and
-result byte counts; response bytes travel only through the provider pipe.
+`pnpm check:full` is `pnpm check` followed by `pnpm test:regression`.
+
+## Manual acceptance
+
+Browser interaction, live GitHub access, and live DSH sessions are manual
+acceptance. Start the local application with `pnpm dev`, exercise the changed
+flow, and report exactly what was checked. A static or unit pass does not prove
+live credentials, remote API behavior, or browser layout.
+
+Add the smallest test at the nearest stable business boundary. Prefer pure
+functions and injected dependencies. Do not recreate broad stage suites,
+recording fixtures, or a second implementation solely for tests.

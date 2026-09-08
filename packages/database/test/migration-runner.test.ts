@@ -20,6 +20,7 @@ const CORE_TABLES = [
   "agent_sessions",
   "document_versions",
   "domain_rules",
+  "issue_comments",
   "issues",
   "knowledge_documents",
   "pull_request_domains",
@@ -88,6 +89,7 @@ describe("database migrations", () => {
         { id: "002_metadata_list_indexes" },
         { id: "003_issue_state_constraint" },
         { id: "004_domain_classification" },
+        { id: "005_issue_detail_cache" },
       ]);
     } finally {
       database.close();
@@ -113,6 +115,7 @@ describe("database migrations", () => {
         expect.objectContaining({ id: "002_metadata_list_indexes" }),
         expect.objectContaining({ id: "003_issue_state_constraint" }),
         expect.objectContaining({ id: "004_domain_classification" }),
+        expect.objectContaining({ id: "005_issue_detail_cache" }),
       ]);
     } finally {
       database.close();

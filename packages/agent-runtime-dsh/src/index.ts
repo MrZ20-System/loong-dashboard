@@ -7,9 +7,9 @@ import {
   type AgentSessionSpec,
 } from "@loongboard/agent-runtime";
 
-import { mapNotification } from "./notification-mapper.js";
+import { DshNotificationMapper } from "./notification-mapper.js";
 
-export { mapNotification } from "./notification-mapper.js";
+export { DshNotificationMapper } from "./notification-mapper.js";
 export type { DeepSeekHarnessOptions } from "@deepseek-ai/dsh-sdk-client";
 
 /** Exact pin marker kept in sync with `dsh.lock.json`. */
@@ -18,10 +18,13 @@ export const DSH_RELEASE = "dsh-v0.1.2-alpha.5" as const;
 /** Minimal async FIFO channel bridging SDK notifications to the generator. */
 class NotificationChannel {
   private readonly items: HarnessNotification[] = [];
-  private readonly waiters: Array<(item: HarnessNotification) => void> = [];
+  private readonly waiters: Array<
+    (item: HarnessNotification | undefined) => void
+  > = [];
   private closed = false;
 
   push(notification: HarnessNotification): void {
+    if (this.closed) return;
     const waiter = this.waiters.shift();
     if (waiter !== undefined) {
       waiter(notification);
@@ -31,14 +34,18 @@ class NotificationChannel {
   }
 
   close(): void {
+    if (this.closed) return;
     this.closed = true;
+    for (const waiter of this.waiters.splice(0)) {
+      waiter(undefined);
+    }
   }
 
   async take(): Promise<HarnessNotification | undefined> {
     const item = this.items.shift();
     if (item !== undefined) return item;
     if (this.closed) return undefined;
-    return new Promise<HarnessNotification>((resolve) => {
+    return new Promise<HarnessNotification | undefined>((resolve) => {
       this.waiters.push(resolve);
     });
   }
@@ -79,6 +86,9 @@ export class DSHRuntime implements AgentRuntime {
       // `session.run` is still pending, so a channel lets the generator emit
       // normalized events as they arrive instead of replaying after idle.
       const channel = new NotificationChannel();
+      // One mapper per run so tool names recorded by tool/call are available
+      // when the paired tool/result arrives.
+      const mapper = new DshNotificationMapper();
       const runPromise = (async (): Promise<
         | { ok: true; finalResponse: string }
         | { ok: false; errorMessage: string }
@@ -103,7 +113,7 @@ export class DSHRuntime implements AgentRuntime {
       while (true) {
         const notification = await channel.take();
         if (notification === undefined) break;
-        for (const event of mapNotification(notification)) {
+        for (const event of mapper.map(notification)) {
           yield event;
         }
       }
@@ -130,6 +140,10 @@ export class DSHRuntime implements AgentRuntime {
     const harness = this.harnesses.get(sessionId);
     if (harness === undefined) return;
     this.harnesses.set(sessionId, null);
+    // A process stopped mid-turn leaves its DSH session log with an open
+    // turn; the pinned SDK cannot attach a fresh process to that session, so
+    // a later run must mint a new runtime session id instead of reusing it.
+    this.runtimeSessionIds.delete(sessionId);
     if (harness !== null) await harness.close();
   }
 

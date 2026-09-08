@@ -4,6 +4,7 @@ import type {
   ActivityDay,
   DomainRule,
   EntityKind,
+  IssueComment,
   IssueListItem,
   IssueStatus,
   PullRequestDetail,
@@ -18,6 +19,7 @@ export type {
   DomainRule,
   DomainTag,
   EntityKind,
+  IssueComment,
   IssueDetail,
   IssueListItem,
   IssueStatus,
@@ -120,6 +122,35 @@ export interface IssueMetadata {
   updatedAt: string;
   closedAt: string | null;
   detailBody?: string | null;
+}
+
+/** One GitHub Issue comment row, as consumed by the detail cache writer. */
+export interface IssueCommentInput {
+  readonly id: number;
+  readonly authorLogin: string | null;
+  readonly body: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly url: string;
+}
+
+/**
+ * Complete body/comments cache payload. `updatedAt` becomes the
+ * `detail_synced_updated_at` marker and also refreshes the summary row so
+ * the marker comparison never uses a stale list-side timestamp.
+ */
+export interface IssueDetailCacheInput {
+  readonly number: number;
+  readonly title: string;
+  readonly url: string;
+  readonly state: IssueStatus;
+  readonly authorLogin: string | null;
+  readonly commentsCount: number;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+  readonly closedAt: string | null;
+  readonly body: string;
+  readonly comments: readonly IssueCommentInput[];
 }
 
 export interface ListQueryOptions {

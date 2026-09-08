@@ -1,0 +1,67 @@
+@import "../../node_modules/monaco-editor/esm/vs/base/browser/ui/codicons/codicon/codicon.css";
+
+.sidebar-settings {
+  position: relative;
+  min-width: 0;
+  flex: 1;
+}
+
+.sidebar-settings__trigger {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 6px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--sidebar-muted);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1;
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+.sidebar-settings__trigger {
+  width: 100%;
+  justify-content: flex-start;
+}
+
+.sidebar-settings__trigger:hover {
+  background: var(--accent-soft);
+  color: var(--sidebar-text);
+}
+
+.sidebar-settings__trigger--active {
+  border-color: rgba(85, 197, 190, 0.23);
+  background: var(--accent-soft);
+  color: var(--accent-dark);
+}
+
+.sidebar-settings__trigger .codicon {
+  font-size: 14px;
+}
+
+.codicon-settings-gear::before {
+  content: "\eb51";
+}
+
+.sidebar__compact-toggle {
+  display: inline-grid;
+  width: 32px;
+  height: 32px;
+  flex: none;
+  place-items: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--sidebar-muted);
+}
+
+.sidebar__compact-toggle:hover {
+  border-color: var(--sidebar-border);
+  background: var(--accent-soft);
+  color: var(--sidebar-text);
+}

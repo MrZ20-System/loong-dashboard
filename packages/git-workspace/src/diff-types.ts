@@ -23,6 +23,11 @@ export interface ReadFileInput {
   readonly path: string;
 }
 
+export interface ListFilesAtRefInput {
+  readonly repositoryPath: string;
+  readonly ref: string;
+}
+
 /** Result of `git show <ref>:<path>` with the two V1 degradation branches. */
 export interface FileContent {
   readonly path: string;

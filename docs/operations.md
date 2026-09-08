@@ -1,10 +1,24 @@
 # Operations
 
 LoongBoard runs locally with Node.js 24-26 (the pinned `better-sqlite3` ABI
-requires Node 26 on this machine), pnpm, Git, SQLite, an authenticated GitHub
-CLI for sync, and a DSH runtime for Agent chat. Relative paths in
-`system.yaml` are resolved once against that file's directory and become
-absolute internal paths.
+requires Node 26 on this machine), pnpm, Git, SQLite, GitHub API access, and
+a DSH runtime for Agent chat. Relative paths in `system.yaml` are resolved
+once against that file's directory and become absolute internal paths.
+
+## GitHub authentication
+
+GitHub metadata access goes through the server's GitHub provider over native
+HTTP fetch (GraphQL and REST). The provider resolves one bearer token per
+instance and reuses it: `GITHUB_TOKEN` when that environment variable is set
+and non-empty, otherwise `gh auth token`. An authenticated `gh` CLI is
+therefore required only when `GITHUB_TOKEN` is not set.
+
+## Credential handling
+
+Startup retains the existing secure macOS Keychain-backed credential pattern
+for the local agent stack: secrets are resolved into the process environment
+at launch and never appear in `system.yaml`, in this documentation, or in
+command output or logs. No command here prints credentials.
 
 ## Run locally
 
@@ -34,31 +48,30 @@ never converted into empty responses.
   `/repositories/:repo/issues[:/number]`, `/knowledge/:documentId?`,
   `/scheduled-tasks`, `/settings/domains`, `/health`.
 
-## Acceptance commands
+## Validation commands
 
-- `pnpm check` — lint, type checks, architecture boundaries, DSH pin, all
-  workspace tests, integration fixtures, and production builds. Note: in this
-  sandbox the web build requires an empty `apps/web/dist` first because
-  Vite's out-dir clean trips the bulk-delete guard.
-- `pnpm check:full` — `pnpm check` plus browser E2E.
-- `pnpm test:e2e:stage1` — deterministic Stage 1 acceptance path. The runner
-  owns one temporary root and removes it after terminating the Server, Vite,
-  Playwright, and their discovered descendants. Its fake GitHub executable is
-  selected by `PATH` only inside that process environment, and its command
-  log carries repository/operation/state/cursor/generation metadata rather
-  than credentials or raw responses.
-- `pnpm smoke:stage1:real` — real two-repository smoke, only when
-  authenticated GitHub CLI access is intended. It selects `vllm` and
-  `vllm-ascend` from the parent configuration, points the Server at temporary
-  runtime directories, and wraps an absolute real `gh` executable. It never
-  writes either source repository and verifies raw Git HEAD/status are
-  unchanged around the syncs. A successful report includes per-repository
-  watermarks, list sizes, and command counts before/after local reads.
+- `pnpm test` or `pnpm test:ut` — the normal, UT-only development loop.
+- `pnpm check` — lint, type checks, architecture boundaries, DSH pin, UT, and
+  production builds. It does not run regression or browser automation.
+- `pnpm test:regression` — three independent critical backend checks covering
+  Issue refresh coalescing, Knowledge external-version indexing, and dirty
+  worktree protection. Run only for major cross-module changes or when the
+  user requests it.
+- `pnpm check:full` — `pnpm check` plus the critical regression suite. This is
+  also reserved for major changes or an explicit request.
+
+Browser interaction, live GitHub access, and live DSH sessions are manual
+acceptance activities. They are not hidden inside the routine test command.
 
 ## Known environment notes
 
 - Node 26 requires exact `better-sqlite3@12.11.1`.
 - `tsx` prints a `module.register()` deprecation warning on startup; it does
   not affect validated paths.
-- Live DSH smoke needs real model credentials and remains a manual Step 7
-  activity; recorded-fixture adapter tests cover the event mapping.
+- A sandbox-external `pnpm check` passed on 2026-09-07 with per-workspace
+  counts recorded in implementation-status.md. Only a React `act(...)`
+  warning and a Vite large-chunk warning were emitted; the same build can
+  fail with EMFILE inside the sandbox even though the outside run passes.
+- Live DSH smoke needs real model credentials supplied through the secure
+  startup environment and is recorded on 2026-09-07; UT covers the adapter's
+  event mapping and channel behavior.

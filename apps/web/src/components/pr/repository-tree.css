@@ -1,0 +1,201 @@
+.repository-tree {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  overflow: auto;
+}
+
+.repository-tree__filter {
+  display: flex;
+  flex: none;
+  height: 30px;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+  color: var(--text);
+}
+
+.repository-tree__filter:focus-within {
+  border-color: var(--accent);
+  box-shadow: var(--focus-ring);
+}
+
+.repository-tree__filter input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 12.5px;
+  outline: 0;
+}
+
+.repository-tree__filter input::placeholder {
+  color: var(--text-secondary);
+  opacity: 1;
+}
+
+.repository-tree__filter-clear {
+  display: inline-grid;
+  width: 22px;
+  height: 22px;
+  flex: none;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+}
+
+.repository-tree__filter-icon,
+.repository-tree__filter-clear-icon {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.repository-tree__filter-clear:hover {
+  background: var(--surface-hover);
+  color: var(--text);
+}
+
+.repository-tree__list,
+.repository-tree__children {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.repository-tree__item {
+  margin: 0;
+  padding: 0;
+}
+
+.repository-tree__folder,
+.repository-tree__file {
+  display: flex;
+  width: 100%;
+  min-height: 24px;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  text-align: left;
+}
+
+button.repository-tree__folder,
+button.repository-tree__file {
+  cursor: pointer;
+}
+
+.repository-tree__folder:hover,
+.repository-tree__file:hover {
+  background: var(--surface-hover);
+  border-color: var(--border-soft);
+}
+
+.repository-tree__file--selected {
+  border-color: rgba(85, 197, 190, 0.4);
+  background: var(--accent-soft);
+  color: var(--accent-dark);
+}
+
+.repository-tree__chevron,
+.repository-tree__folder-icon,
+.repository-tree__file-icon:not(.change-file-icon) {
+  flex: none;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.repository-tree__file-icon.change-file-icon {
+  margin: 0 1px;
+}
+
+.repository-tree__file-icon.change-file-icon--modified {
+  color: var(--orange);
+}
+
+.repository-tree__name {
+  overflow: hidden;
+  flex: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.repository-tree__folder[data-change-tone="added"] .repository-tree__name,
+.repository-tree__folder[data-change-tone="added"] .repository-tree__folder-icon {
+  color: var(--green);
+}
+
+.repository-tree__folder[data-change-tone="removed"] .repository-tree__name,
+.repository-tree__folder[data-change-tone="removed"] .repository-tree__folder-icon {
+  color: var(--red);
+}
+
+.repository-tree__folder[data-change-tone="modified"] .repository-tree__name,
+.repository-tree__folder[data-change-tone="modified"] .repository-tree__folder-icon {
+  color: var(--orange);
+}
+
+.repository-tree__file[data-change-type="added"] .repository-tree__name {
+  color: var(--green);
+}
+
+.repository-tree__file[data-change-type="removed"] .repository-tree__name {
+  color: var(--red);
+}
+
+.repository-tree__file[data-change-type="modified"] .repository-tree__name,
+.repository-tree__file[data-change-type="renamed"] .repository-tree__name,
+.repository-tree__file[data-change-type="copied"] .repository-tree__name,
+.repository-tree__file[data-change-type="typechange"] .repository-tree__name {
+  color: var(--orange);
+}
+
+.repository-tree__dot {
+  flex: none;
+  color: var(--gray);
+  font-size: 8px;
+}
+
+.repository-tree__dot[data-change-tone="added"] {
+  color: var(--green);
+}
+
+.repository-tree__dot[data-change-tone="removed"] {
+  color: var(--red);
+}
+
+.repository-tree__dot[data-change-tone="modified"] {
+  color: var(--orange);
+}
+
+.repository-tree__empty {
+  margin: 4px 4px 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.repository-tree__stats {
+  display: inline-flex;
+  flex: none;
+  gap: 4px;
+  margin-left: auto;
+  font-size: 10.5px;
+  font-weight: 680;
+  white-space: nowrap;
+}
+
+.repository-tree__indent {
+  flex: none;
+}

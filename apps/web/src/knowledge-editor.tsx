@@ -1,6 +1,15 @@
-import { useEffect, useRef } from "react";
+import { createContext, useContext, useEffect, useRef } from "react";
 import EditorWorker from "../node_modules/monaco-editor/esm/vs/editor/editor.worker.js?worker";
 import type { editor } from "monaco-editor";
+
+export type AppTheme = "light" | "dark";
+
+/** Theme value supplied by the app shell so Monaco follows the shell toggle. */
+export const AppThemeContext = createContext<AppTheme>("light");
+
+function monacoTheme(theme: AppTheme): string {
+  return theme === "dark" ? "vs-dark" : "vs";
+}
 
 /**
  * Monaco-based Markdown source editor for Knowledge documents (plan 15.3:
@@ -16,6 +25,9 @@ export function KnowledgeEditor({
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
+  const theme = useContext(AppThemeContext);
+  const themeRef = useRef(theme);
+  themeRef.current = theme;
   const onChangeRef = useRef(onChange);
   onChangeRef.current = onChange;
   const valueRef = useRef(value);
@@ -31,7 +43,7 @@ export function KnowledgeEditor({
       const editorInstance = monaco.editor.create(hostRef.current, {
         value: valueRef.current,
         language: "markdown",
-        theme: "vs-dark",
+        theme: monacoTheme(themeRef.current),
         automaticLayout: true,
         minimap: { enabled: false },
         scrollBeyondLastLine: false,
@@ -50,6 +62,14 @@ export function KnowledgeEditor({
       editorRef.current = null;
     };
   }, []);
+
+  // Keep the live editor in sync when the shell theme changes without
+  // remounting (creation above already uses the latest theme for new editors).
+  useEffect(() => {
+    const instance = editorRef.current;
+    if (instance === null) return;
+    instance.updateOptions({ theme: monacoTheme(theme) });
+  }, [theme]);
 
   // Keep the model in sync with external updates (e.g. restore or doc switch)
   // without clobbering the caret while the user types.

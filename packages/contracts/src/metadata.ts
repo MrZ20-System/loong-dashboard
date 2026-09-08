@@ -42,6 +42,18 @@ export const issueListItemSchema = z
   })
   .strict();
 
+/** One stored GitHub Issue comment shown on the Issue detail page. */
+export const issueCommentSchema = z
+  .object({
+    id: z.number().int().positive(),
+    authorLogin: z.string().nullable(),
+    body: z.string(),
+    createdAt: utcDateTimeSchema,
+    updatedAt: utcDateTimeSchema,
+    url: z.string().url(),
+  })
+  .strict();
+
 export const activityDaySchema = z
   .object({
     date: calendarDateSchema,
@@ -72,29 +84,61 @@ export const activityDaysResponseSchema = z
   })
   .strict();
 
-export const pullRequestsQuerySchema = z
-  .object({
-    date: calendarDateSchema.optional(),
-    status: pullRequestStatusSchema.optional(),
-    cursor: opaqueCursorSchema.optional(),
-    // Fastify surfaces a repeated query key as an array; a single value is
-    // normalized so `?domain=a` and `?domain=a&domain=b` share one code path.
-    // Semantics: a pull request matches when it carries ANY selected domain.
-    domain: z.preprocess(
-      (value) =>
-        value === undefined ? undefined : typeof value === "string" ? [value] : value,
-      z.array(domainRuleIdSchema).max(20).optional(),
-    ),
-  })
-  .strict();
+/** Normalize the former single-day query into the public range shape. */
+function normalizeLegacyDateQuery(value: unknown): unknown {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return value;
+  }
+  const query = { ...(value as Record<string, unknown>) };
+  const legacyDate = query.date;
+  delete query.date;
+  if (query.from === undefined && legacyDate !== undefined) query.from = legacyDate;
+  if (query.to === undefined && legacyDate !== undefined) query.to = legacyDate;
+  return query;
+}
 
-export const issuesQuerySchema = z
-  .object({
-    date: calendarDateSchema.optional(),
-    status: issueStatusSchema.optional(),
-    cursor: opaqueCursorSchema.optional(),
-  })
-  .strict();
+const validDateRange = ({ from, to }: { from?: string; to?: string }) =>
+  from === undefined || to === undefined || from <= to;
+
+export const pullRequestsQuerySchema = z.preprocess(
+  normalizeLegacyDateQuery,
+  z
+    .object({
+      from: calendarDateSchema.optional(),
+      to: calendarDateSchema.optional(),
+      status: pullRequestStatusSchema.optional(),
+      cursor: opaqueCursorSchema.optional(),
+      // Fastify surfaces a repeated query key as an array; a single value is
+      // normalized so `?domain=a` and `?domain=a&domain=b` share one code path.
+      // Semantics: a pull request matches when it carries ANY selected domain.
+      domain: z.preprocess(
+        (value) =>
+          value === undefined ? undefined : typeof value === "string" ? [value] : value,
+        z.array(domainRuleIdSchema).max(20).optional(),
+      ),
+    })
+    .strict()
+    .refine(validDateRange, {
+      message: "from must be on or before to",
+      path: ["to"],
+    }),
+);
+
+export const issuesQuerySchema = z.preprocess(
+  normalizeLegacyDateQuery,
+  z
+    .object({
+      from: calendarDateSchema.optional(),
+      to: calendarDateSchema.optional(),
+      status: issueStatusSchema.optional(),
+      cursor: opaqueCursorSchema.optional(),
+    })
+    .strict()
+    .refine(validDateRange, {
+      message: "from must be on or before to",
+      path: ["to"],
+    }),
+);
 
 /** Full stored PR row used by the detail page (plan 17.2, 18.2). */
 export const pullRequestDetailSchema = pullRequestListItemSchema.extend({
@@ -134,10 +178,12 @@ export const issueDetailSchema = issueListItemSchema.extend({
   createdAt: utcDateTimeSchema,
   closedAt: utcDateTimeSchema.nullable(),
   detailBody: z.string().nullable(),
+  comments: z.array(issueCommentSchema),
 });
 
 export type PullRequestListItem = z.infer<typeof pullRequestListItemSchema>;
 export type PullRequestDetail = z.infer<typeof pullRequestDetailSchema>;
+export type IssueComment = z.infer<typeof issueCommentSchema>;
 export type IssueListItem = z.infer<typeof issueListItemSchema>;
 export type IssueDetail = z.infer<typeof issueDetailSchema>;
 export type IssueParams = z.infer<typeof issueParamsSchema>;

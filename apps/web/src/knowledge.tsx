@@ -150,7 +150,6 @@ export function KnowledgePage() {
           <p className="eyebrow">Knowledge</p>
           <h2 id="knowledge-heading">Markdown repository</h2>
         </div>
-        <Link to="/">Board</Link>
       </div>
       {error !== null && <p role="alert" className="agent-error">{error}</p>}
       {message !== null && <p role="status" className="agent-note">{message}</p>}
@@ -241,7 +240,11 @@ export function KnowledgePage() {
                   <button type="submit">Move</button>
                 </form>
               )}
-              {mode === "preview" && <div className="knowledge-body"><MarkdownView text={content} /></div>}
+              {mode === "preview" && (
+                <div className="knowledge-body">
+                  <MarkdownView text={content} documentPath={document.data.path} />
+                </div>
+              )}
               {mode === "edit" && (
                 <KnowledgeEditor
                   key={activePath}

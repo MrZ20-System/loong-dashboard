@@ -141,6 +141,6 @@ DELETE /api/repositories/:id/domains/:domainId
 ## Explicit non-goals for Stage 2
 
 - No reorder API, no domain analytics, no Issue classification.
-- No new browser E2E harness; Stage 1 E2E must keep passing. Browser-level
-  domain coverage is deferred to the Stage 7 release acceptance.
+- No routine browser E2E harness. Browser-level domain coverage is an explicit
+  manual acceptance activity.
 - No AI anywhere in classification.

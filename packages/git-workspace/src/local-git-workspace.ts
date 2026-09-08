@@ -263,6 +263,25 @@ export class LocalGitWorkspace {
     });
   }
 
+  /**
+   * Full file list at one ref (plan 11.x full-file mode). The ref comes from
+   * a validated PR head or merge-base SHA; only the parsed NUL-separated
+   * paths cross the adapter boundary, never raw command output.
+   */
+  async listFilesAtRef(input: {
+    repositoryPath: string;
+    ref: string;
+  }): Promise<string[]> {
+    const output = await runGitText(
+      input.repositoryPath,
+      ["ls-tree", "-r", "-z", "--name-only", input.ref],
+      { timeoutMs: this.commandTimeoutMs },
+    );
+    const tokens = output.split("\0");
+    if (tokens.at(-1) === "") tokens.pop();
+    return tokens.filter((token) => token.length > 0);
+  }
+
   /** Full file content at one revision (plan 11.2). */
   async readFile(input: ReadFileInput): Promise<FileContent> {
     assertSafeGitPath(input.path);

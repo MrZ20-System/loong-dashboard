@@ -1,6 +1,5 @@
 import {
   getIssueActivityDays,
-  getIssueDetail,
   getPullRequestActivityDays,
   getRepositorySyncStatus,
   listIssues,
@@ -30,6 +29,7 @@ import {
   LocalGitWorkspace,
   type GitWorkspace,
 } from "@loongboard/git-workspace";
+import type { GitHubMetadataProvider } from "@loongboard/github";
 import Fastify, {
   type FastifyInstance,
   type FastifyServerOptions,
@@ -60,6 +60,7 @@ import {
   sendParsed,
 } from "./route-helpers.js";
 import type { SyncCoordinator } from "./sync-coordinator.js";
+import { IssueDetailService } from "./issue-detail-service.js";
 
 const healthResponse: HealthResponse = healthResponseSchema.parse({
   status: "ok",
@@ -80,6 +81,8 @@ export interface BuildAppDependencies {
   database: DatabaseClient;
   timezone: string;
   syncCoordinator: SyncCoordinator;
+  /** Lazy Issue body/comment refresh; optional for cache-hit-only servers. */
+  github?: GitHubMetadataProvider;
   /** Defaults to an in-process serial service owned by the app. */
   reclassification?: DomainReclassification;
   /** Defaults to a real local Git workspace. */
@@ -110,6 +113,10 @@ export function buildApp(
     dependencies.reclassification ??
     new DomainReclassificationService({ database });
   const gitWorkspace = dependencies.gitWorkspace ?? new LocalGitWorkspace();
+  const issueDetails = new IssueDetailService({
+    database,
+    ...(dependencies.github === undefined ? {} : { github: dependencies.github }),
+  });
   const app = Fastify(options);
   configureJsonParser(app);
 
@@ -117,7 +124,7 @@ export function buildApp(
     return reply.code(200).send(healthResponse);
   });
 
-  registerStageOneRoutes(app, database, timezone, syncCoordinator);
+  registerStageOneRoutes(app, database, timezone, syncCoordinator, issueDetails);
   registerDomainRoutes(app, { database, reclassification });
   registerDiffRoutes(app, { database, gitWorkspace });
   if (dependencies.agentChat !== undefined) {
@@ -157,6 +164,7 @@ function registerStageOneRoutes(
   database: DatabaseClient,
   calendarTimeZone: string,
   syncCoordinator: SyncCoordinator,
+  issueDetails: IssueDetailService,
 ): void {
   app.get("/api/repositories", async (_request, reply) => {
     const repositories = listRepositories(database).map((repository) => ({
@@ -223,7 +231,8 @@ function registerStageOneRoutes(
     const query = parseRequest(pullRequestsQuerySchema, request.query);
     const page = listPullRequests(database, id, {
       calendarTimeZone,
-      date: query.date,
+      from: query.from,
+      to: query.to,
       status: query.status,
       cursor: query.cursor,
       domainIds: query.domain,
@@ -253,16 +262,17 @@ function registerStageOneRoutes(
     const query = parseRequest(issuesQuerySchema, request.query);
     const page = listIssues(database, id, {
       calendarTimeZone,
-      date: query.date,
+      from: query.from,
+      to: query.to,
       status: query.status,
       cursor: query.cursor,
     });
     return sendParsed(reply, 200, issuesResponseSchema, page);
   });
 
-  app.get("/api/repositories/:id/issues/:number", async (request, reply) => {
+  app.get("/api/repositories/:repositoryId/issues/:number", async (request, reply) => {
     const { repositoryId, number } = parseRequest(issueParamsSchema, request.params);
-    const issue = getIssueDetail(database, repositoryId, number);
+    const issue = await issueDetails.get(repositoryId, number);
     if (issue === null) throw new IssueNotFoundError(repositoryId, number);
     return sendParsed(reply, 200, issueDetailSchema, issue);
   });
@@ -329,6 +339,8 @@ function errorResponse(error: unknown): {
           : code === "SYNC_ALREADY_RUNNING" ||
               code === "DOMAIN_NAME_CONFLICT" ||
               code === "AGENT_TURN_BUSY" ||
+              code === "WORKSPACE_BUSY" ||
+              code === "WORKSPACE_REVISION_MISMATCH" ||
               code === "KNOWLEDGE_DOCUMENT_CONFLICT" ||
               code === "WORKTREE_POOL_EXHAUSTED" ||
               code === "SCHEDULED_TASK_WORKSPACE_BUSY"
@@ -363,6 +375,10 @@ function errorCode(error: unknown): ApiErrorCode {
   if (hasCode(error, "SCHEDULED_TASK_WORKSPACE_BUSY")) return "SCHEDULED_TASK_WORKSPACE_BUSY";
   if (hasCode(error, "AGENT_SESSION_NOT_FOUND")) return "AGENT_SESSION_NOT_FOUND";
   if (hasCode(error, "AGENT_TURN_BUSY")) return "AGENT_TURN_BUSY";
+  if (hasCode(error, "WORKSPACE_BUSY")) return "WORKSPACE_BUSY";
+  if (hasCode(error, "WORKSPACE_REVISION_MISMATCH")) {
+    return "WORKSPACE_REVISION_MISMATCH";
+  }
   if (hasCode(error, "WORKTREE_POOL_EXHAUSTED")) return "WORKTREE_POOL_EXHAUSTED";
   if (hasCode(error, "SYNC_ALREADY_RUNNING")) return "SYNC_ALREADY_RUNNING";
   return "INTERNAL_ERROR";

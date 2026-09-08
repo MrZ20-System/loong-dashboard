@@ -247,6 +247,7 @@ export const issues = sqliteTable(
     updatedAt: text("updated_at").notNull(),
     closedAt: text("closed_at"),
     detailBody: text("detail_body"),
+    detailSyncedUpdatedAt: text("detail_synced_updated_at"),
   },
   (table) => [
     primaryKey({ columns: [table.repositoryId, table.number] }),
@@ -264,6 +265,38 @@ export const issues = sqliteTable(
     ),
     check("issues_number_check", sql`${table.number} > 0`),
     check("issues_comments_count_check", sql`${table.commentsCount} >= 0`),
+  ],
+);
+
+export const issueComments = sqliteTable(
+  "issue_comments",
+  {
+    repositoryId: text("repository_id").notNull(),
+    issueNumber: integer("issue_number").notNull(),
+    githubCommentId: integer("github_comment_id").notNull(),
+    authorLogin: text("author_login"),
+    body: text("body").notNull(),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at").notNull(),
+    url: text("url").notNull(),
+  },
+  (table) => [
+    primaryKey({
+      columns: [
+        table.repositoryId,
+        table.issueNumber,
+        table.githubCommentId,
+      ],
+    }),
+    foreignKey({
+      columns: [table.repositoryId, table.issueNumber],
+      foreignColumns: [issues.repositoryId, issues.number],
+    }).onDelete("cascade"),
+    check("issue_comments_issue_number_check", sql`${table.issueNumber} > 0`),
+    check(
+      "issue_comments_github_comment_id_check",
+      sql`${table.githubCommentId} > 0`,
+    ),
   ],
 );
 
@@ -482,6 +515,7 @@ export const schema = {
   agentSessions,
   documentVersions,
   domainRules,
+  issueComments,
   issues,
   knowledgeDocuments,
   pullRequestDomains,
