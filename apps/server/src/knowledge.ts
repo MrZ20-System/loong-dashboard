@@ -56,7 +56,10 @@ import {
   type KnowledgeFileSnapshot,
 } from "@loongboard/knowledge";
 
-import { runCheckpoint } from "@loongboard/git-workspace";
+import {
+  runCheckpoint,
+  type RunCheckpointResult,
+} from "@loongboard/git-workspace";
 
 import type { FastifyInstance } from "fastify";
 import {
@@ -118,6 +121,7 @@ export interface KnowledgeCheckpointOptions {
   autoPush?: boolean;
   remote?: string;
   branch?: string;
+  intervalMinutes?: number | null;
 }
 
 export interface KnowledgeControllerOptions {
@@ -148,6 +152,7 @@ export class KnowledgeController {
     autoPush: boolean;
     remote: string;
     branch: string;
+    intervalMinutes: number | null;
   };
   private watcher: ReturnType<typeof watch> | null = null;
   private rescanTimer: ReturnType<typeof setTimeout> | null = null;
@@ -166,6 +171,7 @@ export class KnowledgeController {
       autoPush: options.checkpoint?.autoPush ?? false,
       remote: options.checkpoint?.remote ?? "origin",
       branch: options.checkpoint?.branch ?? "main",
+      intervalMinutes: options.checkpoint?.intervalMinutes ?? null,
     };
   }
 
@@ -176,22 +182,30 @@ export class KnowledgeController {
     }
     return absolute;
   }
-  /**
-   * Deterministic Knowledge Git checkpoint (plan 15.6). Off by default;
-   * failures are only logged, never auto-merged or retried.
-   */
-  private maybeCheckpoint(): void {
-    if (!this.checkpoint.autoCommit) return;
-    void runCheckpoint({
+  /** Current Knowledge checkpoint settings, excluding runtime status fields. */
+  checkpointSettings(): KnowledgeCheckpointOptions {
+    return { ...this.checkpoint };
+  }
+
+  /** Apply Settings changes to future manual and scheduled checkpoints. */
+  updateCheckpoint(settings: KnowledgeCheckpointOptions): void {
+    if (settings.autoCommit !== undefined) this.checkpoint.autoCommit = settings.autoCommit;
+    if (settings.autoPush !== undefined) this.checkpoint.autoPush = settings.autoPush;
+    if (settings.remote !== undefined) this.checkpoint.remote = settings.remote;
+    if (settings.branch !== undefined) this.checkpoint.branch = settings.branch;
+    if (settings.intervalMinutes !== undefined) {
+      this.checkpoint.intervalMinutes = settings.intervalMinutes;
+    }
+  }
+
+  /** Run the existing Knowledge checkpoint immediately, including push. */
+  async runCheckpointNow(options: { push?: boolean } = {}): Promise<RunCheckpointResult> {
+    return runCheckpoint({
       repositoryPath: this.knowledgePath,
       message: `chore(knowledge): checkpoint ${new Date().toISOString()}`,
-      push: this.checkpoint.autoPush,
+      push: options.push ?? this.checkpoint.autoPush,
       remote: this.checkpoint.remote,
       branch: this.checkpoint.branch,
-    }).then((result) => {
-      if (result.error !== undefined) {
-        console.error(`Knowledge checkpoint failed: ${result.error}`);
-      }
     });
   }
   tree(): KnowledgeTreeItem[] {
@@ -269,7 +283,6 @@ export class KnowledgeController {
       contentHash: sha256(content),
     });
     addDocumentVersion(this.database, { documentId: id, content, source: "manual" });
-    this.maybeCheckpoint();
     return this.toDocument(input.path, id, content, row.defaultSessionId);
   }
 
@@ -309,7 +322,6 @@ export class KnowledgeController {
       content: normalized,
       source: "manual",
     });
-    this.maybeCheckpoint();
     return this.toDocument(repositoryPath, documentIdValue, normalized, row.defaultSessionId);
   }
 
@@ -328,7 +340,6 @@ export class KnowledgeController {
     this.indexDirty = true;
     const updated = updateKnowledgeDocumentPath(this.database, documentIdValue, newPath);
     const content = readFileSync(target, "utf8");
-    this.maybeCheckpoint();
     return this.toDocument(newPath, documentIdValue, content, updated.defaultSessionId);
   }
 
@@ -361,7 +372,6 @@ export class KnowledgeController {
       defaultSessionId: row.defaultSessionId,
     });
     addDocumentVersion(this.database, { documentId: documentIdValue, content, source: "restore" });
-    this.maybeCheckpoint();
     return this.toDocument(row.path, documentIdValue, content, row.defaultSessionId);
   }
 
@@ -477,7 +487,6 @@ export class KnowledgeController {
           content,
           source: "external",
         });
-        this.maybeCheckpoint();
         continue;
       }
       if (agentRunning) {
@@ -513,7 +522,6 @@ export class KnowledgeController {
       contentHash: sha256(content),
     });
     addDocumentVersion(this.database, { documentId: documentIdValue, content, source });
-    this.maybeCheckpoint();
   }
 
   private requireIndexed(documentIdValue: string) {

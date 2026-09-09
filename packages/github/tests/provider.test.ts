@@ -41,7 +41,7 @@ afterEach(() => {
 });
 
 describe("GhGitHubMetadataProvider", () => {
-  it("fetches bootstrap PR streams with pagination, exact HTTP requests, and one request per page", async () => {
+  it("fetches the initial PR window across all states with exact HTTP requests", async () => {
     const openNodes = Array.from({ length: 100 }, (_, index) =>
       pullRequestNode({
         id: `PR_${index + 1}`,
@@ -51,7 +51,6 @@ describe("GhGitHubMetadataProvider", () => {
     );
     const http = createFakeHttp([
       httpJson(pullRequestResponse(openNodes, { hasNextPage: false, endCursor: null })),
-      httpJson(pullRequestResponse([], { hasNextPage: false, endCursor: null })),
     ]);
     const provider = createProvider(http);
 
@@ -61,11 +60,10 @@ describe("GhGitHubMetadataProvider", () => {
       syncStartedAt,
     }));
 
-    expect(pages).toHaveLength(2);
+    expect(pages).toHaveLength(1);
     expect(pages[0]?.items).toHaveLength(100);
-    expect(pages[1]?.items).toHaveLength(0);
     expect(pages[0]?.items[0]?.updatedAt).toBe("2024-06-10T00:59:00.000Z");
-    expect(http.calls).toHaveLength(2);
+    expect(http.calls).toHaveLength(1);
     expect(http.calls[0]).toMatchObject({
       url: graphQlUrl,
       method: "POST",
@@ -75,18 +73,11 @@ describe("GhGitHubMetadataProvider", () => {
         "content-type": "application/json",
       },
     });
-    expect(http.calls[1]?.url).toBe(graphQlUrl);
     expect(requestBody(http, 0).variables).toEqual({
       owner: "acme",
       name: "rocket",
       cursor: null,
-      states: ["OPEN"],
-    });
-    expect(requestBody(http, 1).variables).toEqual({
-      owner: "acme",
-      name: "rocket",
-      cursor: null,
-      states: ["CLOSED", "MERGED"],
+      states: ["OPEN", "CLOSED", "MERGED"],
     });
     expect(requestBody(http, 0).query).toContain("changedFiles");
     expect(requestBody(http, 0).query).not.toContain("body");
@@ -95,26 +86,37 @@ describe("GhGitHubMetadataProvider", () => {
     expect(requestBody(http, 0).query).not.toContain("timelineItems");
   });
 
-  it("keeps the 90-day bootstrap PR boundary item and stops before the next page", async () => {
+  it("keeps the 30-day initial PR boundary across all states and stops before the next page", async () => {
     const http = createFakeHttp([
-      httpJson(pullRequestResponse([], { hasNextPage: false, endCursor: null })),
       httpJson(pullRequestResponse(
         [
+          pullRequestNode({
+            id: "PR_OPEN",
+            number: 91,
+            state: "OPEN",
+            updatedAt: "2024-05-11T00:00:00Z",
+          }),
+          pullRequestNode({
+            id: "PR_CLOSED",
+            number: 92,
+            state: "CLOSED",
+            updatedAt: "2024-05-11T00:00:00Z",
+          }),
           pullRequestNode({
             id: "PR_BOUNDARY",
             number: 90,
             state: "MERGED",
-            mergedAt: "2024-03-12T00:00:00Z",
-            updatedAt: "2024-03-12T00:00:00Z",
+            mergedAt: "2024-05-11T00:00:00Z",
+            updatedAt: "2024-05-11T00:00:00Z",
           }),
           pullRequestNode({
             id: "PR_OLD",
             number: 89,
             state: "CLOSED",
-            updatedAt: "2024-03-11T23:59:59Z",
+            updatedAt: "2024-05-10T23:59:59Z",
           }),
         ],
-        { hasNextPage: true, endCursor: "closed-pr-next" },
+        { hasNextPage: true, endCursor: "initial-pr-next" },
       )),
     ]);
     const provider = createProvider(http);
@@ -125,26 +127,30 @@ describe("GhGitHubMetadataProvider", () => {
       syncStartedAt: "2024-06-10T00:00:00Z",
     }));
 
-    expect(pages).toHaveLength(2);
-    expect(pages[0]?.items).toHaveLength(0);
-    expect(pages[1]?.items).toHaveLength(1);
-    expect(pages[1]?.items[0]).toMatchObject({
+    expect(pages).toHaveLength(1);
+    expect(pages[0]?.items).toHaveLength(3);
+    expect(pages[0]?.items.map((item) => item.status)).toEqual([
+      "open",
+      "closed",
+      "merged",
+    ]);
+    expect(pages[0]?.items[2]).toMatchObject({
       number: 90,
       stateRaw: "MERGED",
       status: "merged",
-      updatedAt: "2024-03-12T00:00:00.000Z",
+      updatedAt: "2024-05-11T00:00:00.000Z",
     });
-    expect(requestBody(http, 1).variables.states).toEqual(["CLOSED", "MERGED"]);
-    expect(http.calls).toHaveLength(2);
+    expect(requestBody(http, 0).variables.states).toEqual(["OPEN", "CLOSED", "MERGED"]);
+    expect(http.calls).toHaveLength(1);
   });
 
   it("stops incremental PRs at the first older item without another command", async () => {
     const http = createFakeHttp([
       httpJson(pullRequestResponse(
         [
-          pullRequestNode({ updatedAt: "2024-06-09T23:59:59Z", number: 2 }),
-          pullRequestNode({ updatedAt: "2024-06-09T23:58:00Z", number: 1 }),
-          pullRequestNode({ updatedAt: "2024-06-09T23:57:00Z", number: 3 }),
+          pullRequestNode({ updatedAt: "2024-05-10T00:01:59Z", number: 2 }),
+          pullRequestNode({ updatedAt: "2024-05-10T00:01:00Z", number: 1 }),
+          pullRequestNode({ updatedAt: "2024-05-09T23:59:59Z", number: 3 }),
         ],
         { hasNextPage: true, endCursor: "cursor-1" },
       )),
@@ -154,7 +160,8 @@ describe("GhGitHubMetadataProvider", () => {
     const pages = await collect(provider.fetchPullRequestUpdates({
       repository,
       mode: "incremental",
-      watermarkUpdatedAt: "2024-06-10T02:00:00+02:00",
+      watermarkUpdatedAt: "2024-05-10T00:02:00Z",
+      lookbackDays: 7,
     }));
 
     expect(pages).toHaveLength(1);
@@ -285,25 +292,33 @@ describe("GhGitHubMetadataProvider", () => {
     expect(requestBody(http, 0).query).not.toContain("comments(first");
   });
 
-  it("keeps the 90-day bootstrap closed Issue boundary item and stops before the next page", async () => {
+  it("keeps the 30-day initial Issue boundary across all states and stops before the next page", async () => {
     const http = createFakeHttp([
-      httpJson(issueResponse([], { hasNextPage: false, endCursor: null })),
       httpJson(issueResponse(
         [
+          issueNode({
+            id: "I_OPEN",
+            number: 91,
+            state: "OPEN",
+            updatedAt: "2024-05-11T00:00:00Z",
+            closedAt: null,
+          }),
           issueNode({
             id: "I_BOUNDARY",
             number: 90,
             state: "CLOSED",
-            updatedAt: "2024-03-12T00:00:00Z",
+            updatedAt: "2024-05-11T00:00:00Z",
+            closedAt: "2024-05-11T00:00:00Z",
           }),
           issueNode({
             id: "I_OLD",
             number: 89,
             state: "CLOSED",
-            updatedAt: "2024-03-11T23:59:59Z",
+            updatedAt: "2024-05-10T23:59:59Z",
+            closedAt: "2024-05-10T23:59:59Z",
           }),
         ],
-        { hasNextPage: true, endCursor: "closed-issue-next" },
+        { hasNextPage: true, endCursor: "initial-issue-next" },
       )),
     ]);
     const provider = createProvider(http);
@@ -314,17 +329,17 @@ describe("GhGitHubMetadataProvider", () => {
       syncStartedAt: "2024-06-10T00:00:00Z",
     }));
 
-    expect(pages).toHaveLength(2);
-    expect(pages[0]?.items).toHaveLength(0);
-    expect(pages[1]?.items).toHaveLength(1);
-    expect(pages[1]?.items[0]).toMatchObject({
+    expect(pages).toHaveLength(1);
+    expect(pages[0]?.items).toHaveLength(2);
+    expect(pages[0]?.items.map((item) => item.status)).toEqual(["open", "closed"]);
+    expect(pages[0]?.items[1]).toMatchObject({
       number: 90,
       state: "CLOSED",
       status: "closed",
-      updatedAt: "2024-03-12T00:00:00.000Z",
+      updatedAt: "2024-05-11T00:00:00.000Z",
     });
-    expect(requestBody(http, 1).variables.states).toEqual(["CLOSED"]);
-    expect(http.calls).toHaveLength(2);
+    expect(requestBody(http, 0).variables.states).toEqual(["OPEN", "CLOSED"]);
+    expect(http.calls).toHaveLength(1);
   });
 
   it.each([
@@ -379,6 +394,29 @@ describe("GhGitHubMetadataProvider", () => {
         syncStartedAt,
       })),
     ).rejects.toBeInstanceOf(GitHubGraphQLError);
+  });
+
+  it("rejects a repeated pagination cursor instead of fetching duplicate pages forever", async () => {
+    const http = createFakeHttp([
+      httpJson(pullRequestResponse(
+        [pullRequestNode({ number: 1 })],
+        { hasNextPage: true, endCursor: "same-cursor" },
+      )),
+      httpJson(pullRequestResponse(
+        [pullRequestNode({ number: 2 })],
+        { hasNextPage: true, endCursor: "same-cursor" },
+      )),
+    ]);
+    const provider = createProvider(http);
+
+    await expect(
+      collect(provider.fetchPullRequestUpdates({
+        repository,
+        mode: "incremental",
+        watermarkUpdatedAt: syncStartedAt,
+      })),
+    ).rejects.toThrow("endCursor repeated");
+    expect(http.calls).toHaveLength(2);
   });
 
   it("surfaces HTTP failures with an explicit diagnostic", async () => {
@@ -535,7 +573,6 @@ describe("GhGitHubMetadataProvider", () => {
         [pullRequestNode({ number: 1 })],
         { hasNextPage: false, endCursor: null },
       )),
-      httpJson(pullRequestResponse([], { hasNextPage: false, endCursor: null })),
     ]);
     const provider = new GhGitHubMetadataProvider({
       ghExecutable: auth.executable,
@@ -548,10 +585,9 @@ describe("GhGitHubMetadataProvider", () => {
       syncStartedAt,
     }));
 
-    expect(pages).toHaveLength(2);
-    expect(http.calls).toHaveLength(2);
+    expect(pages).toHaveLength(1);
+    expect(http.calls).toHaveLength(1);
     expect(http.calls[0]?.headers.authorization).toBe("Bearer gho_env_token");
-    expect(http.calls[1]?.headers.authorization).toBe("Bearer gho_env_token");
     expect(auth.calls).toHaveLength(0);
   });
 

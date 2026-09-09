@@ -21,8 +21,24 @@ import {
 } from "@loongboard/contracts";
 import type { FastifyInstance } from "fastify";
 
-import { parseRequest, sendParsed } from "./route-helpers.js";
+import { InvalidRequestError, parseRequest, sendParsed } from "./route-helpers.js";
 import type { SchedulerEngine } from "./scheduler.js";
+
+/** Actions backed by existing Server services; arbitrary command strings are rejected. */
+export const SUPPORTED_SYSTEM_ACTIONS = [
+  "repository.sync",
+  "knowledge.checkpoint",
+  "knowledge.push",
+] as const;
+
+function requireSupportedSystemAction(action: string | undefined): void {
+  if (action === undefined) {
+    throw new InvalidRequestError("System tasks require an action");
+  }
+  if (!(SUPPORTED_SYSTEM_ACTIONS as readonly string[]).includes(action)) {
+    throw new InvalidRequestError(`Unsupported system scheduled action: ${action}`);
+  }
+}
 
 export interface ScheduledTaskRoutesDependencies {
   database: DatabaseClient;
@@ -49,6 +65,10 @@ export function taskInput(
     provider: body.provider ?? existing?.provider ?? defaults.provider,
     model: body.model ?? existing?.model ?? defaults.model,
     reasoningEffort: body.reasoningEffort ?? existing?.reasoningEffort ?? defaults.reasoningEffort,
+    kind: body.kind ?? existing?.kind ?? "agent",
+    action: body.action ?? existing?.action ?? null,
+    repositoryId: body.repositoryId ?? existing?.repositoryId ?? null,
+    conversationId: body.conversationId ?? existing?.conversationId ?? null,
     enabled: body.enabled ?? existing?.enabled ?? true,
   };
 }
@@ -66,6 +86,7 @@ export function registerScheduledTaskRoutes(
 
   app.post("/api/scheduled-tasks", async (request, reply) => {
     const body = parseRequest(scheduledTaskCreateSchema, request.body);
+    if (body.kind === "system") requireSupportedSystemAction(body.action);
     const input = taskInput(body, defaults);
     const task = createScheduledTask(database, input);
     const scheduled = engine.refresh(task.id);
@@ -75,6 +96,12 @@ export function registerScheduledTaskRoutes(
   app.put("/api/scheduled-tasks/:id", async (request, reply) => {
     const { id } = parseRequest(scheduledTaskParamsSchema, request.params);
     const body = parseRequest(scheduledTaskUpdateSchema, request.body) as ScheduledTaskUpdate;
+    const nextKind = body.kind ?? requireScheduledTask(database, id).kind;
+    if (nextKind === "system") {
+      requireSupportedSystemAction(body.action ?? requireScheduledTask(database, id).action ?? undefined);
+    } else if (body.action !== undefined) {
+      throw new InvalidRequestError("Agent tasks cannot define a system action");
+    }
     const existing = requireScheduledTask(database, id);
     const input = taskInput(body as ScheduledTaskCreate, defaults, existing);
     const nextRun =

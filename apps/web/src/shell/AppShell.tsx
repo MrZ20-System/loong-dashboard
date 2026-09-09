@@ -15,10 +15,14 @@ import { MetadataPage } from "../features/community/MetadataPage";
 import { RepositoryActivityPage } from "../features/community/RepositoryActivityPage";
 import { DomainsSettingsPage } from "../features/settings/DomainsSettingsPage";
 import { SettingsShell } from "../features/settings/SettingsShell";
+import { AgentSettings, IntegrationsSettings, RepositoriesSettings, SettingsControlCenter, KnowledgeCheckpointSettingsPage } from "../features/settings/SettingsControlCenter";
 import { HealthPage } from "../features/system/HealthPage";
 import { AppSidebar } from "./AppSidebar";
 import { ContextHeader } from "./ContextHeader";
 import { NotFoundPage } from "./NotFoundPage";
+import { AgentPage } from "../features/agent/AgentPage";
+import { GlobalAgentDock } from "../features/agent/GlobalAgentDock";
+import { AgentSessionSelectionProvider } from "../features/agent/agent-session-context";
 
 export function AppShell() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -31,6 +35,7 @@ export function AppShell() {
     location.pathname.match(/^\/repositories\/[^/]+\/pulls\/\d+\/?$/) !== null;
   return (
     <AppThemeContext.Provider value={theme}>
+      <AgentSessionSelectionProvider>
       <div
         className={`app-shell${prFocus ? " app-shell--pr-focus" : ""}`}
         data-theme={theme}
@@ -66,11 +71,16 @@ export function AppShell() {
           >
             <Routes>
               <Route path="/" element={<BoardPage />} />
+              <Route path="/agent" element={<AgentPage />} />
               <Route path="/health" element={<Navigate to="/settings/health" replace />} />
               <Route
                 path="/settings"
-                element={<Navigate to="/settings/domains" replace />}
+                element={<SettingsShell><SettingsControlCenter /></SettingsShell>}
               />
+              <Route path="/settings/repositories" element={<SettingsShell><RepositoriesSettings /></SettingsShell>} />
+              <Route path="/settings/integrations" element={<SettingsShell><IntegrationsSettings /></SettingsShell>} />
+              <Route path="/settings/agent" element={<SettingsShell><AgentSettings /></SettingsShell>} />
+              <Route path="/settings/checkpoint" element={<SettingsShell><KnowledgeCheckpointSettingsPage /></SettingsShell>} />
               <Route
                 path="/settings/domains"
                 element={
@@ -128,6 +138,7 @@ export function AppShell() {
               <Route path="*" element={<NotFoundPage />} />
             </Routes>
           </main>
+          {!prFocus && <GlobalAgentDock />}
           {!prFocus && (
             <footer className="app-footer">
               LoongBoard · local-first engineering workspace
@@ -135,6 +146,7 @@ export function AppShell() {
           )}
         </div>
       </div>
+      </AgentSessionSelectionProvider>
     </AppThemeContext.Provider>
   );
 }

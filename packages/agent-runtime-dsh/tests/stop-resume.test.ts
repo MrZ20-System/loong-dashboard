@@ -1,94 +1,35 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  AgentRuntimeEvent,
-  AgentSessionSpec,
-} from "@loongboard/agent-runtime";
+import { describe, expect, it } from "vitest";
+import type { AgentRuntimeEvent, AgentSessionSpec } from "@loongboard/agent-runtime";
 
 import { DSHRuntime } from "../src/index.js";
+import {
+  FakeNativeDshTransport,
+  requestFor,
+} from "./fake-native-transport.js";
 
-type PendingRun = {
-  prompt: string;
-  resolve: (result: {
-    sessionId: string;
-    finalResponse: string;
-    events: unknown[];
-    notifications: unknown[];
-  }) => void;
-  reject: (error: Error) => void;
-};
-
-type FakeHarnessHandle = {
-  sessionCalls: Array<string | undefined>;
-  pendingRuns: PendingRun[];
-  close: () => void;
-};
-
-const fakeSdk = vi.hoisted(() => {
-  const harnesses: FakeHarnessHandle[] = [];
-  return {
-    harnesses,
-    reset(): void {
-      harnesses.length = 0;
-    },
-  };
-});
-
-vi.mock("@deepseek-ai/dsh-sdk-client", () => {
-  return {
-    DeepSeekHarness: class {
-      readonly handle: FakeHarnessHandle;
-
-      constructor() {
-        this.handle = {
-          sessionCalls: [],
-          pendingRuns: [],
-          close: () => {
-            for (const pending of this.handle.pendingRuns.splice(0)) {
-              pending.reject(new Error("runtime process closed"));
-            }
-          },
-        };
-        fakeSdk.harnesses.push(this.handle);
-      }
-
-      session(sessionId?: string): {
-        run: (
-          prompt: string,
-        ) => Promise<{
-          sessionId: string;
-          finalResponse: string;
-          events: unknown[];
-          notifications: unknown[];
-        }>;
-      } {
-        this.handle.sessionCalls.push(sessionId);
-        return {
-          run: (prompt: string) =>
-            new Promise((resolve, reject) => {
-              this.handle.pendingRuns.push({
-                prompt,
-                resolve: resolve as PendingRun["resolve"],
-                reject: reject as PendingRun["reject"],
-              });
-            }),
-        };
-      }
-
-      close(): Promise<void> {
-        this.handle.close();
-        return Promise.resolve();
-      }
-    },
-  };
-});
-
-function sessionSpec(): AgentSessionSpec {
+function sessionSpec(overrides: Partial<AgentSessionSpec> = {}): AgentSessionSpec {
   return {
     sessionId: "s1",
     workspacePath: "/tmp/loongboard-work",
     dshHomePath: "/tmp/loongboard-dsh",
     provider: "deepseek",
     model: "deepseek-v4",
+    ...overrides,
+  };
+}
+
+function journalEvent(type: string, data: Record<string, unknown>, seq: number): unknown {
+  return {
+    type: "event",
+    event: { type, seq, time: 1_700_000_000_000 + seq, data },
+  };
+}
+
+function hostIdle(sessionId: string): unknown {
+  return {
+    type: "emit",
+    event: "api-session/status",
+    args: [sessionId, false],
   };
 }
 
@@ -100,116 +41,94 @@ async function nextEvent(
   return next.value;
 }
 
-describe("DSHRuntime stop/resume", () => {
-  beforeEach(() => {
-    fakeSdk.reset();
+async function completeTurn(
+  iterator: AsyncGenerator<AgentRuntimeEvent>,
+  transport: FakeNativeDshTransport,
+  sessionId: string,
+  text: string,
+): Promise<void> {
+  const completion = iterator.next();
+  transport.pushJournal(
+    journalEvent(
+      "assistant/message",
+      { message: { content: [{ type: "text", text }] } },
+      2,
+    ),
+  );
+  transport.pushJournal(journalEvent("turn/end", {}, 3));
+  transport.pushHost(hostIdle(sessionId));
+  expect(await completion).toEqual({
+    done: false,
+    value: { type: "assistant.completed", markdown: text },
+  });
+  expect(await iterator.next()).toEqual({
+    done: false,
+    value: { type: "status", status: "idle" },
+  });
+  expect((await iterator.next()).done).toBe(true);
+}
+
+describe("DSHRuntime opaque session resume", () => {
+  it("passes the persisted opaque id to a new native transport after process stop", async () => {
+    const firstTransport = new FakeNativeDshTransport("opaque-session-1");
+    const secondTransport = new FakeNativeDshTransport("opaque-session-1");
+    const transports = [firstTransport, secondTransport];
+    const runtime = new DSHRuntime({
+      transportFactory: () => {
+        const transport = transports.shift();
+        if (transport === undefined) throw new Error("unexpected third transport");
+        return transport;
+      },
+    });
+
+    try {
+      const first = runtime.run(sessionSpec(), "first");
+      expect(await nextEvent(first)).toEqual({ type: "status", status: "starting" });
+      expect(await nextEvent(first)).toEqual({ type: "status", status: "running" });
+      await completeTurn(first, firstTransport, "opaque-session-1", "first answer");
+      expect(runtime.runtimeSessionId("s1")).toBe("opaque-session-1");
+
+      await runtime.stop("s1");
+      expect(firstTransport.closed).toBe(true);
+      expect(runtime.runtimeSessionId("s1")).toBeNull();
+
+      const resumed = runtime.run(
+        sessionSpec({ runtimeSessionId: "opaque-session-1" }),
+        "resumed",
+      );
+      expect(await nextEvent(resumed)).toEqual({ type: "status", status: "starting" });
+      expect(await nextEvent(resumed)).toEqual({ type: "status", status: "running" });
+      expect(requestFor(secondTransport, "session/create")?.args).toEqual({
+        request: { cwd: "/tmp/loongboard-work", sessionId: "opaque-session-1" },
+      });
+      await completeTurn(resumed, secondTransport, "opaque-session-1", "resumed answer");
+    } finally {
+      await runtime.close();
+    }
   });
 
-  it("mints a fresh runtime session after stop instead of reusing the stopped session id", async () => {
-    const runtime = new DSHRuntime();
+  it("closes pending follow streams when the runtime is stopped", async () => {
+    const transport = new FakeNativeDshTransport("opaque-session-1");
+    const runtime = new DSHRuntime({ transportFactory: () => transport });
+    const iterator = runtime.run(sessionSpec(), "long turn");
 
-    // First completed turn records runtime session "rt-1" in the runtime map
-    // the same way a controller would persist it in the database.
-    const first = (async function* () {
-      yield* runtime.run(sessionSpec(), "first");
-    })();
-    expect(await nextEvent(first)).toEqual({
-      type: "status",
-      status: "starting",
-    });
-    expect(await nextEvent(first)).toEqual({
-      type: "status",
-      status: "running",
-    });
-    const firstDrain = first.next();
-    expect(fakeSdk.harnesses).toHaveLength(1);
-    expect(fakeSdk.harnesses[0]?.sessionCalls).toEqual([undefined]);
-    const firstRun = fakeSdk.harnesses[0]?.pendingRuns[0];
-    expect(firstRun).toBeDefined();
-    firstRun?.resolve({
-      sessionId: "rt-1",
-      finalResponse: "first answer",
-      events: [],
-      notifications: [],
-    });
-    expect(await firstDrain).toEqual({
-      done: false,
-      value: { type: "assistant.completed", markdown: "first answer" },
-    });
-    expect(await first.next()).toEqual({
-      done: false,
-      value: { type: "status", status: "idle" },
-    });
-    expect((await first.next()).done).toBe(true);
-    expect(runtime.runtimeSessionId("s1")).toBe("rt-1");
+    try {
+      expect(await nextEvent(iterator)).toEqual({ type: "status", status: "starting" });
+      expect(await nextEvent(iterator)).toEqual({ type: "status", status: "running" });
 
-    // Second turn is cancelled mid-flight: closing the harness must also
-    // forget the interrupted runtime session id so the next turn cannot
-    // hand a dead/stale DSH session id to a fresh process.
-    const secondSpec: AgentSessionSpec = {
-      ...sessionSpec(),
-      runtimeSessionId: "rt-1",
-    };
-    const second = (async function* () {
-      yield* runtime.run(secondSpec, "long turn");
-    })();
-    expect(await nextEvent(second)).toEqual({
-      type: "status",
-      status: "starting",
-    });
-    expect(await nextEvent(second)).toEqual({
-      type: "status",
-      status: "running",
-    });
-    const secondDrain = second.next();
-    const stoppedHarness = fakeSdk.harnesses[0];
-    expect(stoppedHarness?.sessionCalls).toEqual([undefined, "rt-1"]);
-    expect(stoppedHarness?.pendingRuns.at(-1)?.prompt).toBe("long turn");
-    await runtime.stop("s1");
-    expect(await secondDrain).toEqual({
-      done: false,
-      value: { type: "error", message: "runtime process closed" },
-    });
-    expect(await second.next()).toEqual({
-      done: false,
-      value: { type: "status", status: "idle" },
-    });
-    expect((await second.next()).done).toBe(true);
-
-    // A later turn has no persisted runtime session id (the controller clears
-    // it on interruption). It must start a fresh DSH session, never the
-    // stopped "rt-1" still cached by this runtime instance.
-    const resumed = (async function* () {
-      yield* runtime.run(sessionSpec(), "resumed");
-    })();
-    expect(await nextEvent(resumed)).toEqual({
-      type: "status",
-      status: "starting",
-    });
-    expect(await nextEvent(resumed)).toEqual({
-      type: "status",
-      status: "running",
-    });
-    const resumedDrain = resumed.next();
-    expect(fakeSdk.harnesses).toHaveLength(2);
-    expect(fakeSdk.harnesses[1]?.sessionCalls).toEqual([undefined]);
-    const resumedRun = fakeSdk.harnesses[1]?.pendingRuns[0];
-    expect(resumedRun).toBeDefined();
-    resumedRun?.resolve({
-      sessionId: "rt-2",
-      finalResponse: "resumed answer",
-      events: [],
-      notifications: [],
-    });
-    expect(await resumedDrain).toEqual({
-      done: false,
-      value: { type: "assistant.completed", markdown: "resumed answer" },
-    });
-    expect(await resumed.next()).toEqual({
-      done: false,
-      value: { type: "status", status: "idle" },
-    });
-    expect((await resumed.next()).done).toBe(true);
-    expect(runtime.runtimeSessionId("s1")).toBe("rt-2");
+      const pending = iterator.next();
+      await runtime.stop("s1");
+      expect(transport.closed).toBe(true);
+      const interrupted = await pending;
+      expect(interrupted.done).toBe(false);
+      expect(interrupted.value).toMatchObject({ type: "error" });
+      expect(await iterator.next()).toEqual({
+        done: false,
+        value: { type: "status", status: "idle" },
+      });
+      expect((await iterator.next()).done).toBe(true);
+    } finally {
+      await runtime.close();
+    }
   });
 });

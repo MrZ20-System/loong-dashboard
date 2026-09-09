@@ -1,9 +1,11 @@
 import {
   agentMessageAcceptedSchema,
   agentMessagesResponseSchema,
+  agentSessionDeleteResponseSchema,
   agentRuntimeEventSchema,
   agentSessionResponseSchema,
   agentSessionsResponseSchema,
+  agentInteractionResponseSchema,
   type AgentMessageAccepted,
   type AgentMessagesResponse,
   type AgentRuntimeEvent,
@@ -53,7 +55,7 @@ async function requestJson<T>(
 
 export function ensureAgentSession(
   scope: AgentScope,
-  overrides?: { provider?: string; model?: string; reasoningEffort?: "low" | "medium" | "high" },
+  overrides?: { provider?: string; model?: string; reasoningEffort?: string },
   fetchImpl: ApiFetch = globalThis.fetch,
 ): Promise<AgentSessionResponse> {
   return requestJson(
@@ -133,6 +135,37 @@ export async function cancelAgentTurn(
     agentSessionResponseSchema,
     { method: "POST" },
   );
+}
+
+export function deleteAgentSession(sessionId: string, fetchImpl: ApiFetch = globalThis.fetch): Promise<{ deleted: true }> {
+  return requestJson(fetchImpl, `/api/agent-sessions/${encodeURIComponent(sessionId)}`, agentSessionDeleteResponseSchema, { method: "DELETE" });
+}
+
+export function updateAgentSession(sessionId: string, patch: { provider?: string; model?: string; reasoningEffort?: string }, fetchImpl: ApiFetch = globalThis.fetch): Promise<AgentSessionResponse> {
+  return requestJson(fetchImpl, `/api/agent-sessions/${encodeURIComponent(sessionId)}`, agentSessionResponseSchema, { method: "PATCH", body: JSON.stringify(patch) });
+}
+
+export async function respondAgentInteraction(
+  sessionId: string,
+  requestId: string,
+  value: string,
+  fetchImpl: ApiFetch = globalThis.fetch,
+): Promise<void> {
+  const body = agentInteractionResponseSchema.parse({ value });
+  const response = await fetchImpl(
+    `/api/agent-sessions/${encodeURIComponent(sessionId)}/interactions/${encodeURIComponent(requestId)}`,
+    { method: "POST", headers: { Accept: "application/json", "Content-Type": "application/json" }, body: JSON.stringify(body) },
+  );
+  if (!response.ok) {
+    let detail = response.statusText;
+    try {
+      const errorBody = (await response.json()) as { error?: { message?: string } };
+      if (errorBody.error?.message) detail = errorBody.error.message;
+    } catch {
+      // Keep the HTTP status text when the error body is not JSON.
+    }
+    throw new Error(`POST interaction failed with HTTP ${response.status}: ${detail}`);
+  }
 }
 
 export async function syncAgentWorkspace(

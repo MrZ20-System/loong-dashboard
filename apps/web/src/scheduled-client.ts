@@ -53,9 +53,13 @@ export type TaskDraft = {
   name: string;
   cronExpression: string;
   timezone: string;
-  prompt: string;
-  workspacePath: string;
+  prompt?: string;
+  workspacePath?: string;
   enabled: boolean;
+  kind?: "agent" | "system";
+  action?: string;
+  repositoryId?: string;
+  conversationId?: string | null;
 };
 
 export function fetchScheduledTasks(fetchImpl: ScheduleFetch = globalThis.fetch): Promise<ScheduledTasksResponse> {

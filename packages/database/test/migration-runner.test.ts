@@ -90,6 +90,7 @@ describe("database migrations", () => {
         { id: "003_issue_state_constraint" },
         { id: "004_domain_classification" },
         { id: "005_issue_detail_cache" },
+        { id: "006_agent_runtime_scheduler" },
       ]);
     } finally {
       database.close();
@@ -116,6 +117,7 @@ describe("database migrations", () => {
         expect.objectContaining({ id: "003_issue_state_constraint" }),
         expect.objectContaining({ id: "004_domain_classification" }),
         expect.objectContaining({ id: "005_issue_detail_cache" }),
+        expect.objectContaining({ id: "006_agent_runtime_scheduler" }),
       ]);
     } finally {
       database.close();

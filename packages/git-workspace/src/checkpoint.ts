@@ -17,7 +17,7 @@ export interface RunCheckpointInput {
 export interface RunCheckpointResult {
   /** True when a commit was created for pending changes. */
   committed: boolean;
-  /** True when a push followed the commit. */
+  /** True when a push followed the commit or pushed an existing HEAD. */
   pushed?: boolean;
   error?: string;
 }
@@ -29,24 +29,24 @@ export async function runCheckpoint(
     const status = await execa("git", ["status", "--porcelain"], {
       cwd: input.repositoryPath,
     });
-    if (status.stdout.trim().length === 0) {
-      return { committed: false };
+    const dirty = status.stdout.trim().length > 0;
+    if (dirty) {
+      await execa("git", ["add", "-A"], { cwd: input.repositoryPath });
+      await execa("git", ["commit", "-m", input.message], {
+        cwd: input.repositoryPath,
+      });
     }
-    await execa("git", ["add", "-A"], { cwd: input.repositoryPath });
-    await execa("git", ["commit", "-m", input.message], {
-      cwd: input.repositoryPath,
-    });
     if (input.push !== true || input.remote === undefined || input.branch === undefined) {
-      return { committed: true };
+      return { committed: dirty };
     }
     try {
       await execa("git", ["push", input.remote, input.branch], {
         cwd: input.repositoryPath,
       });
-      return { committed: true, pushed: true };
+      return { committed: dirty, pushed: true };
     } catch (pushError) {
       return {
-        committed: true,
+        committed: dirty,
         pushed: false,
         error: pushError instanceof Error ? pushError.message : String(pushError),
       };

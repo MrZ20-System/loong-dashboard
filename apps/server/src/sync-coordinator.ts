@@ -34,6 +34,8 @@ export interface RepositorySyncCoordinatorOptions {
   provider: GitHubMetadataProvider;
   maxConcurrentRepositories?: number;
   lookbackDays?: number;
+  /** Resolve the configured initial/bootstrap metadata window for each run. */
+  lookbackDaysForRepository?: (repositoryId: string) => number;
   now?: () => Date;
   logger?: SyncCoordinatorLogger;
   /**
@@ -56,6 +58,7 @@ interface RepositorySyncJob {
   readonly repository: RepositoryRecord;
   readonly pullRequestState: RepositorySyncState;
   readonly issueState: RepositorySyncState;
+  readonly lookbackDays: number | undefined;
 }
 
 /**
@@ -117,6 +120,9 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
   private readonly provider: GitHubMetadataProvider;
   private readonly limiter: RepositoryConcurrencyLimiter;
   private readonly lookbackDays: number | undefined;
+  private readonly lookbackDaysForRepository:
+    | ((repositoryId: string) => number)
+    | undefined;
   private readonly now: () => Date;
   private readonly logger: SyncCoordinatorLogger;
   private readonly enricher: PullRequestFileEnricher | undefined;
@@ -142,6 +148,7 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
     this.provider = options.provider;
     this.limiter = new RepositoryConcurrencyLimiter(maximum);
     this.lookbackDays = options.lookbackDays;
+    this.lookbackDaysForRepository = options.lookbackDaysForRepository;
     this.now = options.now ?? (() => new Date());
     this.logger = options.logger ?? console;
     this.enricher = options.enricher;
@@ -181,6 +188,7 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
       repositoryId,
       "issue",
     );
+    const lookbackDays = this.resolveLookbackDays(repositoryId);
     const startedAt = this.timestamp();
     const run = startRepositorySync(this.database, repositoryId, startedAt);
 
@@ -189,6 +197,7 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
       repository,
       pullRequestState,
       issueState,
+      lookbackDays,
     });
     return run;
   }
@@ -235,9 +244,9 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
         mode: syncMode(job.pullRequestState),
         watermarkUpdatedAt: job.pullRequestState.watermarkUpdatedAt,
         syncStartedAt: job.run.startedAt,
-        ...(this.lookbackDays === undefined
+        ...(job.lookbackDays === undefined
           ? {}
-          : { lookbackDays: this.lookbackDays }),
+          : { lookbackDays: job.lookbackDays }),
       };
 
       for await (const page of this.provider.fetchPullRequestUpdates(input)) {
@@ -278,9 +287,9 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
         mode: syncMode(job.issueState),
         watermarkUpdatedAt: job.issueState.watermarkUpdatedAt,
         syncStartedAt: job.run.startedAt,
-        ...(this.lookbackDays === undefined
+        ...(job.lookbackDays === undefined
           ? {}
-          : { lookbackDays: this.lookbackDays }),
+          : { lookbackDays: job.lookbackDays }),
       };
 
       for await (const page of this.provider.fetchIssueUpdates(input)) {
@@ -358,6 +367,14 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
       throw new Error("Sync coordinator clock returned an invalid Date");
     }
     return value.toISOString();
+  }
+
+  private resolveLookbackDays(repositoryId: string): number | undefined {
+    const value = this.lookbackDaysForRepository?.(repositoryId) ?? this.lookbackDays;
+    if (value !== undefined && (!Number.isInteger(value) || value <= 0)) {
+      throw new Error("lookbackDays must be a positive integer");
+    }
+    return value;
   }
 }
 

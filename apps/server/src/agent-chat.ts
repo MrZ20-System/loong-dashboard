@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
@@ -21,6 +21,7 @@ import {
   recordWorktreeSlotUse,
   requireAgentSession,
   touchAgentSession,
+  deleteAgentSession,
   updateAgentMessage,
   updateAgentSession,
   type DatabaseClient,
@@ -29,23 +30,29 @@ import {
   agentMessageAcceptedSchema,
   agentMessageCreateSchema,
   agentMessagesResponseSchema,
+  agentInteractionParamsSchema,
+  agentInteractionResponseSchema,
   agentParamsSchema,
   agentRuntimeEventSchema,
   agentSessionCreateSchema,
+  agentSessionDeleteResponseSchema,
   agentSessionResponseSchema,
+  agentSessionUpdateSchema,
   agentSessionsQuerySchema,
   agentSessionsResponseSchema,
   type AgentMessageAccepted,
   type AgentRuntimeEvent as ContractEvent,
+  type AgentRuntimeCapabilities,
   type AgentScope,
   type AgentSessionCreate,
+  type AgentSessionUpdate,
   type AgentSessionSummary,
   type AgentSessionsQuery,
 } from "@loongboard/contracts";
 import { WorktreePool, type AllocatedSlot } from "@loongboard/git-workspace";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
-import { parseRequest, sendParsed } from "./route-helpers.js";
+import { InvalidRequestError, parseRequest, sendParsed } from "./route-helpers.js";
 import { WorkspaceRunCoordinator } from "./workspace-run-coordinator.js";
 
 export class AgentSessionNotFoundError extends Error {
@@ -63,6 +70,15 @@ export class AgentTurnBusyError extends Error {
   constructor(sessionId: string) {
     super(`Agent session ${sessionId} already has a running turn`);
     this.name = "AgentTurnBusyError";
+  }
+}
+
+export class AgentInteractionUnavailableError extends Error {
+  readonly code = "AGENT_INTERACTION_UNAVAILABLE" as const;
+
+  constructor(sessionId: string, reason = "the session has no active interaction") {
+    super(`Agent session ${sessionId} cannot resolve an interaction: ${reason}`);
+    this.name = "AgentInteractionUnavailableError";
   }
 }
 
@@ -114,7 +130,17 @@ function sessionScopeKey(scope: AgentScope): string {
   if (scope.kind === "knowledge") {
     return `knowledge:${scope.knowledgeDocumentId ?? ""}`;
   }
-  return "general";
+  if (scope.kind === "repository") {
+    return `repository:${scope.repositoryId ?? ""}:${scope.route ?? ""}`;
+  }
+  if (scope.kind === "domain") {
+    return `domain:${scope.repositoryId ?? ""}:${scope.domainId ?? ""}:${scope.route ?? ""}`;
+  }
+  return `general:${scope.route ?? ""}`;
+}
+
+function interactionKey(sessionId: string, requestId: string): string {
+  return `${sessionId}\u0000${requestId}`;
 }
 
 export interface AgentChatDependencies {
@@ -127,6 +153,8 @@ export interface AgentChatDependencies {
   worktreesPath: string;
   /** Knowledge root used as the cwd for knowledge/general chats. */
   knowledgePath?: string;
+  /** System root used by Domain conversations to edit JSON/prompt files. */
+  domainWorkspaceRoot?: string;
   /** Optional pool override (tests inject a gated/fake pool). */
   worktreePool?: WorktreePool;
   defaults: {
@@ -137,6 +165,8 @@ export interface AgentChatDependencies {
   };
   /** Optional runtime factory override (tests inject a scripted runtime). */
   runtimeFactory?: (spec: AgentSessionSpec) => AgentRuntime;
+  /** Provider secrets delivered to the DSH native credential boundary. */
+  credentials?: () => Promise<Record<string, string>>;
 }
 
 /** One session view plus its PR revision snapshot (plan 12.5, 17.5). */
@@ -151,17 +181,24 @@ interface SseConnection {
   closed: boolean;
 }
 
-function defaultRuntimeFactory(): (spec: AgentSessionSpec) => AgentRuntime {
-  // The plan grants the DSH child full access on this trusted machine and
-  // lets it inherit the parent's model credentials (plan 3.5). The child
-  // environment replaces the parent entirely, so spread it first.
-  return () =>
-    new DSHRuntime({
-      env: {
-        ...process.env,
-        DSH_PERMISSION_MODE: process.env.DSH_PERMISSION_MODE ?? "danger-full-access",
-      },
+function defaultRuntimeFactory(
+  credentials?: () => Promise<Record<string, string>>,
+): (spec: AgentSessionSpec) => AgentRuntime {
+  // The DSH web host owns permission presets and approval handling. The child
+  // inherits the parent environment only so runtime credentials can reach
+  // DSH's own provider settings; GitHub credentials are removed below.
+  return () => {
+    // GitHub credentials are injected by the GitHub integration at the
+    // boundary that needs them. They must never be inherited by an arbitrary
+    // runtime child through the ambient process environment.
+    const { GH_TOKEN: _ghToken, GITHUB_TOKEN: _githubToken, ...parentEnv } = process.env;
+    void _ghToken;
+    void _githubToken;
+    return new DSHRuntime({
+      env: parentEnv,
+      ...(credentials === undefined ? {} : { credentials }),
     });
+  };
 }
 
 /**
@@ -176,13 +213,14 @@ export class AgentChatController {
   private readonly subscribers = new Map<string, Set<SseConnection>>();
   private readonly runningTurns = new Map<string, Promise<void>>();
   private readonly cancelled = new Set<string>();
+  private readonly emittedInteractionResolutions = new Set<string>();
   private readonly sessionCreates = new Map<string, Promise<AgentSessionView>>();
   private readonly worktreePool: WorktreePool;
 
   constructor(private readonly dependencies: AgentChatDependencies) {
     const idleMs = dependencies.defaults.idleProcessMinutes * 60_000;
     this.host = new AgentRuntimeHost(
-      dependencies.runtimeFactory ?? defaultRuntimeFactory(),
+      dependencies.runtimeFactory ?? defaultRuntimeFactory(dependencies.credentials),
       idleMs,
     );
     this.worktreePool = dependencies.worktreePool ?? new WorktreePool();
@@ -190,7 +228,9 @@ export class AgentChatController {
 
   async ensureSession(body: AgentSessionCreate): Promise<AgentSessionView> {
     const { database } = this.dependencies;
-    const existing = findAgentSession(database, body.scope);
+    const scope = body.origin ?? body.scope;
+    const normalizedBody: AgentSessionCreate = { ...body, scope };
+    const existing = findAgentSession(database, scope);
     if (existing !== null) {
       touchAgentSession(database, existing.id);
       return this.viewFor(existing);
@@ -198,10 +238,10 @@ export class AgentChatController {
     // Single-flight per scope: two StrictMode/concurrent opens must share one
     // allocation and one persisted session instead of racing the first
     // worktree checkout.
-    const key = sessionScopeKey(body.scope);
+    const key = sessionScopeKey(scope);
     const inFlight = this.sessionCreates.get(key);
     if (inFlight !== undefined) return inFlight;
-    const creation = this.createSession(body);
+    const creation = this.createSession(normalizedBody);
     this.sessionCreates.set(key, creation);
     try {
       return await creation;
@@ -210,6 +250,56 @@ export class AgentChatController {
         this.sessionCreates.delete(key);
       }
     }
+  }
+
+  /**
+   * Resolve the durable conversation owned by one scheduled task. Scheduler
+   * input has already been read from the trusted local database, so this
+   * method intentionally does not accept a browser supplied workspace.
+   */
+  async ensureScheduledSession(input: {
+    taskId: string;
+    workspacePath: string;
+    provider: string;
+    model: string;
+    reasoningEffort: string;
+    title?: string;
+  }): Promise<AgentSessionSummary> {
+    const scope: AgentScope = {
+      kind: "general",
+      route: `scheduled-task:${input.taskId}`,
+    };
+    const existing = findAgentSession(this.dependencies.database, scope);
+    if (existing !== null) {
+      if (existing.workspacePath !== input.workspacePath) {
+        // A schedule edit may move its durable conversation to a new trusted
+        // workspace. Restart the old process first because DSH pins cwd at
+        // start, then clear its opaque id for the new path.
+        if (this.runningTurns.has(existing.id)) {
+          throw new AgentTurnBusyError(existing.id);
+        }
+        await this.host.restart(existing.id);
+        return updateAgentSession(this.dependencies.database, existing.id, {
+          workspacePath: input.workspacePath,
+          dshSessionId: null,
+          status: "idle",
+        });
+      }
+      return existing;
+    }
+    const id = `sess_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
+    const session = createAgentSession(this.dependencies.database, {
+      id,
+      scope,
+      dshHomePath: join(this.dependencies.agentSessionsPath, id, "dsh-home"),
+      workspacePath: input.workspacePath,
+      provider: input.provider,
+      model: input.model,
+      reasoningEffort: input.reasoningEffort,
+      title: input.title ?? `Scheduled: ${input.taskId}`,
+      now: new Date().toISOString(),
+    });
+    return session;
   }
 
   private async createSession(body: AgentSessionCreate): Promise<AgentSessionView> {
@@ -228,6 +318,7 @@ export class AgentChatController {
       provider: body.provider ?? this.dependencies.defaults.provider,
       model: body.model ?? this.dependencies.defaults.model,
       reasoningEffort: body.reasoningEffort ?? this.dependencies.defaults.reasoningEffort,
+      title: body.title ?? null,
       now: new Date().toISOString(),
     });
     return this.viewFor(session);
@@ -237,11 +328,158 @@ export class AgentChatController {
   listSessions(query: AgentSessionsQuery): AgentSessionSummary[] {
     return listAgentSessions(this.dependencies.database, {
       scopeType: query.scopeType,
+      originKind: query.originKind,
       repositoryId: query.repositoryId,
       prNumber: query.prNumber,
       issueNumber: query.issueNumber,
       knowledgeDocumentId: query.knowledgeDocumentId,
+      status: query.status,
+      search: query.search ?? query.q,
+      limit: query.limit,
     });
+  }
+
+  /** Stop and delete one normalized conversation and its transcript. */
+  async deleteSession(sessionId: string): Promise<{ deleted: true }> {
+    if (this.runningTurns.has(sessionId)) {
+      throw new AgentTurnBusyError(sessionId);
+    }
+    requireAgentSession(this.dependencies.database, sessionId);
+    await this.host.restart(sessionId);
+    deleteAgentSession(this.dependencies.database, sessionId);
+    this.clearInteractionResolutions(sessionId);
+    const subscribers = this.subscribers.get(sessionId);
+    if (subscribers !== undefined) {
+      for (const connection of subscribers) {
+        connection.closed = true;
+        try {
+          connection.reply.raw.end();
+        } catch {
+          // The socket may already be gone.
+        }
+      }
+      this.subscribers.delete(sessionId);
+    }
+    return { deleted: true };
+  }
+
+  /** Apply route settings for the next turn while preserving the conversation. */
+  async updateSession(
+    sessionId: string,
+    patch: AgentSessionUpdate,
+  ): Promise<AgentSessionView> {
+    if (this.runningTurns.has(sessionId)) {
+      throw new AgentTurnBusyError(sessionId);
+    }
+    requireAgentSession(this.dependencies.database, sessionId);
+    const updated = updateAgentSession(this.dependencies.database, sessionId, {
+      ...(patch.provider !== undefined ? { provider: patch.provider } : {}),
+      ...(patch.model !== undefined ? { model: patch.model } : {}),
+      ...(patch.reasoningEffort !== undefined ? { reasoningEffort: patch.reasoningEffort } : {}),
+      ...(patch.title !== undefined ? { title: patch.title } : {}),
+    });
+    return this.viewFor(updated);
+  }
+
+  /** Probe runtime capabilities from the trusted server workspace. */
+  async discoverCapabilities(): Promise<AgentRuntimeCapabilities | null> {
+    mkdirSync(this.dependencies.agentSessionsPath, { recursive: true });
+    const probeRoot = mkdtempSync(join(this.dependencies.agentSessionsPath, "capability-"));
+    const spec: AgentSessionSpec = {
+      sessionId: `capability_${randomUUID().replace(/-/g, "")}`,
+      workspacePath: this.dependencies.knowledgePath ?? process.cwd(),
+      dshHomePath: join(probeRoot, "dsh-home"),
+      provider: this.dependencies.defaults.provider,
+      model: this.dependencies.defaults.model,
+      reasoningEffort: this.dependencies.defaults.reasoningEffort,
+    };
+    mkdirSync(spec.dshHomePath, { recursive: true });
+    try {
+      return await this.host.discoverCapabilities(spec);
+    } finally {
+      rmSync(probeRoot, { recursive: true, force: true });
+    }
+  }
+
+  health(): {
+    status: "ok";
+    activeSessions: number;
+    idleCloseMs: number;
+  } {
+    return {
+      status: "ok",
+      activeSessions: this.host.activeCount(),
+      idleCloseMs: this.host.idleCloseWindowMs(),
+    };
+  }
+
+  /**
+   * Change runtime defaults for newly created sessions. Existing sessions
+   * keep their route; changing idle retention only rearms idle runtimes.
+   */
+  updateDefaults(patch: {
+    provider?: string;
+    model?: string;
+    reasoningEffort?: string;
+    idleProcessMinutes?: number;
+  }): {
+    provider: string;
+    model: string;
+    reasoningEffort: string;
+    idleProcessMinutes: number;
+  } {
+    if (patch.provider !== undefined) {
+      if (patch.provider.trim().length === 0) throw new Error("provider must not be empty");
+      this.dependencies.defaults.provider = patch.provider;
+    }
+    if (patch.model !== undefined) {
+      if (patch.model.trim().length === 0) throw new Error("model must not be empty");
+      this.dependencies.defaults.model = patch.model;
+    }
+    if (patch.reasoningEffort !== undefined) {
+      if (patch.reasoningEffort.trim().length === 0) {
+        throw new Error("reasoningEffort must not be empty");
+      }
+      this.dependencies.defaults.reasoningEffort = patch.reasoningEffort;
+    }
+    if (patch.idleProcessMinutes !== undefined) {
+      if (!Number.isInteger(patch.idleProcessMinutes) || patch.idleProcessMinutes < 0) {
+        throw new Error("idleProcessMinutes must be a non-negative integer");
+      }
+      this.dependencies.defaults.idleProcessMinutes = patch.idleProcessMinutes;
+      this.host.updateIdleCloseMs(patch.idleProcessMinutes * 60_000);
+    }
+    return {
+      provider: this.dependencies.defaults.provider,
+      model: this.dependencies.defaults.model,
+      reasoningEffort: this.dependencies.defaults.reasoningEffort,
+      idleProcessMinutes: this.dependencies.defaults.idleProcessMinutes,
+    };
+  }
+
+  /** Apply control-center runtime defaults without exposing DSH internals. */
+  updateRuntimeSettings(patch: {
+    defaultProvider?: string | null;
+    defaultModel?: string | null;
+    defaultReasoning?: string | null;
+    retentionMinutes?: number;
+  }): void {
+    if (patch.defaultProvider !== undefined && patch.defaultProvider !== null) {
+      this.dependencies.defaults.provider = patch.defaultProvider;
+    }
+    if (patch.defaultModel !== undefined && patch.defaultModel !== null) {
+      this.dependencies.defaults.model = patch.defaultModel;
+    }
+    if (patch.defaultReasoning !== undefined && patch.defaultReasoning !== null) {
+      this.dependencies.defaults.reasoningEffort = patch.defaultReasoning;
+    }
+    if (patch.retentionMinutes !== undefined) {
+      if (!Number.isInteger(patch.retentionMinutes) || patch.retentionMinutes < 0) {
+        throw new Error("retentionMinutes must be a non-negative integer");
+      }
+      this.dependencies.defaults.idleProcessMinutes = patch.retentionMinutes;
+      this.host.updateIdleCloseMs(patch.retentionMinutes * 60_000);
+    }
   }
 
   listMessages(sessionId: string): { items: ReturnType<typeof listAgentMessages> } {
@@ -265,9 +503,10 @@ export class AgentChatController {
       throw new AgentTurnBusyError(sessionId);
     }
     if (session.scope.kind !== "pr") return this.viewFor(session);
-    // The DSH process pins its cwd when it starts; stop it before the
-    // worktree is switched so the next turn starts in the new workspace.
-    await this.host.stop(sessionId);
+    // The DSH process pins its cwd when it starts; restart the host boundary
+    // before the worktree is switched so its internal id cannot bind the next
+    // turn to a stale process or workspace.
+    await this.host.restart(sessionId);
     const workspace = await this.prepareWorkspace(sessionId, session.scope);
     const updated =
       workspace.path === session.workspacePath
@@ -373,7 +612,10 @@ export class AgentChatController {
     requireAgentSession(this.dependencies.database, sessionId);
     const running = this.runningTurns.has(sessionId);
     if (running) this.cancelled.add(sessionId);
-    await this.host.stop(sessionId);
+    // A user cancellation invalidates the in-flight DSH session. Restart the
+    // host boundary so an adapter's private id cache cannot revive it after
+    // the database clears the persisted opaque id.
+    await this.host.restart(sessionId);
     updateAgentSession(this.dependencies.database, sessionId, {
       status: "interrupted",
       // The DSH process was killed mid-turn; its durable session log has an
@@ -385,12 +627,49 @@ export class AgentChatController {
     return this.viewFor(requireAgentSession(this.dependencies.database, sessionId));
   }
 
+  /** Resolve a runtime-owned interaction without bypassing the runtime. */
+  async respond(sessionId: string, requestId: string, value: string): Promise<void> {
+    if (requestId.trim().length === 0) {
+      throw new InvalidRequestError("Interaction requestId must not be empty");
+    }
+    if (value.trim().length === 0) {
+      throw new InvalidRequestError("Interaction value must not be empty");
+    }
+    requireAgentSession(this.dependencies.database, sessionId);
+    if (!this.runningTurns.has(sessionId) || !this.host.isRunning(sessionId)) {
+      throw new AgentInteractionUnavailableError(sessionId);
+    }
+    const runtime = this.host.runtime(sessionId);
+    if (runtime?.respond === undefined) {
+      throw new AgentInteractionUnavailableError(
+        sessionId,
+        "the connected runtime does not support responses",
+      );
+    }
+    const resolutionKey = interactionKey(sessionId, requestId);
+    this.emittedInteractionResolutions.add(resolutionKey);
+    try {
+      await runtime.respond(sessionId, requestId, value);
+    } catch (error) {
+      this.emittedInteractionResolutions.delete(resolutionKey);
+      throw error;
+    }
+    const resolved: ContractEvent = {
+      type: "interaction.resolved",
+      requestId,
+    };
+    this.persistRuntimeEvent(sessionId, resolved, new Map());
+    this.broadcast(sessionId, resolved);
+  }
+
   isRunning(sessionId: string): boolean {
     return this.runningTurns.has(sessionId);
   }
 
   async close(): Promise<void> {
+    const pendingTurns = [...this.runningTurns.values()];
     await this.host.close();
+    await Promise.allSettled(pendingTurns);
     for (const set of this.subscribers.values()) {
       for (const connection of set) {
         connection.closed = true;
@@ -403,6 +682,7 @@ export class AgentChatController {
     }
     this.subscribers.clear();
     this.cancelled.clear();
+    this.emittedInteractionResolutions.clear();
     this.runningTurns.clear();
   }
 
@@ -449,13 +729,13 @@ export class AgentChatController {
   }
 
   private async runTurn(session: AgentSessionSummary, prompt: string): Promise<void> {
-    // Only an idle session has a known-clean DSH process boundary. A session
-    // marked interrupted/error may hold the id of a DSH session whose durable
-    // log was cut mid-turn; reusing it would make every later turn fail the
-    // same way, so those turns start a fresh runtime session instead.
+    // A user- or startup-interrupted session may hold an opaque id for a turn
+    // whose durable log was cut mid-flight. Clear that id before retrying. A
+    // native runtime error has already ended its turn at the DSH boundary, so
+    // preserve its id and let the next turn recover the durable conversation.
     const resumeRuntimeSessionId =
-      session.status === "idle" ? (session.dshSessionId ?? undefined) : undefined;
-    if (session.status !== "idle" && session.dshSessionId !== null) {
+      session.status === "interrupted" ? undefined : (session.dshSessionId ?? undefined);
+    if (session.status === "interrupted" && session.dshSessionId !== null) {
       updateAgentSession(this.dependencies.database, session.id, {
         dshSessionId: null,
       });
@@ -473,6 +753,9 @@ export class AgentChatController {
     updateAgentSession(this.dependencies.database, session.id, { status: "running" });
     this.host.beginRun(session.id);
     let receivedCompletion = false;
+    let terminalIdle = false;
+    let runtimeFailed = false;
+    let persistedRuntimeSessionId = resumeRuntimeSessionId ?? null;
     const toolMessageIds = new Map<string, string>();
     try {
       const runtime = this.host.ensure(spec);
@@ -480,8 +763,6 @@ export class AgentChatController {
       for await (const event of runtime.run(spec, prompt)) {
         if (this.cancelled.has(session.id)) break;
         const normalized = agentRuntimeEventSchema.parse(event);
-        this.persistRuntimeEvent(session.id, normalized, toolMessageIds);
-        if (normalized.type === "assistant.completed") receivedCompletion = true;
         const tracked = runtime as AgentRuntime & {
           runtimeSessionId?: (sessionId: string) => string | null;
         };
@@ -489,14 +770,36 @@ export class AgentChatController {
           typeof tracked.runtimeSessionId === "function"
             ? tracked.runtimeSessionId(session.id)
             : null;
-        if (runtimeSessionId !== null && normalized.type === "assistant.completed") {
+        if (
+          runtimeSessionId !== null &&
+          runtimeSessionId !== persistedRuntimeSessionId
+        ) {
           updateAgentSession(this.dependencies.database, session.id, {
             dshSessionId: runtimeSessionId,
           });
+          persistedRuntimeSessionId = runtimeSessionId;
         }
+        if (
+          normalized.type === "interaction.resolved" &&
+          this.emittedInteractionResolutions.delete(
+            interactionKey(session.id, normalized.requestId),
+          )
+        ) {
+          // respond() already persisted and broadcast this acknowledgement;
+          // some runtimes also echo a host cancellation frame, so suppress
+          // that duplicate while preserving externally originated events.
+          continue;
+        }
+        this.persistRuntimeEvent(session.id, normalized, toolMessageIds);
+        if (normalized.type === "assistant.completed") receivedCompletion = true;
+        if (normalized.type === "status" && normalized.status === "idle") {
+          terminalIdle = true;
+        }
+        if (normalized.type === "error") runtimeFailed = true;
         this.broadcast(session.id, normalized);
       }
     } catch (error) {
+      runtimeFailed = true;
       const message = error instanceof Error ? error.message : String(error);
       this.broadcast(session.id, { type: "error", message });
       appendAgentMessage(this.dependencies.database, {
@@ -507,14 +810,24 @@ export class AgentChatController {
     } finally {
       this.host.endRun(session.id);
       const interrupted = this.cancelled.has(session.id);
-      const nextStatus = interrupted ? "interrupted" : receivedCompletion ? "idle" : "error";
+      const completed = (terminalIdle || receivedCompletion) && !runtimeFailed;
+      const nextStatus = interrupted ? "interrupted" : completed ? "idle" : "error";
       updateAgentSession(this.dependencies.database, session.id, {
         status: nextStatus,
-        // Only a completed turn leaves a DSH session that a fresh process can
-        // resume; interrupted and failed turns must not reuse its session id.
-        ...(nextStatus === "idle" ? {} : { dshSessionId: null }),
+        // Cancellation cuts an in-flight turn and invalidates its opaque id.
+        // A native error still has a durable DSH conversation, so retain the
+        // id for recovery on the next turn.
+        ...(nextStatus === "interrupted" ? { dshSessionId: null } : {}),
       });
       this.broadcast(session.id, { type: "status", status: "idle" });
+      this.clearInteractionResolutions(session.id);
+    }
+  }
+
+  private clearInteractionResolutions(sessionId: string): void {
+    const prefix = `${sessionId}\u0000`;
+    for (const key of this.emittedInteractionResolutions) {
+      if (key.startsWith(prefix)) this.emittedInteractionResolutions.delete(key);
     }
   }
 
@@ -563,6 +876,30 @@ export class AgentChatController {
         }
         break;
       }
+      case "interaction.requested":
+        appendAgentMessage(this.dependencies.database, {
+          sessionId,
+          role: "system-status",
+          contentMarkdown: `Approval requested: ${event.title}`,
+          metadata: {
+            type: event.type,
+            requestId: event.requestId,
+            kind: event.kind,
+            ...(event.description !== undefined
+              ? { description: event.description }
+              : {}),
+            options: event.options,
+          },
+        });
+        break;
+      case "interaction.resolved":
+        appendAgentMessage(this.dependencies.database, {
+          sessionId,
+          role: "system-status",
+          contentMarkdown: `Approval resolved: ${event.requestId}`,
+          metadata: { type: event.type, requestId: event.requestId },
+        });
+        break;
       case "error":
         appendAgentMessage(this.dependencies.database, {
           sessionId,
@@ -620,6 +957,12 @@ export class AgentChatController {
       return { path: slot.slotPath };
     }
     if (scope.repositoryId !== undefined) {
+      if (scope.kind === "domain") {
+        requireEnabledRepository(database, scope.repositoryId);
+        return {
+          path: this.dependencies.domainWorkspaceRoot ?? this.dependencies.knowledgePath ?? process.cwd(),
+        };
+      }
       // Issue chats run in the repository root (plan 14); no worktree.
       const repository = requireEnabledRepository(database, scope.repositoryId);
       return { path: repository.localPath };
@@ -671,11 +1014,31 @@ export function registerAgentRoutes(
     return sendParsed(reply, 200, agentMessagesResponseSchema, result);
   });
 
+  app.patch("/api/agent-sessions/:id", async (request, reply) => {
+    const { id } = parseRequest(agentParamsSchema, request.params);
+    const body = parseRequest(agentSessionUpdateSchema, request.body);
+    const result = await controller.updateSession(id, body);
+    return sendParsed(reply, 200, agentSessionResponseSchema, result);
+  });
+
+  app.delete("/api/agent-sessions/:id", async (request, reply) => {
+    const { id } = parseRequest(agentParamsSchema, request.params);
+    const result = await controller.deleteSession(id);
+    return sendParsed(reply, 200, agentSessionDeleteResponseSchema, result);
+  });
+
   app.post("/api/agent-sessions/:id/messages", async (request, reply) => {
     const { id } = parseRequest(agentParamsSchema, request.params);
     const body = parseRequest(agentMessageCreateSchema, request.body);
     const accepted = await controller.acceptMessage(id, body.content);
     return sendParsed(reply, 201, agentMessageAcceptedSchema, accepted);
+  });
+
+  app.post("/api/agent-sessions/:id/interactions/:requestId", async (request, reply) => {
+    const { id, requestId } = parseRequest(agentInteractionParamsSchema, request.params);
+    const { value } = parseRequest(agentInteractionResponseSchema, request.body);
+    await controller.respond(id, requestId, value);
+    return reply.code(204).send();
   });
 
   app.post("/api/agent-sessions/:id/workspace", async (request, reply) => {

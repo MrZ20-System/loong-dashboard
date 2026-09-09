@@ -1,77 +1,73 @@
-# Operations
+# 配置与运行
 
-LoongBoard runs locally with Node.js 24-26 (the pinned `better-sqlite3` ABI
-requires Node 26 on this machine), pnpm, Git, SQLite, GitHub API access, and
-a DSH runtime for Agent chat. Relative paths in `system.yaml` are resolved
-once against that file's directory and become absolute internal paths.
+## 安装和开发启动
 
-## GitHub authentication
+[package.json](../package.json) 当前要求 Node `>=24 <27`，包管理器固定 pnpm `11.19.0`。还需 Git；没有 `GH_TOKEN` 或 `GITHUB_TOKEN` 时需已认证的 gh。按所选 Node 版本安装原生 better-sqlite3 依赖，不手工替代 workspace 链接。
 
-GitHub metadata access goes through the server's GitHub provider over native
-HTTP fetch (GraphQL and REST). The provider resolves one bearer token per
-instance and reuses it: `GITHUB_TOKEN` when that environment variable is set
-and non-empty, otherwise `gh auth token`. An authenticated `gh` CLI is
-therefore required only when `GITHUB_TOKEN` is not set.
+在应用仓库根目录执行：
 
-## Credential handling
+```bash
+pnpm install
+pnpm dev
+```
 
-Startup retains the existing secure macOS Keychain-backed credential pattern
-for the local agent stack: secrets are resolved into the process environment
-at launch and never appear in `system.yaml`, in this documentation, or in
-command output or logs. No command here prints credentials.
+先准备父目录 `system.yaml`；独立克隆可复制 [system.example.yaml](../system.example.yaml) 到该位置，再修改仓库路径。已有配置时直接编辑所需项，不覆盖现存本机配置。
 
-## Run locally
+开发启动为两个进程：Fastify 默认 `127.0.0.1:4174`，Vite 默认 `127.0.0.1:5173`。Vite 将 `/api` 代理到 Server，覆盖变量为 `LOONGBOARD_API_ORIGIN`。`pnpm build` 只构建产物，不等于部署；当前 Server 不负责生产静态站点托管。
 
-1. Create `system.yaml` next to this repository (see
-   `system.example.yaml`); repository paths, `knowledge.path`, `.loong` and
-   `.worktrees` are resolved relative to it.
-2. `pnpm install` (a pnpm corepack shim and Node 26 may be required on
-   sandboxed machines; when `pnpm` is unavailable, link workspace packages
-   into `apps/*/node_modules/@loongboard` by hand).
-3. `pnpm dev` starts the Server and Web application. The local server listens
-   on `127.0.0.1:4174` by default and the web dev server proxies `/api` to it.
-4. Open `http://127.0.0.1:5173` (Vite default).
+## 配置定位和字段
 
-Runtime state lives under `.loong`; disposable worktrees live under
-`.worktrees`; per-session DSH homes live under
-`.loong/agent-sessions/<session-id>/dsh-home`. Do not commit either
-directory. Configuration errors fail fast; failed commands/migrations are
-never converted into empty responses.
+[config.ts](../apps/server/src/config.ts) 从 pnpm workspace 定位应用根目录，默认读取父目录 `system.yaml`；`LOONGBOARD_SYSTEM_CONFIG` 可覆盖，变量中的相对路径以应用根目录解析。YAML 内路径则一次性相对 **YAML 所在目录** 解析。
 
-## Main routes
+| 字段组 | 含义 |
+| --- | --- |
+| version / timezone | 当前 version=1；日期活动的 IANA 时区 |
+| repositories[] | key、name、GitHub owner/repo、本地 path、remote、defaultBranch、worktreeSlots |
+| knowledge | path、相对 inbox、historyLimit；可选 checkpoint 配置见 Knowledge 章节 |
+| runtime | statePath、worktreesPath、serverHost、serverPort |
+| agent | defaultProvider、defaultModel、defaultReasoningEffort、idleProcessMinutes |
 
-- REST and SSE APIs (see the implementation plan for schemas): repositories,
-  PR/Issue lists and details, domain rules, PR diff/file content, agent
-  sessions and SSE events, Knowledge tree/documents/versions, scheduled
-  tasks/runs, health.
-- Web pages: `/repositories/:repo/pulls[:/number]`,
-  `/repositories/:repo/issues[:/number]`, `/knowledge/:documentId?`,
-  `/scheduled-tasks`, `/settings/domains`, `/health`.
+仓库配置是唯一来源，启动时投影到 SQLite；不提供仓库增删 API。配置拒绝重复 key/GitHub slug、无效时区和越界 inbox。修改环境变量/配置后重启服务。
 
-## Validation commands
+`agent.idleProcessMinutes` 缺省为 120，`0` 表示 Never。该时间从 turn 完成后开始计算，不限制正在执行的 Agent 长任务；已有显式配置继续生效。
 
-- `pnpm test` or `pnpm test:ut` — the normal, UT-only development loop.
-- `pnpm check` — lint, type checks, architecture boundaries, DSH pin, UT, and
-  production builds. It does not run regression or browser automation.
-- `pnpm test:regression` — three independent critical backend checks covering
-  Issue refresh coalescing, Knowledge external-version indexing, and dirty
-  worktree protection. Run only for major cross-module changes or when the
-  user requests it.
-- `pnpm check:full` — `pnpm check` plus the critical regression suite. This is
-  also reserved for major changes or an explicit request.
+Repository Settings 另存于 system workspace 的 `settings.json`：`syncLookbackDays` 只能是 7 或 30，默认 30，仅限制首次 bootstrap 的 `updated_at` 窗口。已有成功水位的增量只从 watermark 前 2 分钟读取，不受首轮窗口影响；修改首轮窗口不重置水位。手动 Sync now 与自动 `repository.sync` 使用同一设置。
 
-Browser interaction, live GitHub access, and live DSH sessions are manual
-acceptance activities. They are not hidden inside the routine test command.
+## 凭证
 
-## Known environment notes
+Settings → Integrations → GitHub 是 GitHub 凭证的唯一控制入口。解析顺序为设置页保存的 token、非空 `GH_TOKEN`、`GITHUB_TOKEN`，最后是 `gh auth token`；provider 和本地 `gh` 边界共用 [GitHubCredentialService](../packages/github/src/credentials.ts)。设置页只能看到来源、是否已配置和上次验证的账号/quota，永远不会返回 token。
 
-- Node 26 requires exact `better-sqlite3@12.11.1`.
-- `tsx` prints a `module.register()` deprecation warning on startup; it does
-  not affect validated paths.
-- A sandbox-external `pnpm check` passed on 2026-09-07 with per-workspace
-  counts recorded in implementation-status.md. Only a React `act(...)`
-  warning and a Vite large-chunk warning were emitted; the same build can
-  fail with EMFILE inside the sandbox even though the outside run passes.
-- Live DSH smoke needs real model credentials supplied through the secure
-  startup environment and is recorded on 2026-09-07; UT covers the adapter's
-  event mapping and channel behavior.
+设置页 token 存在 `runtime.statePath/github-credential.json`，provider secret 存在 `runtime.statePath/provider-secrets/*.secret`，写入权限为 0600；这些文件不写入 `system.yaml`、`settings.json`、Knowledge/Domain 版本或 Agent transcript。DSH 在启动时通过受控 credentials callback 接收 provider secret；没有凭证时 Settings 显示未配置，不能把 `gh` 命令失败误报为已认证。不要把 token 写入 YAML、文档或日志。
+
+## 数据与退出
+
+| 位置 | 内容与处理 |
+| --- | --- |
+| knowledge.path | Markdown 和知识 Git，长期保留 |
+| runtime.statePath/loongboard.sqlite3 | 索引、消息、短期版本、任务状态，需备份 |
+| runtime.statePath/agent-sessions | 每会话 DSH home，随会话保留 |
+| runtime.worktreesPath | PR slot 缓存；清理前确认没有 busy/dirty 内容 |
+| system workspace/settings.json | 控制中心非秘密设置；更新保留未知字段 |
+| system workspace/domains/*.json | Domain JSON 源文件；文件名普通 key 可读，异常 key 编码 |
+| system workspace/prompts/update-domains.md | Agent 更新 Domain 使用的可编辑 prompt |
+| runtime.statePath/domain-file-versions | Domain/prompt content hash 短期历史，可由 history/restore API 查看 |
+
+SIGINT/SIGTERM 触发服务的有序退出。服务启动会把数据库中上次遗留的 running metadata sync 标记为 interrupted/failed，保留已写入 rows 与成功 watermark；下次显式 Sync now 可继续。不会自动补跑错过的周期。备份前停止写入，保留整个知识仓库、数据库及会话目录；只备份 Markdown 无法恢复聊天与短期版本。不要用删除 `.loong` 处理普通启动故障。
+
+## 排错入口
+
+| 现象 | 检查 |
+| --- | --- |
+| 启动失败 | config 错误中的路径/字段；Node 与 better-sqlite3 ABI；端口 |
+| 列表为空或旧 | 先看 sync-status；列表 GET 不自动同步 |
+| GitHub 同步失败 | provider 的认证、HTTP/GraphQL 错误，区分 PR/Issue 流 |
+| 无法创建 PR 会话 | worktreeSlots、busy/dirty slot、Git 对象与 revision |
+| Agent 无输出 | DSH pin、启动环境、session 状态、adapter 通知与 SSE |
+| Knowledge 内容不一致 | 磁盘文件、watcher、id/hash、版本记录 |
+| Domain 分类不一致 | `domains/*.json`、source 的 `parseError`、`domain_rules` 投影和重分类状态；非法 JSON 不会覆盖上一次有效投影 |
+| GitHub 显示未配置 | Settings 的 credential source、`gh auth status`、环境变量和私有 credential 文件权限；不要打印 token |
+| 计划未执行 | enabled、timezone、nextRunAt、workspace busy、服务是否在线 |
+
+Repository metadata sync、Knowledge checkpoint 和 Knowledge push 共享 Scheduler。system task action 分别是 `repository.sync`、`knowledge.checkpoint`、`knowledge.push`；调整 Settings 中的开关或频率会更新同一条持久任务，重启不会根据旧的 `settings.json` 重新启用已禁用任务。Knowledge checkpoint 只作用于 Knowledge 仓库，支持 Run now / Push now；自动 push 不会把任意源码仓库纳入 checkpoint。
+
+检查命令与手工验收边界见 [testing.md](testing.md)。历史环境限制见 [validation-history.md](validation-history.md)，不将旧机器 workaround 当作安装步骤。

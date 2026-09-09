@@ -1,31 +1,15 @@
 # @loongboard/scheduler
 
-## Purpose
+Cron 计算。parseCron、validateCron、nextOccurrence；timer、执行协调和持久化在 Server/database。
 
-Future home of scheduled prompts and their durable run state.
+- [实现说明](../../docs/scheduler.md)
+- [源码入口](src/index.ts)
+- [本包修改约束](AGENTS.md)
+- [统一测试与验收](../../docs/testing.md)
 
-## Owns
+从应用仓库根目录运行本包检查：
 
-- Schedule calculation and run orchestration once the Scheduler stage begins.
-- Workspace-path serialization for Agent runs.
-
-## Does not own
-
-- DSH SDK interaction, GitHub, Git, or database schema.
-
-## Public API
-
-No Stage 0 API is exported yet.
-
-## Dependencies
-
-None in Stage 0.
-
-## Invariants
-
-One workspace path can run only one Agent turn at a time.
-
-## Tests
-
-Future tests cover cron calculations, restart semantics, and the workspace
-mutex.
+```bash
+pnpm --filter @loongboard/scheduler test
+pnpm --filter @loongboard/scheduler typecheck
+```

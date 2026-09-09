@@ -1,9 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { join } from "node:path";
-
 import {
   appendAgentMessage,
-  createAgentSession,
   getScheduledRun,
   insertScheduledRun,
   listScheduledTaskRuns,
@@ -11,6 +7,7 @@ import {
   recoverInterruptedScheduledRuns,
   requireAgentSession,
   requireScheduledTask,
+  setScheduledTaskConversation,
   setTaskOccurrence,
   updateScheduledRun,
   type DatabaseClient,
@@ -31,6 +28,22 @@ export class ScheduledTaskWorkspaceBusyError extends Error {
   }
 }
 
+/** Context passed to one injected system action. */
+export interface SchedulerSystemExecutionContext {
+  task: ScheduledTaskRow;
+  run: ScheduledRunRow;
+  workspacePath: string;
+}
+
+/**
+ * System actions share this engine's timer, run history, and workspace
+ * ownership. The executor owns only the action implementation and receives a
+ * lock that is already held for the whole operation.
+ */
+export interface SchedulerExecutor {
+  executeSystem(context: SchedulerSystemExecutionContext): Promise<void>;
+}
+
 export interface SchedulerEngineOptions {
   database: DatabaseClient;
   chats: AgentChatController;
@@ -38,22 +51,23 @@ export interface SchedulerEngineOptions {
   workspaceRuns: WorkspaceRunCoordinator;
   /** Root for per-run DSH homes (plan 13.2). */
   agentSessionsPath: string;
+  /** Injected repository-sync/checkpoint/push implementation for system tasks. */
+  executor?: SchedulerExecutor;
   now?: () => Date;
 }
 
 /**
- * Scheduled Agent runs (plan 16, 17.7). One min-heap is a single timer for
- * the nearest enabled task; each due task starts a fresh Agent Session with
- * the prompt sent verbatim, waits for the turn to idle, and records
- * completed/failed in the run history. One workspace path runs at most one
- * agent turn at a time (plan 16.3), and restarts never replay missed runs
- * (plan 16.2).
+ * One timer engine for Agent conversations and trusted system actions. Agent
+ * tasks retain one normalized conversation per task and append each scheduled
+ * prompt to that conversation. A missing/deleted conversation is recreated on
+ * the next run and its new id is persisted on the task.
  */
 export class SchedulerEngine {
   private readonly database: DatabaseClient;
   private readonly chats: AgentChatController;
   private readonly workspaceRuns: WorkspaceRunCoordinator;
   private readonly agentSessionsPath: string;
+  private readonly executor: SchedulerExecutor | undefined;
   private readonly now: () => Date;
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly runningRuns = new Map<string, Promise<void>>();
@@ -65,11 +79,13 @@ export class SchedulerEngine {
     this.chats = options.chats;
     this.workspaceRuns = options.workspaceRuns;
     this.agentSessionsPath = options.agentSessionsPath;
+    this.executor = options.executor;
     this.now = options.now ?? (() => new Date());
   }
 
   /** Load enabled tasks, recover crashed runs, and arm the nearest timers. */
   start(): void {
+    if (this.closed) return;
     recoverInterruptedScheduledRuns(this.database);
     for (const task of listScheduledTasks(this.database)) {
       if (!task.enabled) continue;
@@ -98,6 +114,11 @@ export class SchedulerEngine {
     return updated;
   }
 
+  /**
+   * Disarm all timers synchronously, then wait for active work. Keeping the
+   * disarm before the first await prevents a shutdown race from starting a
+   * new run after the caller has begun closing the server.
+   */
   async close(): Promise<void> {
     this.closed = true;
     for (const timer of this.timers.values()) clearTimeout(timer);
@@ -111,11 +132,9 @@ export class SchedulerEngine {
     return listScheduledTaskRuns(this.database, taskId);
   }
 
-  /**
-   * Start one run now (plan 16.2 Run Now). Throws when the workspace is
-   * already busy so the caller surfaces a clear conflict.
-   */
+  /** Start one run now, preserving the same workspace guard as timed runs. */
   async runNow(taskId: string): Promise<{ runId: string }> {
+    if (this.closed) throw new Error("Scheduler is closed");
     const task = requireScheduledTask(this.database, taskId);
     const release = this.workspaceRuns.acquire(task.workspacePath);
     if (release === null) {
@@ -123,20 +142,29 @@ export class SchedulerEngine {
     }
     try {
       const run = insertScheduledRun(this.database, task.id, this.timestamp());
-      this.runContext.set(run.id, { workspacePath: task.workspacePath });
-      const promise = this.executeRun(run.id).catch((error: unknown) => {
-        this.failRun(run.id, error);
-      });
-      this.runningRuns.set(run.id, promise);
-      void promise.finally(() => {
-        this.runningRuns.delete(run.id);
-        release();
-      });
+      this.launchRun(run, task.workspacePath, release);
       return { runId: run.id };
     } catch (error) {
       release();
       throw error;
     }
+  }
+
+  private launchRun(
+    run: ScheduledRunRow,
+    workspacePath: string,
+    release: () => void,
+  ): void {
+    this.runContext.set(run.id, { workspacePath });
+    const promise = this.executeRun(run.id).catch((error: unknown) => {
+      this.failRun(run.id, error);
+    });
+    this.runningRuns.set(run.id, promise);
+    void promise.finally(() => {
+      this.runningRuns.delete(run.id);
+      this.runContext.delete(run.id);
+      release();
+    });
   }
 
   private databaseTask(taskId: string): ScheduledTaskRow {
@@ -156,7 +184,8 @@ export class SchedulerEngine {
       this.storeNextRun(task);
       const updated = this.databaseTask(taskId);
       if (updated.nextRunAt === null) return;
-      return this.schedule(taskId);
+      this.schedule(taskId);
+      return;
     }
     const timer = setTimeout(() => {
       this.timers.delete(taskId);
@@ -179,16 +208,14 @@ export class SchedulerEngine {
   }
 
   private async fire(taskId: string): Promise<void> {
+    if (this.closed) return;
     const task = this.databaseTask(taskId);
     const scheduledFor = task.nextRunAt;
     if (!task.enabled || scheduledFor === null) {
       this.schedule(taskId);
       return;
     }
-    // A busy workspace defers the SAME occurrence without advancing the
-    // schedule: retry later instead of silently skipping or running early.
-    // Acquire before inserting the run so an interleaved manual chat cannot
-    // create a run that immediately fails as busy.
+    // A busy workspace defers this same occurrence without creating a run.
     const release = this.workspaceRuns.acquire(task.workspacePath);
     if (release === null) {
       const retry = setTimeout(() => {
@@ -200,18 +227,16 @@ export class SchedulerEngine {
     }
     try {
       // Arm the next future occurrence before running so a crash cannot
-      // replay the missed run (plan 16.2 restart semantics).
+      // replay the missed run on restart.
       const updated = this.storeNextRun(task);
       this.schedule(taskId);
-
-      const run = insertScheduledRun(this.database, task.id, scheduledFor);
-      this.runContext.set(run.id, { workspacePath: updated.workspacePath });
-      const promise = this.executeRun(run.id);
-      this.runningRuns.set(run.id, promise);
-      void promise.finally(() => {
-        this.runningRuns.delete(run.id);
-        release();
-      });
+      const run = insertScheduledRun(
+        this.database,
+        task.id,
+        scheduledFor,
+        this.timestamp(),
+      );
+      this.launchRun(run, updated.workspacePath, release);
     } catch (error) {
       release();
       throw error;
@@ -223,34 +248,24 @@ export class SchedulerEngine {
     const task = requireScheduledTask(this.database, run.taskId);
     const workspace = this.runContext.get(runId)?.workspacePath ?? task.workspacePath;
     updateScheduledRun(this.database, run.id, { startedAt: this.timestamp() });
-    const sessionId = `sess_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
     let finishedStatus: ScheduledRunRow["status"] = "completed";
     let failureMessage: string | null = null;
 
     try {
-      createAgentSession(this.database, {
-        id: sessionId,
-        scope: { kind: "general" },
-        dshHomePath: join(this.agentSessionsPath, sessionId, "dsh-home"),
-        workspacePath: workspace,
-        provider: task.provider,
-        model: task.model,
-        reasoningEffort: task.reasoningEffort,
-        now: this.timestamp(),
-      });
-      updateScheduledRun(this.database, run.id, { agentSessionId: sessionId });
-      // The prompt is sent verbatim; the scheduler never parses report format.
-      appendAgentMessage(this.database, {
-        sessionId,
-        role: "user",
-        contentMarkdown: task.prompt,
-      });
-      const session = await this.chats.runSessionTurn(sessionId, task.prompt, {
-        workspaceOwned: true,
-      });
-      if (session.status !== "idle") {
-        finishedStatus = "failed";
-        failureMessage = `Agent session ended with status: ${session.status}`;
+      if (task.kind === "system") {
+        if (task.action === null || task.action.length === 0) {
+          throw new Error("System scheduled task is missing an action");
+        }
+        if (this.executor === undefined) {
+          throw new Error("System scheduled tasks are unavailable");
+        }
+        await this.executor.executeSystem({ task, run, workspacePath: workspace });
+      } else {
+        const result = await this.runAgentTask(task, run, workspace);
+        updateScheduledRun(this.database, run.id, {
+          agentSessionId: result.sessionId,
+          conversationId: result.sessionId,
+        });
       }
     } catch (error) {
       finishedStatus = "failed";
@@ -276,10 +291,82 @@ export class SchedulerEngine {
     }
   }
 
+  /** Execute an Agent task, recovering one deleted conversation if needed. */
+  private async runAgentTask(
+    task: ScheduledTaskRow,
+    run: ScheduledRunRow,
+    workspace: string,
+  ): Promise<{ sessionId: string }> {
+    let conversationId = task.conversationId;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        if (conversationId !== null) {
+          const pointed = requireAgentSession(this.database, conversationId);
+          const route = pointed.scope.route;
+          if (
+            pointed.scope.kind !== "general" ||
+            route !== `scheduled-task:${task.id}` ||
+            pointed.workspacePath !== workspace
+          ) {
+            conversationId = null;
+            setScheduledTaskConversation(this.database, task.id, null, this.timestamp());
+          }
+        }
+        const session = await this.chats.ensureScheduledSession({
+          taskId: task.id,
+          workspacePath: workspace,
+          provider: task.provider,
+          model: task.model,
+          reasoningEffort: task.reasoningEffort,
+          title: task.name,
+        });
+        const configured = await this.chats.updateSession(session.id, {
+          provider: task.provider,
+          model: task.model,
+          reasoningEffort: task.reasoningEffort,
+        });
+        conversationId = configured.session.id;
+        setScheduledTaskConversation(
+          this.database,
+          task.id,
+          conversationId,
+          this.timestamp(),
+        );
+        updateScheduledRun(this.database, run.id, {
+          agentSessionId: conversationId,
+          conversationId,
+        });
+        // The prompt is appended once per scheduled occurrence and sent
+        // verbatim; the scheduler never parses report format.
+        appendAgentMessage(this.database, {
+          sessionId: conversationId,
+          role: "user",
+          contentMarkdown: task.prompt,
+          now: this.timestamp(),
+        });
+        const result = await this.chats.runSessionTurn(conversationId, task.prompt, {
+          // fire/runNow already owns this path; acquiring again deadlocks.
+          workspaceOwned: true,
+        });
+        if (result.status !== "idle") {
+          throw new Error(`Agent session ended with status: ${result.status}`);
+        }
+        return { sessionId: conversationId };
+      } catch (error) {
+        if (attempt === 0 && isMissingAgentSession(error)) {
+          conversationId = null;
+          setScheduledTaskConversation(this.database, task.id, null, this.timestamp());
+          continue;
+        }
+        throw error;
+      }
+    }
+    throw new Error("Unable to create a scheduled conversation");
+  }
+
   private failRun(runId: string, error: unknown): void {
     try {
       const run = this.requireRun(runId);
-      this.runContext.delete(runId);
       updateScheduledRun(this.database, run.id, {
         status: "failed",
         finishedAt: this.timestamp(),
@@ -290,12 +377,12 @@ export class SchedulerEngine {
     }
   }
 
-  private requireRun(runId: string): { id: string; taskId: string } {
+  private requireRun(runId: string): ScheduledRunRow {
     const run = getScheduledRun(this.database, runId);
     if (run === null) {
       throw new Error(`Scheduled run was not found: ${runId}`);
     }
-    return { id: run.id, taskId: run.taskId };
+    return run;
   }
 
   private storeNextRun(task: ScheduledTaskRow): ScheduledTaskRow {
@@ -305,7 +392,7 @@ export class SchedulerEngine {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       // An invalid cron must not crash the engine; surface it in history-free
-      // state by disabling the occurrence until the task is corrected.
+      // state until the task is corrected.
       setTaskOccurrence(this.database, task.id, null);
       console.error(`Scheduled task ${task.id} has an invalid cron: ${message}`);
       return requireScheduledTask(this.database, task.id);
@@ -321,4 +408,13 @@ export class SchedulerEngine {
     }
     return value.toISOString();
   }
+}
+
+function isMissingAgentSession(error: unknown): boolean {
+  return (
+    error !== null &&
+    typeof error === "object" &&
+    "code" in error &&
+    (error as { code?: unknown }).code === "AGENT_SESSION_NOT_FOUND"
+  );
 }

@@ -15,7 +15,7 @@ Own the local Fastify HTTP process and route composition.
   remain SQLite-only and sync starts only from the explicit POST route.
 - Keep Pull Request and Issue stream failures independent and make process
   shutdown wait for active synchronization before closing SQLite.
-- Do not call local Git or DSH, and do not add Stage 2 behavior.
+- Route local Git and DSH through their package adapters; keep orchestration here.
 
 ## Verification
 

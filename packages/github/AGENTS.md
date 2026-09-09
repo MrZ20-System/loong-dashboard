@@ -13,5 +13,4 @@ Own the GitHub metadata provider and the only allowed `gh` command boundary.
 
 ## Verification
 
-Use recorded `gh` fixtures and command-count integration tests for future
-changes, then run the root architecture check.
+Use injected HTTP/token boundaries for provider unit tests, then run the root architecture check.

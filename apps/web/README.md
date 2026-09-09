@@ -1,55 +1,17 @@
-# LoongBoard Web
+# @loongboard/web
 
-## Purpose
+React 浏览器应用。页面路由、Query/API 客户端、PR 工作台、共享聊天与 Markdown/Monaco。使用 contracts 校验响应，不访问数据库或远端 GitHub。
 
-Provide the Stage 1 Vite and React Router experience for local GitHub metadata.
+设置控制中心覆盖仓库同步（首次 7/30 天范围）、GitHub 凭据摘要、runtime defaults、Knowledge checkpoint、Domain source/history/prompt、schedules 和 health。Agent 页面与 Global Dock 共享显式 session ID；Dock 支持 viewport 内自适应、消息滚动和 launcher toggle。同步完成后会刷新 repository Query，使侧栏计数保持最新。全局 hover 保留交互反馈但不增加文字下划线。
 
-## Owns
+- [实现说明](../../docs/frontend.md)
+- [源码入口](src/shell/AppShell.tsx)
+- [本包修改约束](AGENTS.md)
+- [统一测试与验收](../../docs/testing.md)
 
-- Stable branded browser layout and navigation.
-- Browser-side health API boundary and status presentation.
-- Repository selection, PR/Issue lists, filters, pagination, metrics, and
-  explicit synchronization status.
-
-## Does not own
-
-GitHub commands, database access, Diff, Agent, Knowledge, Scheduler, or domain
-classification behavior.
-
-## Public API
-
-- `App`: the application shell and React Router routes.
-- `fetchHealth`: validates `GET /api/health` through the shared contract.
-- Metadata client functions validate repository, PR/Issue, activity-day, sync,
-  and error responses through shared contracts.
-- `resolveApiOrigin`: resolves the Vite development proxy target.
-
-## Dependencies
-
-- `@loongboard/contracts` for every HTTP response schema and type.
-- TanStack Query, React, React DOM, React Router, Vite, and Vitest.
-
-## Invariants
-
-- React Router remains the sole router.
-- Health transport, HTTP, JSON, and schema failures remain visible.
-- HTTP schemas are not redefined in this package.
-- Metadata GET, filter, and pagination behavior never invokes GitHub.
-- Successful PR and Issue streams refresh independently; a failed stream keeps
-  its existing rows visible.
-- `/api` proxies to `http://127.0.0.1:4174` by default and honors
-  `LOONGBOARD_API_ORIGIN` when configured.
-
-## Tests
-
-Install the workspace dependencies from the repository root, then run:
+从应用仓库根目录运行本包检查：
 
 ```bash
 pnpm --filter @loongboard/web test
 pnpm --filter @loongboard/web typecheck
-pnpm --filter @loongboard/web build
 ```
-
-Tests cover health, strict metadata parsing, URL filters, list navigation,
-pagination, fast synchronization, mixed stream outcomes, consecutive attempts,
-and repository-switch cancellation recovery.

@@ -4,6 +4,8 @@ export interface FilterDropdownOption {
   value: string;
   label: string;
   description?: string;
+  icon?: string;
+  tone?: "accent" | "blue" | "green" | "neutral" | "orange" | "purple" | "red";
 }
 
 function summaryLabel(
@@ -118,12 +120,14 @@ export function FilterDropdown({
     if (!multiple) close();
   };
 
+  const selectedOption = options.find((option) => option.value === selected[0]);
+
   return (
     <div className="filter-dropdown" ref={rootRef}>
       <button
         ref={triggerRef}
         type="button"
-        className="filter-dropdown__trigger"
+        className={selectedOption?.icon ? "filter-dropdown__trigger filter-dropdown__trigger--with-icon" : "filter-dropdown__trigger"}
         aria-haspopup="listbox"
         aria-expanded={open}
         onClick={() => {
@@ -136,6 +140,7 @@ export function FilterDropdown({
         }}
         onKeyDown={handleTriggerKeyDown}
       >
+        {selectedOption?.icon && <span className={`filter-dropdown__icon tone-${selectedOption.tone ?? "neutral"}`} aria-hidden="true">{selectedOption.icon}</span>}
         <span className="filter-dropdown__trigger-copy">
           <small>{label}</small>
           <strong>{summary}</strong>
@@ -173,6 +178,7 @@ export function FilterDropdown({
                   onClick={() => toggleOption(option.value)}
                   onKeyDown={(event) => moveFocus(event, index)}
                 >
+                  {option.icon && <span className={`filter-dropdown__option-icon tone-${option.tone ?? "neutral"}`} aria-hidden="true">{option.icon}</span>}
                   <span className="filter-dropdown__check" aria-hidden="true">
                     {isSelected ? "✓" : ""}
                   </span>

@@ -5,6 +5,7 @@ import { metadataListIndexesMigration } from "./migrations/002-metadata-list-ind
 import { issueStateConstraintMigration } from "./migrations/003-issue-state-constraint.js";
 import { domainClassificationMigration } from "./migrations/004-domain-classification.js";
 import { issueDetailCacheMigration } from "./migrations/005-issue-detail-cache.js";
+import { agentRuntimeSchedulerMigration } from "./migrations/006-agent-runtime-scheduler.js";
 import { recoverInterruptedSyncStates } from "./sync-service.js";
 
 export interface Migration {
@@ -18,6 +19,7 @@ const migrations: readonly Migration[] = [
   issueStateConstraintMigration,
   domainClassificationMigration,
   issueDetailCacheMigration,
+  agentRuntimeSchedulerMigration,
 ];
 
 function orderedMigrations(items: readonly Migration[]): readonly Migration[] {

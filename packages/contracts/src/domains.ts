@@ -49,6 +49,8 @@ export const domainsResponseSchema = z
   .object({
     items: z.array(domainRuleSchema),
     reclassification: reclassificationStatusSchema,
+    /** Last source parse error, while the last valid SQLite projection stays visible. */
+    sourceError: z.string().nullable().optional(),
   })
   .strict();
 

@@ -50,6 +50,8 @@ function mapRepository(row: Record<string, unknown>): RepositoryRecord {
     defaultBranch: row.default_branch as string,
     worktreeSlots: row.worktree_slots as number,
     enabled: (row.enabled as number) === 1,
+    pullRequestCount: Number(row.pull_request_count ?? 0),
+    issueCount: Number(row.issue_count ?? 0),
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
   };
@@ -193,7 +195,12 @@ function listAllRepositories(database: DatabaseClient): RepositoryRecord[] {
 export function listRepositories(database: DatabaseClient): RepositoryRecord[] {
   const rows = database
     .prepare(
-      `SELECT * FROM repositories
+      `SELECT repositories.*,
+              (SELECT COUNT(*) FROM pull_requests
+               WHERE pull_requests.repository_id = repositories.id) AS pull_request_count,
+              (SELECT COUNT(*) FROM issues
+               WHERE issues.repository_id = repositories.id) AS issue_count
+       FROM repositories
        WHERE enabled = 1
        ORDER BY key ASC`,
     )
@@ -207,7 +214,12 @@ export function getRepository(
 ): RepositoryRecord | null {
   const row = database
     .prepare(
-      `SELECT * FROM repositories WHERE id = ?
+      `SELECT repositories.*,
+              (SELECT COUNT(*) FROM pull_requests
+               WHERE pull_requests.repository_id = repositories.id) AS pull_request_count,
+              (SELECT COUNT(*) FROM issues
+               WHERE issues.repository_id = repositories.id) AS issue_count
+       FROM repositories WHERE id = ?
        AND enabled = 1`,
     )
     .get(repositoryId) as Record<string, unknown> | undefined;

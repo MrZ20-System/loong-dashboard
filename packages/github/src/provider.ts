@@ -17,7 +17,7 @@ import {
 
 const PAGE_SIZE = 100;
 const WATERMARK_OVERLAP_MS = 2 * 60 * 1000;
-const DEFAULT_LOOKBACK_DAYS = 90;
+const DEFAULT_LOOKBACK_DAYS = 30;
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
 const DEFAULT_API_BASE_URL = "https://api.github.com";
 const GRAPHQL_PATH = "graphql";
@@ -39,7 +39,7 @@ export interface PullRequestSyncInput {
   readonly watermarkUpdatedAt?: Date | string | null;
   /** Captured sync-attempt time. Defaults to the first iterator turn. */
   readonly syncStartedAt?: Date | string;
-  /** Bootstrap closed-item lookback. Defaults to 90 days. */
+  /** Initial/bootstrap sync window measured by updatedAt. Defaults to 30 days. */
   readonly lookbackDays?: number;
 }
 
@@ -50,7 +50,7 @@ export interface IssueSyncInput {
   readonly watermarkUpdatedAt?: Date | string | null;
   /** Captured sync-attempt time. Defaults to the first iterator turn. */
   readonly syncStartedAt?: Date | string;
-  /** Bootstrap closed-item lookback. Defaults to 90 days. */
+  /** Initial/bootstrap sync window measured by updatedAt. Defaults to 30 days. */
   readonly lookbackDays?: number;
 }
 
@@ -66,6 +66,25 @@ export interface GitHubRateLimit {
   readonly cost: number;
   readonly remaining: number;
   readonly resetAt: string;
+  readonly limit?: number;
+}
+
+export interface GitHubQuota {
+  readonly remaining: number;
+  readonly limit: number;
+  readonly resetAt: string | null;
+}
+
+export interface GitHubAccount {
+  readonly login: string;
+  readonly name: string | null;
+}
+
+/** Safe connection result for the Settings integration surface. */
+export interface GitHubConnectionStatus {
+  readonly account: GitHubAccount;
+  readonly rest: GitHubQuota;
+  readonly graphql: GitHubQuota;
 }
 
 export interface PullRequestMetadata {
@@ -153,6 +172,10 @@ export interface GitHubMetadataProvider {
     input: PullRequestFilesInput,
   ): Promise<PullRequestFilesResult[]>;
   fetchIssueDetail(input: IssueDetailInput): Promise<FetchedIssueDetail>;
+  /** Optional capability used by the Settings integration route. */
+  checkConnection?(): Promise<GitHubConnectionStatus>;
+  /** Drop a cached bearer token after Settings replaces/removes credentials. */
+  clearTokenCache?(): void;
 }
 
 export interface GhGitHubMetadataProviderOptions {
@@ -163,8 +186,8 @@ export interface GhGitHubMetadataProviderOptions {
   readonly ghExecutable?: string;
   /**
    * Injectable token source used verbatim by this provider. When omitted,
-   * the provider prefers `GITHUB_TOKEN` and then runs `gh auth token`
-   * exactly once per successful resolution.
+   * the provider prefers `GH_TOKEN`, then `GITHUB_TOKEN`, and finally runs
+   * `gh auth token` exactly once per successful resolution.
    */
   readonly tokenResolver?: GitHubTokenResolver;
   /** Injectable fetch implementation, mainly for deterministic tests. */
@@ -174,12 +197,14 @@ export interface GhGitHubMetadataProviderOptions {
   /** Timeout for token resolution and each HTTP request. */
   readonly commandTimeoutMs?: number;
   readonly lookbackDays?: number;
+  /** Snapshot environment for deterministic credential resolution and tests. */
+  readonly environment?: NodeJS.ProcessEnv;
 }
 
 /** Signature compatible with Node's global fetch. */
 export type GitHubFetch = typeof fetch;
 /** Token resolution seam; the returned token is cached in memory only. */
-export type GitHubTokenResolver = () => string | Promise<string>;
+export type GitHubTokenResolver = () => string | null | Promise<string | null>;
 
 export class GitHubCommandError extends Error {
   readonly command = "gh auth token";
@@ -210,7 +235,8 @@ export type GitHubOperation =
   | "PullRequests"
   | "Issues"
   | "PullRequestFiles"
-  | "IssueDetail";
+  | "IssueDetail"
+  | "Connection";
 
 export class GitHubResponseError extends Error {
   readonly repository: string;
@@ -306,6 +332,7 @@ const rateLimitSchema = z
     cost: z.number().int().nonnegative(),
     remaining: z.number().int().nonnegative(),
     resetAt: dateTimeSchema,
+    limit: z.number().int().positive().optional(),
   })
   .strict();
 const graphqlErrorSchema = z
@@ -491,6 +518,26 @@ const restIssueCommentSchema = z.object({
   html_url: z.string().url(),
 });
 
+const restViewerSchema = z.object({
+  login: z.string().min(1),
+  name: z.string().nullable().optional(),
+});
+
+const connectionResponseSchema = z
+  .object({
+    data: z
+      .object({
+        rateLimit: rateLimitSchema,
+      })
+      .strict()
+      .nullable()
+      .optional(),
+    errors: z.array(graphqlErrorSchema).optional(),
+  })
+  .strict();
+
+type ConnectionResponse = z.infer<typeof connectionResponseSchema>;
+
 const PULL_REQUEST_QUERY = `query PullRequests(
   $owner: String!
   $name: String!
@@ -566,7 +613,8 @@ type PullRequestFilesResponse = z.infer<typeof pullRequestFilesResponseSchema>;
 type GraphQLResponseEnvelope =
   | PullRequestResponse
   | IssueResponse
-  | PullRequestFilesResponse;
+  | PullRequestFilesResponse
+  | ConnectionResponse;
 
 const PULL_REQUEST_FILES_QUERY = `query PullRequestFiles($ids: [ID!]!) {
   nodes(ids: $ids) {
@@ -579,6 +627,10 @@ const PULL_REQUEST_FILES_QUERY = `query PullRequestFiles($ids: [ID!]!) {
     }
   }
   rateLimit { cost remaining resetAt }
+}`;
+
+const CONNECTION_QUERY = `query GitHubConnection {
+  rateLimit { cost remaining resetAt limit }
 }`;
 
 interface NormalizedSyncInput {
@@ -598,6 +650,7 @@ interface GhGitHubMetadataProviderOptionsInternal {
   readonly tokenResolver: GitHubTokenResolver | null;
   readonly commandTimeoutMs: number;
   readonly lookbackDays: number;
+  readonly environment: NodeJS.ProcessEnv;
 }
 
 export class GhGitHubMetadataProvider implements GitHubMetadataProvider {
@@ -611,6 +664,7 @@ export class GhGitHubMetadataProvider implements GitHubMetadataProvider {
     const apiBaseUrl = options.apiBaseUrl ?? DEFAULT_API_BASE_URL;
     const fetchImplementation = options.fetch ?? fetch;
     const tokenResolver = options.tokenResolver ?? null;
+    const environment = options.environment ?? process.env;
 
     if (ghExecutable.length === 0) {
       throw new Error("ghExecutable must not be empty");
@@ -638,7 +692,13 @@ export class GhGitHubMetadataProvider implements GitHubMetadataProvider {
       tokenResolver,
       commandTimeoutMs,
       lookbackDays,
+      environment,
     };
+  }
+
+  /** Allow the Settings boundary to apply a replaced credential immediately. */
+  clearTokenCache(): void {
+    this.tokenPromise = null;
   }
 
   async *fetchPullRequestUpdates(
@@ -646,12 +706,6 @@ export class GhGitHubMetadataProvider implements GitHubMetadataProvider {
   ): AsyncIterable<PullRequestPage> {
     const normalized = normalizeSyncInput(input, this.options.lookbackDays);
     const cutoff = cutoffFor(normalized);
-
-    if (normalized.mode === "bootstrap") {
-      yield* this.iteratePullRequests(normalized, ["OPEN"], null);
-      yield* this.iteratePullRequests(normalized, ["CLOSED", "MERGED"], cutoff);
-      return;
-    }
 
     yield* this.iteratePullRequests(
       normalized,
@@ -663,12 +717,6 @@ export class GhGitHubMetadataProvider implements GitHubMetadataProvider {
   async *fetchIssueUpdates(input: IssueSyncInput): AsyncIterable<IssuePage> {
     const normalized = normalizeSyncInput(input, this.options.lookbackDays);
     const cutoff = cutoffFor(normalized);
-
-    if (normalized.mode === "bootstrap") {
-      yield* this.iterateIssues(normalized, ["OPEN"], null);
-      yield* this.iterateIssues(normalized, ["CLOSED"], cutoff);
-      return;
-    }
 
     yield* this.iterateIssues(normalized, ["OPEN", "CLOSED"], cutoff);
   }
@@ -818,6 +866,52 @@ export class GhGitHubMetadataProvider implements GitHubMetadataProvider {
     };
   }
 
+  /**
+   * Verify the shared credential and return account plus REST/GraphQL quotas.
+   * The token is used only inside this package and is never part of the
+   * returned status object.
+   */
+  async checkConnection(): Promise<GitHubConnectionStatus> {
+    const repository = { owner: "github", name: "connection" } as const;
+    const [viewerResponse, graphqlResponse] = await Promise.all([
+      this.requestJsonWithHeaders(repository, "Connection", "GET", "user", null),
+      this.runGraphQL<ConnectionResponse>(
+        repository,
+        "Connection",
+        CONNECTION_QUERY,
+        {},
+        connectionResponseSchema,
+      ),
+    ]);
+    const viewer = restViewerSchema.safeParse(viewerResponse.body);
+    if (!viewer.success) {
+      throw new GitHubResponseError(
+        "github",
+        "Connection",
+        formatSchemaIssues(viewer.error),
+      );
+    }
+    const rateLimit = graphqlResponse.data?.rateLimit;
+    if (rateLimit === undefined) {
+      throw new GitHubResponseError(
+        "github",
+        "Connection",
+        "rateLimit is missing",
+      );
+    }
+    const rest = quotaFromHeaders(viewerResponse.headers);
+    const graphql: GitHubQuota = {
+      remaining: rateLimit.remaining,
+      limit: rateLimit.limit ?? 5_000,
+      resetAt: rateLimit.resetAt,
+    };
+    return {
+      account: { login: viewer.data.login, name: viewer.data.name ?? null },
+      rest,
+      graphql,
+    };
+  }
+
   private async fetchFilesBatch(
     repository: RepositoryRef,
     batch: readonly PullRequestFileRef[],
@@ -958,10 +1052,12 @@ export class GhGitHubMetadataProvider implements GitHubMetadataProvider {
 
   private async resolveToken(repositoryLabel: string): Promise<string> {
     if (this.options.tokenResolver !== null) {
-      return requireToken(await this.options.tokenResolver());
+      const configured = await this.options.tokenResolver();
+      if (configured !== null) return requireToken(configured);
     }
 
-    const environmentToken = process.env.GITHUB_TOKEN;
+    const environmentToken = this.options.environment.GH_TOKEN ??
+      this.options.environment.GITHUB_TOKEN;
     if (environmentToken !== undefined && environmentToken.trim().length > 0) {
       return environmentToken.trim();
     }
@@ -979,6 +1075,7 @@ export class GhGitHubMetadataProvider implements GitHubMetadataProvider {
           reject: false,
           timeout: this.options.commandTimeoutMs,
           maxBuffer: 1024 * 1024,
+          env: this.options.environment,
         },
       );
     } catch (error) {
@@ -1010,6 +1107,23 @@ export class GhGitHubMetadataProvider implements GitHubMetadataProvider {
     path: string,
     body: Record<string, unknown> | null,
   ): Promise<unknown> {
+    const result = await this.requestJsonWithHeaders(
+      repository,
+      operation,
+      method,
+      path,
+      body,
+    );
+    return result.body;
+  }
+
+  private async requestJsonWithHeaders(
+    repository: RepositoryRef,
+    operation: GitHubOperation,
+    method: string,
+    path: string,
+    body: Record<string, unknown> | null,
+  ): Promise<{ body: unknown; headers: Headers }> {
     const repositoryLabel = formatRepository(repository);
     const url = githubUrl(this.options.apiBaseUrl, path);
     const token = await this.getToken(repositoryLabel);
@@ -1078,7 +1192,7 @@ export class GhGitHubMetadataProvider implements GitHubMetadataProvider {
     }
 
     try {
-      return JSON.parse(responseText) as unknown;
+      return { body: JSON.parse(responseText) as unknown, headers: response.headers };
     } catch (error) {
       throw new GitHubHttpError(
         repositoryLabel,
@@ -1098,6 +1212,7 @@ export class GhGitHubMetadataProvider implements GitHubMetadataProvider {
     cutoff: Date | null,
   ): AsyncIterable<PullRequestPage> {
     let cursor: string | null = null;
+    const seenCursors = new Set<string>();
 
     while (true) {
       const response = await this.runGraphQL<PullRequestResponse>(
@@ -1135,11 +1250,20 @@ export class GhGitHubMetadataProvider implements GitHubMetadataProvider {
       if (reachedCutoff || !connection.pageInfo.hasNextPage) {
         return;
       }
-      cursor = requireNextCursor(
+      const nextCursor = requireNextCursor(
         input.repository,
         "PullRequests",
         connection.pageInfo.endCursor,
       );
+      if (seenCursors.has(nextCursor)) {
+        throw responseError(
+          input.repository,
+          "PullRequests",
+          "pageInfo.endCursor repeated before pagination completed",
+        );
+      }
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
     }
   }
 
@@ -1149,6 +1273,7 @@ export class GhGitHubMetadataProvider implements GitHubMetadataProvider {
     cutoff: Date | null,
   ): AsyncIterable<IssuePage> {
     let cursor: string | null = null;
+    const seenCursors = new Set<string>();
 
     while (true) {
       const response = await this.runGraphQL<IssueResponse>(
@@ -1186,11 +1311,20 @@ export class GhGitHubMetadataProvider implements GitHubMetadataProvider {
       if (reachedCutoff || !connection.pageInfo.hasNextPage) {
         return;
       }
-      cursor = requireNextCursor(
+      const nextCursor = requireNextCursor(
         input.repository,
         "Issues",
         connection.pageInfo.endCursor,
       );
+      if (seenCursors.has(nextCursor)) {
+        throw responseError(
+          input.repository,
+          "Issues",
+          "pageInfo.endCursor repeated before pagination completed",
+        );
+      }
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
     }
   }
 
@@ -1431,6 +1565,20 @@ function isDateTime(value: string): boolean {
 
 function formatRepository(repository: RepositoryRef): string {
   return `${repository.owner}/${repository.name}`;
+}
+
+function quotaFromHeaders(headers: Headers): GitHubQuota {
+  const remaining = Number.parseInt(headers.get("x-ratelimit-remaining") ?? "", 10);
+  const limit = Number.parseInt(headers.get("x-ratelimit-limit") ?? "", 10);
+  const reset = Number.parseInt(headers.get("x-ratelimit-reset") ?? "", 10);
+  return {
+    remaining: Number.isInteger(remaining) && remaining >= 0 ? remaining : 0,
+    limit: Number.isInteger(limit) && limit > 0 ? limit : 5_000,
+    resetAt:
+      Number.isInteger(reset) && reset > 0
+        ? new Date(reset * 1_000).toISOString()
+        : null,
+  };
 }
 
 function githubUrl(apiBaseUrl: string, path: string): string {

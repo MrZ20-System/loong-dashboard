@@ -49,6 +49,14 @@ function validConfigInput() {
 }
 
 describe("system configuration", () => {
+  it("defaults idle retention to two hours and accepts Never without changing explicit values", () => {
+    const input = validConfigInput();
+    const { idleProcessMinutes: _idle, ...agent } = input.agent;
+    expect(parseSystemConfig({ ...input, agent }, "/workspace/system.yaml").agent.idleProcessMinutes).toBe(120);
+    expect(parseSystemConfig({ ...input, agent: { ...agent, idleProcessMinutes: 0 } }, "/workspace/system.yaml").agent.idleProcessMinutes).toBe(0);
+    expect(parseSystemConfig(input, "/workspace/system.yaml").agent.idleProcessMinutes).toBe(20);
+  });
+
   it("loads the complete V1 system.yaml contract", () => {
     const config = loadSystemConfig(
       resolve(fixtureDirectory, "valid-system.yaml"),

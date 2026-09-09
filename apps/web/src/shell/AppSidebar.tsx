@@ -6,6 +6,7 @@ import "./app-sidebar-refinements.css";
 
 const workspaceLinks = [
   { to: "/", label: "Board", icon: "home", end: true },
+  { to: "/agent", label: "Agent", icon: "sparkle", end: false },
   { to: "/knowledge", label: "Knowledge", icon: "book", end: false },
 ] as const;
 
@@ -27,6 +28,7 @@ function RepositoryGroup({
   const location = useLocation();
   const activeId = activeRepositoryId(location.pathname);
   const isActive = activeId === repositoryId;
+  const counts = repository as RepositorySummary & { pullRequestCount?: number; issueCount?: number };
   const [expanded, setExpanded] = useState(() => isActive);
   return (
     <section
@@ -69,12 +71,12 @@ function RepositoryGroup({
           <NavLink
             to={`/repositories/${encodeURIComponent(repositoryId)}/pulls`}
           >
-            Pull requests
+            Pull requests{typeof counts.pullRequestCount === "number" && <span className="sidebar-count">{counts.pullRequestCount}</span>}
           </NavLink>
           <NavLink
             to={`/repositories/${encodeURIComponent(repositoryId)}/issues`}
           >
-            Issues
+            Issues{typeof counts.issueCount === "number" && <span className="sidebar-count">{counts.issueCount}</span>}
           </NavLink>
         </nav>
       )}
@@ -137,7 +139,7 @@ export function AppSidebar({
                     : "sidebar-nav__item"
                 }
               >
-                <span className={`sidebar-nav__icon codicon codicon-${icon}`} aria-hidden="true" />
+                <span className={`sidebar-nav__icon codicon codicon-${icon}`} aria-hidden="true">{icon === "sparkle" ? "✦" : null}</span>
                 <span className="sidebar-nav__label">{label}</span>
               </NavLink>
             </li>

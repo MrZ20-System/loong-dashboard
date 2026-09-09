@@ -36,6 +36,7 @@ import Fastify, {
 } from "fastify";
 
 import { registerDomainRoutes } from "./domains.js";
+import type { DomainFileService } from "./domain-file.js";
 import { registerDiffRoutes } from "./diff.js";
 import {
   registerKnowledgeRoutes,
@@ -61,6 +62,10 @@ import {
 } from "./route-helpers.js";
 import type { SyncCoordinator } from "./sync-coordinator.js";
 import { IssueDetailService } from "./issue-detail-service.js";
+import {
+  registerSettingsRoutes,
+  type SettingsController,
+} from "./settings.js";
 
 const healthResponse: HealthResponse = healthResponseSchema.parse({
   status: "ok",
@@ -96,6 +101,10 @@ export interface BuildAppDependencies {
     engine: SchedulerEngine;
     defaults: { provider: string; model: string; reasoningEffort: string };
   };
+  /** File-backed Domain source/projection service. */
+  domainFiles?: DomainFileService;
+  /** Persistent control-center settings service. */
+  settings?: SettingsController;
 }
 
 /**
@@ -125,7 +134,13 @@ export function buildApp(
   });
 
   registerStageOneRoutes(app, database, timezone, syncCoordinator, issueDetails);
-  registerDomainRoutes(app, { database, reclassification });
+  registerDomainRoutes(app, {
+    database,
+    reclassification,
+    ...(dependencies.domainFiles === undefined
+      ? {}
+      : { domainFiles: dependencies.domainFiles }),
+  });
   registerDiffRoutes(app, { database, gitWorkspace });
   if (dependencies.agentChat !== undefined) {
     registerAgentRoutes(app, dependencies.agentChat);
@@ -139,6 +154,9 @@ export function buildApp(
       engine: dependencies.scheduledTasks.engine,
       defaults: dependencies.scheduledTasks.defaults,
     });
+  }
+  if (dependencies.settings !== undefined) {
+    registerSettingsRoutes(app, { controller: dependencies.settings });
   }
 
   if (ownsReclassification) {
@@ -178,6 +196,8 @@ function registerStageOneRoutes(
       defaultBranch: repository.defaultBranch,
       worktreeSlots: repository.worktreeSlots,
       enabled: repository.enabled,
+      pullRequestCount: repository.pullRequestCount ?? 0,
+      issueCount: repository.issueCount ?? 0,
     }));
     return sendParsed(reply, 200, repositoriesResponseSchema, {
       items: repositories,
@@ -328,6 +348,7 @@ function errorResponse(error: unknown): {
         ? 400
           : code === "REPOSITORY_NOT_FOUND" ||
             code === "DOMAIN_NOT_FOUND" ||
+            code === "DOMAIN_VERSION_NOT_FOUND" ||
             code === "PULL_REQUEST_NOT_FOUND" ||
             code === "FILE_NOT_FOUND" ||
             code === "ISSUE_NOT_FOUND" ||
@@ -339,6 +360,7 @@ function errorResponse(error: unknown): {
           : code === "SYNC_ALREADY_RUNNING" ||
               code === "DOMAIN_NAME_CONFLICT" ||
               code === "AGENT_TURN_BUSY" ||
+              code === "AGENT_INTERACTION_UNAVAILABLE" ||
               code === "WORKSPACE_BUSY" ||
               code === "WORKSPACE_REVISION_MISMATCH" ||
               code === "KNOWLEDGE_DOCUMENT_CONFLICT" ||
@@ -362,6 +384,7 @@ function errorCode(error: unknown): ApiErrorCode {
   if (hasCode(error, "INVALID_CURSOR")) return "INVALID_CURSOR";
   if (hasCode(error, "REPOSITORY_NOT_FOUND")) return "REPOSITORY_NOT_FOUND";
   if (hasCode(error, "DOMAIN_NOT_FOUND")) return "DOMAIN_NOT_FOUND";
+  if (hasCode(error, "DOMAIN_VERSION_NOT_FOUND")) return "DOMAIN_VERSION_NOT_FOUND";
   if (hasCode(error, "DOMAIN_NAME_CONFLICT")) return "DOMAIN_NAME_CONFLICT";
   if (hasCode(error, "PULL_REQUEST_NOT_FOUND")) {
     return "PULL_REQUEST_NOT_FOUND";
@@ -375,6 +398,9 @@ function errorCode(error: unknown): ApiErrorCode {
   if (hasCode(error, "SCHEDULED_TASK_WORKSPACE_BUSY")) return "SCHEDULED_TASK_WORKSPACE_BUSY";
   if (hasCode(error, "AGENT_SESSION_NOT_FOUND")) return "AGENT_SESSION_NOT_FOUND";
   if (hasCode(error, "AGENT_TURN_BUSY")) return "AGENT_TURN_BUSY";
+  if (hasCode(error, "AGENT_INTERACTION_UNAVAILABLE")) {
+    return "AGENT_INTERACTION_UNAVAILABLE";
+  }
   if (hasCode(error, "WORKSPACE_BUSY")) return "WORKSPACE_BUSY";
   if (hasCode(error, "WORKSPACE_REVISION_MISMATCH")) {
     return "WORKSPACE_REVISION_MISMATCH";

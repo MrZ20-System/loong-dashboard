@@ -1,33 +1,15 @@
 # @loongboard/knowledge
 
-## Purpose
+Markdown 文件操作。扫描快照、front matter 身份、路径边界和原子写入；版本索引、watcher、默认会话在 Server，Git checkpoint 在 git-workspace。
 
-Provide the Markdown-backed Knowledge repository and its version/checkpoint
-integration.
+- [实现说明](../../docs/knowledge.md)
+- [源码入口](src/index.ts)
+- [本包修改约束](AGENTS.md)
+- [统一测试与验收](../../docs/testing.md)
 
-## Owns
+从应用仓库根目录运行本包检查：
 
-- Knowledge tree and document file operations.
-- The scoped Git checkpoint service for Knowledge history.
-
-## Does not own
-
-- Product database schema.
-- GitHub synchronization, general worktrees, or DSH lifecycle.
-
-## Public API
-
-No Stage 0 API is exported yet.
-
-## Dependencies
-
-None in Stage 0.
-
-## Invariants
-
-Markdown files remain the source of truth; SQLite stores indexes and runtime
-state only.
-
-## Tests
-
-Future tests cover file edits, history, and explicit Knowledge Git checkpoints.
+```bash
+pnpm --filter @loongboard/knowledge test
+pnpm --filter @loongboard/knowledge typecheck
+```

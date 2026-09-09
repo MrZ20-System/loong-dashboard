@@ -1,6 +1,6 @@
 # Web application instructions
 
-This package owns the LoongBoard browser shell and metadata list experience
+This package owns the LoongBoard browser shell, metadata, PR/Issue, Agent, Knowledge, and scheduling UI
 under `apps/web/**`.
 
 ## Boundaries
@@ -13,7 +13,7 @@ under `apps/web/**`.
 - PR and Issue list pages read only the local Server APIs; page load, filtering,
   and pagination must never trigger GitHub.
 - Keep the two metadata sync streams independent when refreshing cached lists.
-- Do not add Diff, Agent, Knowledge, Scheduler, or Stage 2 domain behavior.
+- Keep domain classification and runtime execution on the Server; reuse the shared chat and Markdown components.
 - Do not introduce a component framework or duplicate server contracts.
 
 ## Checks

@@ -65,7 +65,8 @@ const baseSystemConfigSchema = z
         defaultProvider: z.string().trim().min(1),
         defaultModel: z.string().trim().min(1),
         defaultReasoningEffort: z.string().trim().min(1),
-        idleProcessMinutes: z.number().int().positive(),
+        // Zero retains an idle runtime until explicit stop or server shutdown.
+        idleProcessMinutes: z.number().int().nonnegative().default(120),
       })
       .strict(),
   })

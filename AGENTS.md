@@ -4,11 +4,11 @@
 
 Before changing code:
 
-1. Read `docs/requirements.md`.
-2. Read `docs/architecture.md`.
+1. Read `docs/README.md` and `docs/requirements.md`.
+2. Read `docs/architecture.md` and the relevant module chapter.
 3. Read the nearest `AGENTS.md`.
 4. Read the target package README.
-5. Check `docs/implementation-status.md`.
+5. Use `docs/testing.md` for checks; historical acceptance is in `docs/validation-history.md`.
 
 ## Product boundary
 
@@ -45,7 +45,7 @@ Validate once at external boundaries:
 
 - config parsing;
 - HTTP input;
-- `gh` JSON;
+- GitHub provider JSON;
 - DSH notifications;
 - database constraints.
 

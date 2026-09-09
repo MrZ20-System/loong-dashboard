@@ -1,95 +1,40 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  AgentRuntimeEvent,
-  AgentSessionSpec,
-} from "@loongboard/agent-runtime";
-import type { HarnessNotification } from "@deepseek-ai/dsh-sdk-client";
+import { describe, expect, it } from "vitest";
+import type { AgentRuntimeEvent, AgentSessionSpec } from "@loongboard/agent-runtime";
 
 import { DSHRuntime } from "../src/index.js";
+import {
+  allRequestsFor,
+  FakeNativeDshTransport,
+  requestFor,
+} from "./fake-native-transport.js";
 
-type PendingRun = {
-  prompt: string;
-  onNotification:
-    | ((notification: HarnessNotification) => void)
-    | undefined;
-  resolve: (result: {
-    sessionId: string;
-    finalResponse: string;
-    events: unknown[];
-    notifications: unknown[];
-  }) => void;
-  reject: (error: Error) => void;
-};
-
-const fakeSdk = vi.hoisted(() => {
-  const pendingRuns: PendingRun[] = [];
-  return {
-    pendingRuns,
-    reset(): void {
-      pendingRuns.length = 0;
-    },
-  };
-});
-
-vi.mock("@deepseek-ai/dsh-sdk-client", () => {
-  return {
-    DeepSeekHarness: class {
-      constructor(_options?: unknown) {}
-
-      session(): {
-        run: (
-          prompt: string,
-          options?: {
-            onNotification?: (notification: HarnessNotification) => void;
-          },
-        ) => Promise<unknown>;
-      } {
-        return {
-          run: (prompt, options) =>
-            new Promise((resolve, reject) => {
-              fakeSdk.pendingRuns.push({
-                prompt,
-                onNotification: options?.onNotification,
-                resolve: resolve as PendingRun["resolve"],
-                reject: reject as PendingRun["reject"],
-              });
-            }),
-        };
-      }
-
-      close(): Promise<void> {
-        return Promise.resolve();
-      }
-    },
-  };
-});
-
-function spec(): AgentSessionSpec {
+function spec(overrides: Partial<AgentSessionSpec> = {}): AgentSessionSpec {
   return {
     sessionId: "s1",
     workspacePath: "/tmp/loongboard-work",
     dshHomePath: "/tmp/loongboard-dsh",
     provider: "deepseek",
     model: "deepseek-v4",
+    ...overrides,
   };
 }
 
-function textDelta(text: string): HarnessNotification {
+function journalEvent(
+  type: string,
+  data: Record<string, unknown> = {},
+  seq = 1,
+): unknown {
   return {
-    method: "session.event",
-    params: {
-      sessionId: "s1",
-      event: {
-        type: "assistant/chunk",
-        seq: 1,
-        time: 1_700_000_000_000,
-        data: {
-          turn: 1,
-          step: 0,
-          chunk: { type: "text-delta", index: 0, text },
-        },
-      },
-    },
+    type: "event",
+    event: { type, seq, time: 1_700_000_000_000 + seq, data },
+  };
+}
+
+function hostStatus(sessionId: string, idle: boolean): unknown {
+  return {
+    type: "emit",
+    event: "api-session/status",
+    args: [sessionId, idle ? false : true],
   };
 }
 
@@ -101,23 +46,12 @@ async function nextEvent(
   return next.value;
 }
 
-/** Expose next() for manual stepping of the AsyncIterable runtime contract. */
-function stepped(
-  iterable: AsyncIterable<AgentRuntimeEvent>,
-): AsyncGenerator<AgentRuntimeEvent> {
-  return (async function* () {
-    yield* iterable;
-  })();
-}
+describe("DSHRuntime native transport lifecycle", () => {
+  it("emits live deltas before completion and waits for the durable final event after idle", async () => {
+    const transport = new FakeNativeDshTransport("runtime-session-1");
+    const runtime = new DSHRuntime({ transportFactory: () => transport });
+    const iterator = runtime.run(spec(), "hello");
 
-describe("DSHRuntime NotificationChannel behavior", () => {
-  beforeEach(() => {
-    fakeSdk.reset();
-  });
-
-  it("streams pushed notifications then the final response, and ends idle", async () => {
-    const runtime = new DSHRuntime();
-    const iterator = stepped(runtime.run(spec(), "hello"));
     try {
       expect(await nextEvent(iterator)).toEqual({
         type: "status",
@@ -127,76 +61,205 @@ describe("DSHRuntime NotificationChannel behavior", () => {
         type: "status",
         status: "running",
       });
-
-      // Third step starts the drain loop and parks on take(); a notification
-      // arriving then must wake the pending waiter.
-      const waitingTake = iterator.next();
-      expect(fakeSdk.pendingRuns).toHaveLength(1);
-      const pending = fakeSdk.pendingRuns[0];
-      expect(pending.prompt).toBe("hello");
-      pending.onNotification?.(textDelta("hello "));
-      expect(await waitingTake).toEqual({
+      // The turn remains live: a delta must be observable while no final
+      // assistant message or turn/end event has arrived yet.
+      const delta = iterator.next();
+      transport.pushJournal(
+        journalEvent("assistant/chunk", {
+          chunk: { type: "text-delta", index: 0, text: "hello " },
+        }),
+      );
+      expect(await delta).toEqual({
         done: false,
         value: { type: "assistant.delta", text: "hello " },
       });
-
-      // A notification pushed while the generator is yielding is queued and
-      // served by the next take().
-      pending.onNotification?.(textDelta("world"));
-      expect(await iterator.next()).toEqual({
-        done: false,
-        value: { type: "assistant.delta", text: "world" },
-      });
-
-      pending.resolve({
-        sessionId: "rt-1",
-        finalResponse: "final answer",
-        events: [],
-        notifications: [],
-      });
-      expect(await iterator.next()).toEqual({
-        done: false,
-        value: {
-          type: "assistant.completed",
-          markdown: "final answer",
+      expect(requestFor(transport, "session/prompt")?.args).toMatchObject({
+        request: {
+          sessionId: "runtime-session-1",
+          content: [{ type: "text", text: "hello" }],
         },
       });
-      // After close, a straggler notification must be ignored, not emitted.
-      pending.onNotification?.(textDelta("too late"));
+
+      // DSH's host can report idle before the journal flushes its final
+      // message. The runtime must keep waiting for that durable event.
+      const completed = iterator.next();
+      transport.pushHost(hostStatus("runtime-session-1", true));
+      transport.pushJournal(
+        journalEvent("assistant/message", {
+          message: {
+            content: [{ type: "text", text: "final answer" }],
+          },
+        }, 2),
+      );
+      transport.pushJournal(journalEvent("turn/end", {}, 3));
+      expect(await completed).toEqual({
+        done: false,
+        value: { type: "assistant.completed", markdown: "final answer" },
+      });
       expect(await iterator.next()).toEqual({
         done: false,
         value: { type: "status", status: "idle" },
       });
       expect((await iterator.next()).done).toBe(true);
+
+      const promptRequests = allRequestsFor(transport, "session/prompt");
+      expect(promptRequests).toHaveLength(1);
     } finally {
       await runtime.close();
     }
   });
 
-  it("ends with error and idle when the run rejects without notifications", async () => {
-    const runtime = new DSHRuntime();
-    const iterator = stepped(runtime.run(spec(), "hello"));
+  it("discovers models with provider-scoped reasoning and native commands", async () => {
+    const transport = new FakeNativeDshTransport(
+      "capability-session",
+      {
+        groups: [
+          {
+            id: "deepseek",
+            name: "DeepSeek",
+            models: [
+              {
+                id: "deepseek-v4",
+                name: "DeepSeek V4",
+                reasoning: {
+                  efforts: [{ id: "off" }, { id: "high" }],
+                },
+              },
+            ],
+          },
+          {
+            id: "openai-compatible",
+            name: "OpenAI Compatible",
+            models: [
+              {
+                id: "gateway-1",
+                name: "Gateway 1",
+                reasoning: { efforts: [{ id: "low" }, { id: "max" }] },
+              },
+            ],
+          },
+        ],
+      },
+      [
+        { name: "git/status", description: "Inspect repository status" },
+        { name: "shell", description: "Run a shell command" },
+      ],
+      [
+        {
+          provider: "deepseek",
+          displayName: "DeepSeek",
+          settingsNs: "llm-deepseek",
+          settingsPath: ["providers", "deepseek"],
+        },
+        {
+          provider: "openai-compatible",
+          displayName: "OpenAI Compatible",
+          settingsNs: "llm-pi-ai",
+          settingsPath: ["providers", "gateway-1"],
+        },
+      ],
+    );
+    const runtime = new DSHRuntime({ transportFactory: () => transport });
+
     try {
-      expect(await nextEvent(iterator)).toEqual({
-        type: "status",
-        status: "starting",
+      await expect(runtime.discoverCapabilities(spec())).resolves.toEqual({
+        runtimeKind: "dsh",
+        version: "dsh-v0.1.2-alpha.5",
+        profile: "web",
+        connected: true,
+        models: [
+          {
+            id: "deepseek-v4",
+            label: "DeepSeek V4",
+            provider: "deepseek",
+            reasoningEfforts: ["off", "high"],
+          },
+          {
+            id: "gateway-1",
+            label: "Gateway 1",
+            provider: "openai-compatible",
+            reasoningEfforts: ["low", "max"],
+          },
+        ],
+        providers: [
+          { id: "deepseek", label: "DeepSeek" },
+          { id: "openai-compatible", label: "OpenAI Compatible" },
+        ],
+        reasoning: ["off", "high", "low", "max"],
+        commands: [
+          { id: "git/status", description: "Inspect repository status" },
+          { id: "shell", description: "Run a shell command" },
+        ],
+        features: [
+          "session.prompt",
+          "session.follow",
+          "session.selectModel",
+          "commands.execute",
+        ],
+        discovery: "runtime",
+        discoveredAt: expect.any(String),
       });
-      expect(await nextEvent(iterator)).toEqual({
-        type: "status",
-        status: "running",
+      expect(requestFor(transport, "session/modelCatalog")).toBeDefined();
+      expect(requestFor(transport, "commands/list")?.args).toEqual({
+        agentId: "capability-session",
       });
+    } finally {
+      await runtime.close();
+    }
+  });
 
-      // Park on take() with the channel open, then reject with no
-      // notifications: close() must wake the waiter with undefined so the
-      // iterator terminates instead of hanging.
-      const errorNext = iterator.next();
-      expect(fakeSdk.pendingRuns).toHaveLength(1);
-      const pending = fakeSdk.pendingRuns[0];
-      pending.reject(new Error("transport lost"));
+  it("surfaces native approval requests and sends only an explicit response", async () => {
+    const transport = new FakeNativeDshTransport("approval-session");
+    const runtime = new DSHRuntime({ transportFactory: () => transport });
+    const iterator = runtime.run(spec(), "run the command");
 
-      expect(await errorNext).toEqual({
+    try {
+      expect(await nextEvent(iterator)).toEqual({ type: "status", status: "starting" });
+      expect(await nextEvent(iterator)).toEqual({ type: "status", status: "running" });
+
+      const requested = iterator.next();
+      transport.pushHost({ type: "ready", clientId: "client-1" });
+      transport.pushHost({
+        type: "waterfall",
+        eventId: "approval-1",
+        event: "approval/request",
+        agentId: "approval-session",
+        request: { toolName: "shell", reason: "The command changes files." },
+      });
+      expect(await requested).toEqual({
         done: false,
-        value: { type: "error", message: "transport lost" },
+        value: {
+          type: "interaction.requested",
+          requestId: "approval-1",
+          kind: "approval",
+          title: "Allow shell?",
+          description: "The command changes files.",
+          options: [
+            { id: "rejected", label: "Reject" },
+            { id: "allowed-once", label: "Allow once" },
+          ],
+        },
+      });
+      expect(allRequestsFor(transport, "$events/result")).toHaveLength(0);
+
+      await runtime.respond("s1", "approval-1", "allowed-once");
+      expect(requestFor(transport, "$events/result")?.args).toEqual({
+        clientId: "client-1",
+        eventId: "approval-1",
+        outcome: { kind: "result", value: "allowed-once" },
+      });
+
+      const completed = iterator.next();
+      transport.pushJournal(
+        journalEvent("assistant/message", {
+          message: { content: [{ type: "text", text: "done" }] },
+        }, 2),
+      );
+      transport.pushJournal(journalEvent("turn/end", {}, 3));
+      transport.pushHost(hostStatus("approval-session", true));
+      expect(await completed).toEqual({
+        done: false,
+        value: { type: "assistant.completed", markdown: "done" },
       });
       expect(await iterator.next()).toEqual({
         done: false,

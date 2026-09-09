@@ -100,4 +100,19 @@ describe("AgentRuntimeHost", () => {
     expect(b.closeMock).toHaveBeenCalled();
     expect(host.activeCount()).toBe(0);
   });
+
+  it("updates idle retention without arming a timer for an active turn", async () => {
+    const created = recordedRuntime();
+    const host = new AgentRuntimeHost(() => created, 60_000);
+    host.ensure(spec("s1"));
+    host.beginRun("s1");
+    host.updateIdleCloseMs(1);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(created.stopCalls).toBe(0);
+
+    host.endRun("s1");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(created.stopCalls).toBe(1);
+    await host.close();
+  });
 });

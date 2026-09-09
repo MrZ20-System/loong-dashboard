@@ -4,8 +4,9 @@ import {
   fetchSyncStatus,
   startSync,
 } from "../../metadata-client";
+import { fetchRepositorySettings } from "../../settings-client";
 
-function SyncControl({ repositoryId }: { repositoryId: string }) {
+function SyncControl({ repositoryId, lookbackDays }: { repositoryId: string; lookbackDays: 7 | 30 }) {
   const client = useQueryClient();
   const [message, setMessage] = useState<string | null>(null);
   const sync = useMutation({
@@ -42,7 +43,7 @@ function SyncControl({ repositoryId }: { repositoryId: string }) {
   );
 }
 
-function SyncStatus({ repositoryId }: { repositoryId: string }) {
+function SyncStatus({ repositoryId, lookbackDays }: { repositoryId: string; lookbackDays: 7 | 30 }) {
   const client = useQueryClient();
   const status = useQuery({
     queryKey: ["sync", repositoryId],
@@ -154,6 +155,7 @@ function SyncStatus({ repositoryId }: { repositoryId: string }) {
         void client.invalidateQueries({
           queryKey: ["metadata", repositoryId, streamKind],
         });
+        void client.invalidateQueries({ queryKey: ["repositories"] });
       }
     }
     previousStreams.current = {
@@ -171,23 +173,43 @@ function SyncStatus({ repositoryId }: { repositoryId: string }) {
   if (status.isPending) return <span role="status">Checking sync status…</span>;
   if (status.isError)
     return <span role="alert">Sync status unavailable: {status.error.message}</span>;
-  if (status.data.status === "running")
-    return <span role="status">Sync in progress…</span>;
-  if (status.data.status === "failed")
-    return (
-      <span role="alert">Last sync failed. Existing rows remain available.</span>
-    );
-  return <span role="status">Sync idle</span>;
+  const pull = status.data.pullRequests;
+  const issues = status.data.issues;
+  const pullNeedsBootstrap = pull.watermarkUpdatedAt === null;
+  const issuesNeedsBootstrap = issues.watermarkUpdatedAt === null;
+  const needsBootstrap = pullNeedsBootstrap || issuesNeedsBootstrap;
+  if (status.data.status === "running") {
+    const runningLabel = pullNeedsBootstrap && issuesNeedsBootstrap
+      ? `Initial sync · last ${lookbackDays} days`
+      : needsBootstrap
+        ? "Syncing repository updates…"
+        : "Syncing latest updates…";
+    return <span role="status">{runningLabel}</span>;
+  }
+  const complete = pull.status === "idle" && issues.status === "idle" && pull.lastSuccessAt !== null && issues.lastSuccessAt !== null;
+  const completeAt = complete
+    ? new Date(Math.min(new Date(pull.lastSuccessAt as string).getTime(), new Date(issues.lastSuccessAt as string).getTime()))
+    : null;
+  const age = completeAt === null ? null : Math.max(0, Math.round((Date.now() - completeAt.getTime()) / 60_000));
+  const partialError = pull.lastError ?? issues.lastError;
+  if (partialError !== null && partialError !== undefined)
+    return <span role="alert" title={partialError}><span>{needsBootstrap ? `Initial sync failed · last ${lookbackDays} days` : "Last sync failed"}</span><small> · {completeAt ? `last complete ${age === 0 ? "just now" : `${age}m ago`}` : "no complete sync"}</small></span>;
+  return <span role="status"><span>{needsBootstrap ? `Initial sync · last ${lookbackDays} days` : "Sync idle"}</span><small> · {completeAt ? `Synced ${age === 0 ? "just now" : `${age}m ago`}` : "Awaiting first complete sync"}</small></span>;
 }
 
 export function RepositorySyncStatus({ repositoryId }: { repositoryId: string }) {
+  const settings = useQuery({
+    queryKey: ["repository-settings", repositoryId],
+    queryFn: () => fetchRepositorySettings(repositoryId),
+  });
+  const lookbackDays = settings.data?.syncLookbackDays ?? 30;
   return (
     <div className="topbar-sync" aria-label={`${repositoryId} sync status`}>
       <span className="status-dot" aria-hidden="true" />
       <div className="sync-status">
-        <SyncStatus repositoryId={repositoryId} />
+        <SyncStatus repositoryId={repositoryId} lookbackDays={lookbackDays} />
       </div>
-      <SyncControl repositoryId={repositoryId} />
+      <SyncControl repositoryId={repositoryId} lookbackDays={lookbackDays} />
     </div>
   );
 }

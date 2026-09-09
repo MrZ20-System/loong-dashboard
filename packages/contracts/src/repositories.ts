@@ -24,6 +24,9 @@ export const repositorySummarySchema = z
     defaultBranch: z.string().trim().min(1),
     worktreeSlots: z.number().int().nonnegative(),
     enabled: z.boolean(),
+    /** Cached local row counts used by the repository navigation. */
+    pullRequestCount: z.number().int().nonnegative().optional(),
+    issueCount: z.number().int().nonnegative().optional(),
   })
   .strict()
   .refine((repository) => repository.id === repository.key, {

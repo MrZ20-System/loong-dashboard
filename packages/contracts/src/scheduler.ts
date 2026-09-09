@@ -4,7 +4,13 @@ import { utcDateTimeSchema } from "./validation.js";
 
 /** Scheduled agent task contracts (plan 16, 17.7). */
 
-const reasoningEffortSchema = z.enum(["low", "medium", "high"]);
+const reasoningEffortSchema = z.string().trim().min(1);
+
+/** A schedule may send a prompt to an Agent conversation or invoke a system action. */
+export const scheduledTaskKindSchema = z.enum(["agent", "system"]);
+
+/** System actions are intentionally opaque to the cron package and interpreted by Server. */
+export const scheduledSystemActionSchema = z.string().trim().min(1).optional();
 
 export const scheduledTaskSchema = z
   .object({
@@ -17,6 +23,10 @@ export const scheduledTaskSchema = z
     provider: z.string().min(1),
     model: z.string().min(1),
     reasoningEffort: reasoningEffortSchema,
+    kind: scheduledTaskKindSchema.optional(),
+    action: z.string().trim().min(1).nullable().optional(),
+    repositoryId: z.string().trim().min(1).nullable().optional(),
+    conversationId: z.string().trim().min(1).nullable().optional(),
     enabled: z.boolean(),
     lastRunAt: utcDateTimeSchema.nullable(),
     nextRunAt: utcDateTimeSchema.nullable(),
@@ -31,21 +41,54 @@ export const scheduledTasksResponseSchema = z
   })
   .strict();
 
-export const scheduledTaskCreateSchema = z
+const scheduledTaskCreateBodySchema = z
   .object({
     name: z.string().trim().min(1).max(120),
     cronExpression: z.string().trim().min(1).max(64),
     timezone: z.string().trim().min(1).max(64),
-    prompt: z.string().trim().min(1).max(200_000),
-    workspacePath: z.string().trim().min(1),
+    prompt: z.string().trim().max(200_000).optional(),
+    workspacePath: z.string().trim().min(1).optional(),
     provider: z.string().trim().min(1).optional(),
     model: z.string().trim().min(1).optional(),
     reasoningEffort: reasoningEffortSchema.optional(),
+    kind: scheduledTaskKindSchema.optional(),
+    action: scheduledSystemActionSchema,
+    repositoryId: z.string().trim().min(1).optional(),
+    conversationId: z.string().trim().min(1).nullable().optional(),
     enabled: z.boolean().optional(),
   })
   .strict();
 
-export const scheduledTaskUpdateSchema = scheduledTaskCreateSchema
+export const scheduledTaskCreateSchema = scheduledTaskCreateBodySchema.superRefine(
+  (value, context) => {
+    if (value.kind === "system") {
+      if (value.action === undefined) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["action"],
+          message: "System tasks require an action",
+        });
+      }
+      return;
+    }
+    if (value.prompt === undefined || value.prompt.length === 0) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["prompt"],
+        message: "Agent tasks require a prompt",
+      });
+    }
+    if (value.workspacePath === undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["workspacePath"],
+        message: "Agent tasks require a workspacePath",
+      });
+    }
+  },
+);
+
+export const scheduledTaskUpdateSchema = scheduledTaskCreateBodySchema
   .partial()
   .strict()
   .refine((value) => Object.keys(value).length > 0, {
@@ -65,6 +108,7 @@ export const scheduledRunSchema = z
     finishedAt: utcDateTimeSchema.nullable(),
     status: z.enum(["running", "completed", "failed", "skipped"]),
     agentSessionId: z.string().nullable(),
+    conversationId: z.string().nullable().optional(),
     error: z.string().nullable(),
   })
   .strict();
@@ -96,3 +140,5 @@ export type ScheduledTaskParams = z.infer<typeof scheduledTaskParamsSchema>;
 export type ScheduledRun = z.infer<typeof scheduledRunSchema>;
 export type ScheduledTaskRunsResponse = z.infer<typeof scheduledTaskRunsResponseSchema>;
 export type ScheduledTaskRunAccepted = z.infer<typeof scheduledTaskRunAcceptedSchema>;
+export type ScheduledTaskKind = z.infer<typeof scheduledTaskKindSchema>;
+export type ScheduledSystemAction = z.infer<typeof scheduledSystemActionSchema>;

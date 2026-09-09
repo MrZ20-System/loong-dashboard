@@ -24,6 +24,8 @@ function repositorySection(
 }
 
 function globalContext(pathname: string): HeaderContext {
+  if (pathname.startsWith("/agent"))
+    return { eyebrow: "Workspace", title: "Agent", repositoryId: null };
   if (pathname.startsWith("/knowledge"))
     return { eyebrow: "Workspace", title: "Knowledge", repositoryId: null };
   if (pathname.startsWith("/settings/schedules") || pathname.startsWith("/scheduled-tasks"))

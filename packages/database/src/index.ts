@@ -62,9 +62,11 @@ export {
   getDomainRule,
   listDomainRules,
   updateDomainRule,
+  replaceDomainRulesFromFile,
 } from "./domain-service.js";
 export type {
   DomainRuleCreateInput,
+  DomainRuleProjectionInput,
   DomainRuleUpdateInput,
 } from "./domain-service.js";
 export {
@@ -80,6 +82,7 @@ export {
   AgentSessionNotFoundError,
   appendAgentMessage,
   createAgentSession,
+  deleteAgentSession,
   findAgentSession,
   listAgentMessages,
   listAgentSessions,
@@ -129,6 +132,7 @@ export {
   recoverInterruptedScheduledRuns,
   requireScheduledTask,
   ScheduledTaskNotFoundError,
+  setScheduledTaskConversation,
   setTaskOccurrence,
   updateScheduledRun,
   updateScheduledTask,

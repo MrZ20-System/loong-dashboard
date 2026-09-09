@@ -13,11 +13,15 @@ import type { DatabaseClient } from "./types.js";
 export interface AgentSessionRecord {
   id: string;
   scopeType: "pr" | "issue" | "knowledge" | "general";
+  originKind: AgentScope["kind"];
   repositoryId: string | null;
   prNumber: number | null;
   issueNumber: number | null;
   targetSha: string | null;
   knowledgeDocumentId: string | null;
+  domainId: string | null;
+  originRoute: string | null;
+  title: string | null;
   dshSessionId: string | null;
   dshHomePath: string;
   workspacePath: string;
@@ -37,6 +41,7 @@ export interface CreateAgentSessionInput {
   provider: string;
   model: string;
   reasoningEffort: string;
+  title?: string | null;
   now: string;
 }
 
@@ -56,16 +61,20 @@ function nowIso(): string {
 }
 
 function mapSession(row: Record<string, unknown>): AgentSessionSummary {
+  const kind = (row.origin_kind ?? row.scope_type) as AgentScope["kind"];
+  const scope: AgentScope = {
+    kind,
+    ...(row.repository_id !== null && row.repository_id !== undefined ? { repositoryId: row.repository_id as string } : {}),
+    ...(row.pr_number !== null && row.pr_number !== undefined ? { prNumber: row.pr_number as number } : {}),
+    ...(row.issue_number !== null && row.issue_number !== undefined ? { issueNumber: row.issue_number as number } : {}),
+    ...(row.target_sha !== null && row.target_sha !== undefined ? { targetSha: row.target_sha as string } : {}),
+    ...(row.knowledge_document_id !== null && row.knowledge_document_id !== undefined ? { knowledgeDocumentId: row.knowledge_document_id as string } : {}),
+    ...(row.domain_id !== null && row.domain_id !== undefined ? { domainId: row.domain_id as string } : {}),
+    ...(row.origin_route !== null && row.origin_route !== undefined ? { route: row.origin_route as string } : {}),
+  };
   return {
     id: row.id as string,
-    scope: {
-      kind: row.scope_type as AgentScope["kind"],
-      ...(row.repository_id !== null ? { repositoryId: row.repository_id as string } : {}),
-      ...(row.pr_number !== null ? { prNumber: row.pr_number as number } : {}),
-      ...(row.issue_number !== null ? { issueNumber: row.issue_number as number } : {}),
-      ...(row.target_sha !== null ? { targetSha: row.target_sha as string } : {}),
-      ...(row.knowledge_document_id !== null ? { knowledgeDocumentId: row.knowledge_document_id as string } : {}),
-    },
+    scope,
     workspacePath: row.workspace_path as string,
     dshHomePath: row.dsh_home_path as string,
     provider: row.provider as string,
@@ -73,6 +82,12 @@ function mapSession(row: Record<string, unknown>): AgentSessionSummary {
     reasoningEffort: row.reasoning_effort as string,
     status: row.status as AgentSessionSummary["status"],
     dshSessionId: (row.dsh_session_id as string | null) ?? null,
+    origin: scope,
+    workspace: {
+      path: row.workspace_path as string,
+      kind: workspaceKind(kind),
+    },
+    title: (row.title as string | null) ?? null,
     createdAt: row.created_at as string,
     lastUsedAt: row.last_used_at as string,
   };
@@ -81,7 +96,7 @@ function mapSession(row: Record<string, unknown>): AgentSessionSummary {
 /** Scope equality key used to find the default session for a chat. */
 function scopeClause(scope: AgentScope): { sql: string; params: unknown[] } {
   const params: unknown[] = [scope.kind];
-  let sql = "scope_type = ?";
+  let sql = "COALESCE(origin_kind, scope_type) = ?";
   const add = (column: string, value: unknown) => {
     if (value === undefined) {
       sql += ` AND ${column} IS NULL`;
@@ -95,6 +110,8 @@ function scopeClause(scope: AgentScope): { sql: string; params: unknown[] } {
   add("issue_number", scope.issueNumber);
   add("target_sha", scope.targetSha);
   add("knowledge_document_id", scope.knowledgeDocumentId);
+  add("domain_id", scope.domainId);
+  add("origin_route", scope.route);
   return { sql, params };
 }
 
@@ -125,24 +142,36 @@ export function createAgentSession(
   input: CreateAgentSessionInput,
 ): AgentSessionSummary {
   const { scope } = input;
+  // scope_type is the legacy discriminator and cannot be widened without
+  // rebuilding existing SQLite tables. origin_kind carries new repository /
+  // domain values while old rows continue to satisfy the original CHECK.
+  const legacyScopeType = scope.kind === "repository" || scope.kind === "domain"
+    ? "general"
+    : scope.kind;
   database.prepare(
     `INSERT INTO agent_sessions (
-      id, scope_type, repository_id, pr_number, issue_number, target_sha,
-      knowledge_document_id, dsh_session_id, dsh_home_path, workspace_path,
-      provider, model, reasoning_effort, status, created_at, last_used_at
+      id, scope_type, origin_kind, repository_id, pr_number, issue_number, target_sha,
+      knowledge_document_id, domain_id, origin_route, title, dsh_session_id,
+      dsh_home_path, workspace_path, provider, model, reasoning_effort, status,
+      created_at, last_used_at
     ) VALUES (
-      @id, @scopeType, @repositoryId, @prNumber, @issueNumber, @targetSha,
-      @knowledgeDocumentId, NULL, @dshHomePath, @workspacePath,
-      @provider, @model, @reasoningEffort, 'idle', @createdAt, @lastUsedAt
+      @id, @scopeType, @originKind, @repositoryId, @prNumber, @issueNumber, @targetSha,
+      @knowledgeDocumentId, @domainId, @originRoute, @title, NULL, @dshHomePath,
+      @workspacePath, @provider, @model, @reasoningEffort, 'idle', @createdAt,
+      @lastUsedAt
     )`,
   ).run({
     id: input.id,
-    scopeType: scope.kind,
+    scopeType: legacyScopeType,
+    originKind: scope.kind,
     repositoryId: scope.repositoryId ?? null,
     prNumber: scope.prNumber ?? null,
     issueNumber: scope.issueNumber ?? null,
     targetSha: scope.targetSha ?? null,
     knowledgeDocumentId: scope.knowledgeDocumentId ?? null,
+    domainId: scope.domainId ?? null,
+    originRoute: scope.route ?? null,
+    title: input.title ?? null,
     dshHomePath: input.dshHomePath,
     workspacePath: input.workspacePath,
     provider: input.provider,
@@ -161,6 +190,10 @@ export function updateAgentSession(
     status?: AgentSessionSummary["status"];
     dshSessionId?: string | null;
     workspacePath?: string;
+    provider?: string;
+    model?: string;
+    reasoningEffort?: string;
+    title?: string | null;
   },
 ): AgentSessionSummary {
   const sets: string[] = [];
@@ -177,6 +210,22 @@ export function updateAgentSession(
     sets.push("workspace_path = ?");
     params.push(patch.workspacePath);
   }
+  if (patch.provider !== undefined) {
+    sets.push("provider = ?");
+    params.push(patch.provider);
+  }
+  if (patch.model !== undefined) {
+    sets.push("model = ?");
+    params.push(patch.model);
+  }
+  if (patch.reasoningEffort !== undefined) {
+    sets.push("reasoning_effort = ?");
+    params.push(patch.reasoningEffort);
+  }
+  if (patch.title !== undefined) {
+    sets.push("title = ?");
+    params.push(patch.title);
+  }
   if (sets.length > 0) {
     database.prepare(`UPDATE agent_sessions SET ${sets.join(", ")} WHERE id = ?`).run(...params, sessionId);
   }
@@ -190,11 +239,15 @@ export function touchAgentSession(database: DatabaseClient, sessionId: string): 
 }
 
 export interface AgentSessionListFilter {
-  scopeType?: AgentSessionRecord["scopeType"];
+  scopeType?: AgentScope["kind"];
+  originKind?: AgentScope["kind"];
   repositoryId?: string;
   prNumber?: number;
   issueNumber?: number;
   knowledgeDocumentId?: string;
+  status?: AgentSessionRecord["status"];
+  search?: string;
+  limit?: number;
 }
 
 /** Sessions matching an optional scope filter, newest activity first. */
@@ -209,16 +262,50 @@ export function listAgentSessions(
     clauses.push(`${column} = ?`);
     parameters.push(value);
   };
-  add("scope_type", filter.scopeType);
+  if (filter.scopeType !== undefined) {
+    add("COALESCE(origin_kind, scope_type)", filter.scopeType);
+  }
+  if (filter.originKind !== undefined) {
+    add("COALESCE(origin_kind, scope_type)", filter.originKind);
+  }
   add("repository_id", filter.repositoryId);
   add("pr_number", filter.prNumber);
   add("issue_number", filter.issueNumber);
   add("knowledge_document_id", filter.knowledgeDocumentId);
+  add("status", filter.status);
+  if (filter.search !== undefined && filter.search.trim().length > 0) {
+    const term = `%${filter.search.trim()}%`;
+    clauses.push(`(
+      title LIKE ? COLLATE NOCASE OR
+      workspace_path LIKE ? COLLATE NOCASE OR
+      provider LIKE ? COLLATE NOCASE OR
+      model LIKE ? COLLATE NOCASE OR
+      EXISTS (
+        SELECT 1 FROM agent_messages
+        WHERE agent_messages.session_id = agent_sessions.id
+          AND agent_messages.content_markdown LIKE ? COLLATE NOCASE
+      )
+    )`);
+    parameters.push(term, term, term, term, term);
+  }
   const where = clauses.length > 0 ? `WHERE ${clauses.join(" AND ")}` : "";
+  const limit = filter.limit === undefined ? "" : " LIMIT ?";
+  if (filter.limit !== undefined) parameters.push(filter.limit);
   const rows = database
-    .prepare(`SELECT * FROM agent_sessions ${where} ORDER BY last_used_at DESC`)
+    .prepare(`SELECT * FROM agent_sessions ${where} ORDER BY last_used_at DESC${limit}`)
     .all(...parameters) as Array<Record<string, unknown>>;
   return rows.map(mapSession);
+}
+
+/** Delete one normalized session and its transcript. */
+export function deleteAgentSession(
+  database: DatabaseClient,
+  sessionId: string,
+): void {
+  const result = database
+    .prepare("DELETE FROM agent_sessions WHERE id = ?")
+    .run(sessionId);
+  if (result.changes === 0) throw new AgentSessionNotFoundError(sessionId);
 }
 
 /**
@@ -250,6 +337,17 @@ export function listRunningKnowledgeSessionIds(database: DatabaseClient): string
     )
     .all() as Array<{ id: string }>;
   return rows.map((row) => row.id);
+}
+
+function workspaceKind(
+  kind: AgentScope["kind"],
+): "repository" | "pr-worktree" | "knowledge" | "custom" {
+  if (kind === "pr") return "pr-worktree";
+  if (kind === "knowledge") return "knowledge";
+  if (kind === "issue" || kind === "repository" || kind === "domain") {
+    return "repository";
+  }
+  return "custom";
 }
 
 /**

@@ -37,6 +37,19 @@ export interface DomainRuleUpdateInput {
   enabled?: boolean | undefined;
 }
 
+/** Projection payload produced by the file-backed Domain source. */
+export interface DomainRuleProjectionInput {
+  id: string;
+  name: string;
+  color: string;
+  position: number;
+  enabled: boolean;
+  includePatterns: readonly string[];
+  excludePatterns: readonly string[];
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 /** Rotating palette assigned when the caller does not pick a color. */
 const COLOR_PALETTE = [
   "#2563eb",
@@ -245,4 +258,62 @@ export function deleteDomainRule(
     .prepare(`DELETE FROM domain_rules WHERE repository_id = ? AND id = ?`)
     .run(repositoryId, domainId);
   if (result.changes === 0) throw new DomainNotFoundError(domainId);
+}
+
+/**
+ * Replace the SQLite classification projection from a durable Domain file.
+ * The caller has already validated and atomically saved the source file.
+ * Reclassification is intentionally triggered by the Server after this
+ * transaction, keeping this package free of orchestration concerns.
+ */
+export function replaceDomainRulesFromFile(
+  database: DatabaseClient,
+  repositoryId: string,
+  rules: readonly DomainRuleProjectionInput[],
+  now: Date | string = new Date(),
+): DomainRuleRecord[] {
+  requireRepository(database, repositoryId);
+  const timestamp =
+    typeof now === "string" ? now : now.toISOString().replace(/\.\d{3}Z$/, "Z");
+  const ids = new Set<string>();
+  const names = new Set<string>();
+  for (const rule of rules) {
+    if (ids.has(rule.id)) throw new Error(`Duplicate domain rule id: ${rule.id}`);
+    if (names.has(rule.name)) {
+      throw new DomainNameConflictError(rule.name);
+    }
+    ids.add(rule.id);
+    names.add(rule.name);
+  }
+
+  const existing = new Map(
+    listDomainRules(database, repositoryId).map((rule) => [rule.id, rule] as const),
+  );
+  database.transaction(() => {
+    database
+      .prepare("DELETE FROM domain_rules WHERE repository_id = ?")
+      .run(repositoryId);
+    const insert = database.prepare(
+      `INSERT INTO domain_rules (
+        id, repository_id, name, color, position, enabled,
+        include_patterns_json, exclude_patterns_json, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    for (const rule of rules) {
+      const previous = existing.get(rule.id);
+      insert.run(
+        rule.id,
+        repositoryId,
+        rule.name,
+        rule.color,
+        rule.position,
+        rule.enabled ? 1 : 0,
+        JSON.stringify(rule.includePatterns),
+        JSON.stringify(rule.excludePatterns),
+        rule.createdAt ?? previous?.createdAt ?? timestamp,
+        rule.updatedAt ?? timestamp,
+      );
+    }
+  })();
+  return listDomainRules(database, repositoryId);
 }

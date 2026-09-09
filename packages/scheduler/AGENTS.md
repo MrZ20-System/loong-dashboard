@@ -2,15 +2,14 @@
 
 ## Purpose
 
-Reserve scheduling, run-state, retry, and workspace-serialization behavior for
-the Scheduler stage.
+Own cron parsing and next-occurrence calculation. Run orchestration lives in apps/server and persistence in packages/database.
 
 ## Boundaries
 
-- Do not import DSH types; call the vendor-neutral Agent Runtime contract.
+- Keep cron calculation independent of Agent runtimes; execution belongs to the Server.
 - Do not own raw SQL, GitHub calls, or local Git commands.
-- A workspace path may have at most one active Agent run.
+- Preserve timezone and cron semantics. Server orchestration uses the shared workspace guard for one active turn per path.
 
 ## Verification
 
-Future changes require scheduler unit/integration tests and the root checks.
+Changes require focused cron unit tests and the root checks.

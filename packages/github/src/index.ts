@@ -9,6 +9,12 @@ export {
   githubProviderConstants,
 } from "./provider.js";
 export {
+  GitHubCredentialService,
+  type GitHubCredentialServiceOptions,
+  type GitHubCredentialSource,
+  type GitHubCredentialSummary,
+} from "./credentials.js";
+export {
   chunkIntoBatches,
   FILES_BATCH_SIZE,
   FILES_PAGE_SIZE,
@@ -25,8 +31,11 @@ export type {
   PullRequestFilesResult,
 } from "./files.js";
 export type {
+  GitHubAccount,
+  GitHubConnectionStatus,
   GitHubFetch,
   GitHubTokenResolver,
+  GitHubQuota,
   GhGitHubMetadataProviderOptions,
   GitHubMetadataProvider,
   GitHubOperation,

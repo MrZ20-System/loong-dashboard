@@ -13,12 +13,10 @@ the only location where `@deepseek-ai/*` may be imported.
 - Use the exact release recorded in the repository `dsh.lock.json`.
 - Do not implement a DSH Plugin or duplicate DSH's Agent loop.
 
-## Stage 0 scope
+## Current implementation
 
-Stage 0 reserves the boundary and pins the dependency. Session lifecycle,
-process supervision, cancellation, and event mapping belong to Stage 4.
+Own subprocess lifecycle, stop, notification mapping, and streaming through the product runtime contract. See `../../docs/dsh-integration.md`.
 
 ## Verification
 
-Run `pnpm test`, `pnpm typecheck`, and the root DSH boundary check after future
-adapter changes.
+Run `pnpm test`, `pnpm typecheck`, and the root DSH boundary check after adapter changes.

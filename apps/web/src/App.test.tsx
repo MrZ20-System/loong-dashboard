@@ -31,23 +31,28 @@ const issue = (number: number, title = `Issue ${number}`) => ({
 type StreamStatus = "idle" | "running" | "failed";
 type SyncSnapshot = { pullRequests: StreamStatus; issues: StreamStatus };
 
-const stream = (status: StreamStatus, entityKind: "pull_request" | "issue" = "pull_request") => ({
-  entityKind, status, watermarkUpdatedAt: null, lastAttemptAt: null,
-  lastSuccessAt: null, lastError: status === "failed" ? "provider failed" : null,
+const syncFixtureTimestamp = "2026-09-03T02:03:04.000Z";
+
+const stream = (status: StreamStatus, entityKind: "pull_request" | "issue" = "pull_request", bootstrap = false) => ({
+  entityKind, status,
+  watermarkUpdatedAt: bootstrap ? null : syncFixtureTimestamp,
+  lastAttemptAt: bootstrap ? null : syncFixtureTimestamp,
+  lastSuccessAt: bootstrap ? null : syncFixtureTimestamp,
+  lastError: status === "failed" ? "provider failed" : null,
   rateLimitRemaining: null, rateLimitResetAt: null,
 });
 
-const syncBody = (pullStatus: StreamStatus, issueStatus = pullStatus, repositoryId = "repo") => ({
+const syncBody = (pullStatus: StreamStatus, issueStatus = pullStatus, repositoryId = "repo", bootstrap = false) => ({
   repositoryId,
   status: pullStatus === "running" || issueStatus === "running" ? "running" : pullStatus === "failed" || issueStatus === "failed" ? "failed" : "idle",
-  pullRequests: stream(pullStatus), issues: stream(issueStatus, "issue"),
+  pullRequests: stream(pullStatus, "pull_request", bootstrap), issues: stream(issueStatus, "issue", bootstrap),
 });
 
 function json(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 }
 
-function mockApi(options: { pulls?: unknown[]; issues?: unknown[]; pullPages?: unknown[][]; issuePages?: unknown[][]; pullsByRepository?: Record<string, unknown[][]>; syncStatuses?: StreamStatus[]; syncSnapshots?: SyncSnapshot[]; syncSnapshotsByRepository?: Record<string, SyncSnapshot[]>; syncDelayMs?: number; syncRunIds?: string[]; repositories?: typeof repository[]; onSyncStatusAbort?: (repositoryId: string) => void; domains?: unknown[]; reclassification?: { running: boolean; pendingCount: number | null }; onDomainMutation?: (method: string, url: string, body: unknown) => Response | undefined } = {}) {
+function mockApi(options: { pulls?: unknown[]; issues?: unknown[]; pullPages?: unknown[][]; issuePages?: unknown[][]; pullsByRepository?: Record<string, unknown[][]>; syncStatuses?: StreamStatus[]; syncSnapshots?: SyncSnapshot[]; syncSnapshotsByRepository?: Record<string, SyncSnapshot[]>; syncDelayMs?: number; syncRunIds?: string[]; syncLookbackDays?: 7 | 30; bootstrapSync?: boolean; repositories?: typeof repository[]; onSyncStatusAbort?: (repositoryId: string) => void; domains?: unknown[]; reclassification?: { running: boolean; pendingCount: number | null }; onDomainMutation?: (method: string, url: string, body: unknown) => Response | undefined } = {}) {
   const pulls = options.pulls ?? [pull(2), pull(1)];
   const issues = options.issues ?? [issue(7)];
   let pullPage = 0;
@@ -60,6 +65,10 @@ function mockApi(options: { pulls?: unknown[]; issues?: unknown[]; pullPages?: u
   const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
     const url = new URL(String(input), "http://localhost");
     if (url.pathname === "/api/repositories") return json({ items: options.repositories ?? [repository] });
+    if (/^\/api\/repositories\/[^/]+\/settings$/.test(url.pathname) && (init?.method ?? "GET") === "GET") {
+      const repositoryId = url.pathname.split("/")[3] ?? "repo";
+      return json({ repositoryId, automaticSync: true, syncFrequencyMinutes: 60, syncLookbackDays: options.syncLookbackDays ?? 30, nextSyncAt: null, lastSyncAt: null, lastError: null });
+    }
     if (url.pathname.endsWith("/domains")) {
       const mutation = options.onDomainMutation?.(init?.method ?? "GET", url.pathname, init?.body ? JSON.parse(String(init.body)) : undefined);
       if (mutation) return mutation;
@@ -103,7 +112,7 @@ function mockApi(options: { pulls?: unknown[]; issues?: unknown[]; pullPages?: u
       const snapshot = snapshots[Math.min(nextIndex, snapshots.length - 1)];
       if (options.syncSnapshotsByRepository) syncIndexesByRepository.set(repositoryId, nextIndex + 1);
       else syncIndex += 1;
-      return json(syncBody(snapshot.pullRequests, snapshot.issues, repositoryId));
+      return json(syncBody(snapshot.pullRequests, snapshot.issues, repositoryId, options.bootstrapSync === true));
     }
     if (url.pathname.endsWith("/pulls")) {
       const repositoryId = url.pathname.split("/")[3] ?? "repo";
@@ -292,8 +301,16 @@ describe("LoongBoard metadata routes", () => {
     renderApp("/repositories/repo/pulls");
     await screen.findByText("Pull 2");
     const before = fetchMock.mock.calls.filter(([input]) => String(input).includes("/pulls")).length;
+    const repositoriesBefore = fetchMock.mock.calls.filter(([input]) => String(input) === "/api/repositories").length;
     fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
     await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input).includes("/pulls")).length).toBeGreaterThan(before));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input) === "/api/repositories").length).toBeGreaterThan(repositoriesBefore));
+  });
+
+  it("labels a repository with no stream watermarks as an initial sync", async () => {
+    mockApi({ syncStatuses: ["running"], syncLookbackDays: 7, bootstrapSync: true });
+    renderApp("/repositories/repo/pulls");
+    expect(await screen.findByText("Initial sync · last 7 days")).toBeInTheDocument();
   });
 
   it("refreshes metadata after running becomes idle and keeps rows on failed sync", async () => {
@@ -304,11 +321,11 @@ describe("LoongBoard metadata routes", () => {
     await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input).includes("/pulls")).length).toBeGreaterThan(1), { timeout: 3_000 });
     cleanup();
     appQueryClient.clear();
-    const failedFetch = mockApi({ syncStatuses: ["failed"] });
+    const failedFetch = mockApi({ syncStatuses: ["failed"], bootstrapSync: true });
     renderApp("/repositories/repo/pulls");
     await screen.findByText("Pull 2");
     fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
-    expect(await screen.findByText(/Last sync failed/)).toBeInTheDocument();
+    expect(await screen.findByText("Initial sync failed · last 30 days")).toBeInTheDocument();
     expect(screen.getByText("Pull 2")).toBeInTheDocument();
     expect(failedFetch).toBeDefined();
   });

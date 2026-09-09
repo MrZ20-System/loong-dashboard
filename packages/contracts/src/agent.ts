@@ -8,9 +8,24 @@ import { fullShaSchema } from "./diff.js";
  * normalized LoongBoard data; DSH persistence is never parsed here.
  */
 
-export const agentScopeKindSchema = z.enum(["pr", "issue", "knowledge", "general"]);
+/**
+ * A conversation origin is where a user opened the conversation.  It is kept
+ * separate from the workspace binding used to run a turn.  The alias
+ * `scope` remains in the wire contract for existing callers and persisted
+ * sessions.
+ */
+export const agentScopeKindSchema = z.enum([
+  "pr",
+  "issue",
+  "knowledge",
+  "general",
+  "repository",
+  "domain",
+]);
 
-export const agentScopeSchema = z
+export const agentOriginKindSchema = agentScopeKindSchema;
+
+export const agentOriginSchema = z
   .object({
     kind: agentScopeKindSchema,
     repositoryId: repositoryIdSchema.optional(),
@@ -18,6 +33,9 @@ export const agentScopeSchema = z
     issueNumber: z.number().int().positive().optional(),
     targetSha: fullShaSchema.optional(),
     knowledgeDocumentId: z.string().trim().min(1).optional(),
+    domainId: z.string().trim().min(1).optional(),
+    /** Optional route metadata for callers that have a stable source URL. */
+    route: z.string().trim().min(1).optional(),
   })
   .strict()
   .refine(
@@ -33,7 +51,80 @@ export const agentScopeSchema = z
       scope.kind !== "issue" ||
       (scope.repositoryId !== undefined && scope.issueNumber !== undefined),
     { message: "issue scope requires repositoryId and issueNumber" },
+  )
+  .refine(
+    (scope) => scope.kind !== "repository" || scope.repositoryId !== undefined,
+    { message: "repository scope requires repositoryId" },
+  )
+  .refine(
+    (scope) =>
+      scope.kind !== "domain" ||
+      (scope.repositoryId !== undefined && scope.domainId !== undefined),
+    { message: "domain scope requires repositoryId and domainId" },
   );
+
+/** Backwards-compatible name for the origin object used by current callers. */
+export const agentScopeSchema = agentOriginSchema;
+
+export const agentWorkspaceBindingSchema = z
+  .object({
+    path: z.string().min(1),
+    kind: z
+      .enum(["repository", "pr-worktree", "knowledge", "custom"])
+      .optional(),
+  })
+  .strict();
+
+/**
+ * Runtime capability data is discovered from the connected runtime.  Model
+ * entries keep their provider and supported reasoning values together so a
+ * caller cannot accidentally offer a reasoning value for the wrong model.
+ * Empty arrays are valid when the runtime is disconnected or its public
+ * capability surface is unavailable.
+ */
+export const agentRuntimeModelCapabilitySchema = z
+  .object({
+    id: z.string().trim().min(1),
+    label: z.string().trim().min(1).optional(),
+    provider: z.string().trim().min(1),
+    reasoningEfforts: z.array(z.string().trim().min(1)),
+  })
+  .strict();
+
+export const agentRuntimeCommandCapabilitySchema = z
+  .object({
+    id: z.string().trim().min(1),
+    label: z.string().trim().min(1).optional(),
+    description: z.string().trim().min(1).optional(),
+  })
+  .strict();
+
+/** Provider routes reported by the runtime's configurable-provider directory. */
+export const agentRuntimeProviderCapabilitySchema = z
+  .object({
+    id: z.string().trim().min(1),
+    label: z.string().trim().min(1).optional(),
+  })
+  .strict();
+
+export const agentRuntimeCapabilitiesSchema = z
+  .object({
+    runtimeKind: z.string().trim().min(1),
+    version: z.string().trim().min(1).nullable(),
+    profile: z.string().trim().min(1).nullable(),
+    connected: z.boolean(),
+    models: z.array(agentRuntimeModelCapabilitySchema),
+    /** Aggregate convenience values; model.reasoningEfforts is authoritative. */
+    reasoning: z.array(z.string().trim().min(1)),
+    commands: z.array(agentRuntimeCommandCapabilitySchema),
+    /** Optional provider directory; absent keeps compatibility with older runtimes. */
+    providers: z.array(agentRuntimeProviderCapabilitySchema).optional(),
+    features: z.array(z.string().trim().min(1)),
+    discovery: z.enum(["runtime", "unavailable"]),
+    discoveredAt: utcDateTimeSchema.nullable().optional(),
+    error: z.string().optional(),
+  })
+  .strict();
 
 export const agentSessionSummarySchema = z
   .object({
@@ -46,6 +137,11 @@ export const agentSessionSummarySchema = z
     reasoningEffort: z.string().min(1),
     status: z.enum(["idle", "running", "interrupted", "error"]),
     dshSessionId: z.string().nullable(),
+    /** Conversation origin; optional so older API/database rows remain readable. */
+    origin: agentOriginSchema.optional(),
+    /** Explicit workspace binding; `workspacePath` remains the compatibility field. */
+    workspace: agentWorkspaceBindingSchema.optional(),
+    title: z.string().trim().min(1).nullable().optional(),
     createdAt: utcDateTimeSchema,
     lastUsedAt: utcDateTimeSchema,
   })
@@ -78,20 +174,49 @@ export const agentMessagesResponseSchema = z
   })
   .strict();
 
-export const agentSessionCreateSchema = z
+const agentSessionCreateBodySchema = z
   .object({
+    /** `scope` is retained for clients using the original API shape. */
     scope: agentScopeSchema,
+    origin: agentOriginSchema.optional(),
+    workspace: agentWorkspaceBindingSchema.optional(),
+    title: z.string().trim().min(1).max(200).optional(),
     provider: z.string().trim().min(1).optional(),
     model: z.string().trim().min(1).optional(),
-    reasoningEffort: z.enum(["low", "medium", "high"]).optional(),
+    reasoningEffort: z.string().trim().min(1).optional(),
   })
   .strict();
+
+/** Accept the new `origin` name while keeping typed/HTTP compatibility with `scope`. */
+export const agentSessionCreateSchema = z.preprocess((input) => {
+  if (input === null || typeof input !== "object" || Array.isArray(input)) {
+    return input;
+  }
+  const value = input as Record<string, unknown>;
+  if (value.scope === undefined && value.origin !== undefined) {
+    return { ...value, scope: value.origin };
+  }
+  return value;
+}, agentSessionCreateBodySchema);
 
 export const agentMessageCreateSchema = z
   .object({
     content: z.string().trim().min(1).max(200_000),
   })
   .strict();
+
+/** Update the route for future turns; active turns must be stopped first. */
+export const agentSessionUpdateSchema = z
+  .object({
+    provider: z.string().trim().min(1).optional(),
+    model: z.string().trim().min(1).optional(),
+    reasoningEffort: z.string().trim().min(1).optional(),
+    title: z.string().trim().min(1).max(200).nullable().optional(),
+  })
+  .strict()
+  .refine((value) => Object.values(value).some((field) => field !== undefined), {
+    message: "At least one session setting must be provided",
+  });
 
 export const agentMessageAcceptedSchema = z
   .object({
@@ -110,7 +235,8 @@ export const agentParamsSchema = z.object({
  */
 export const agentSessionsQuerySchema = z
   .object({
-    scopeType: z.enum(["pr", "issue", "knowledge", "general"]).optional(),
+    scopeType: agentScopeKindSchema.optional(),
+    originKind: agentOriginKindSchema.optional(),
     repositoryId: z.string().trim().min(1).optional(),
     prNumber: z.preprocess(
       (value) => (value === undefined ? undefined : Number(value)),
@@ -121,6 +247,13 @@ export const agentSessionsQuerySchema = z
       z.number().int().positive().optional(),
     ),
     knowledgeDocumentId: z.string().trim().min(1).optional(),
+    status: z.enum(["idle", "running", "interrupted", "error"]).optional(),
+    search: z.string().trim().max(200).optional(),
+    q: z.string().trim().max(200).optional(),
+    limit: z.preprocess(
+      (value) => (value === undefined ? undefined : Number(value)),
+      z.number().int().positive().max(200).optional(),
+    ),
   })
   .strict();
 
@@ -130,6 +263,45 @@ export const agentSessionsResponseSchema = z
   })
   .strict();
 
+/** A value offered by the runtime for an approval interaction. */
+export const agentInteractionOptionSchema = z
+  .object({
+    id: z.string().trim().min(1),
+    label: z.string().trim().min(1),
+  })
+  .strict();
+
+/** Runtime approval request; the runtime remains the authority for options. */
+export const agentInteractionRequestedSchema = z
+  .object({
+    type: z.literal("interaction.requested"),
+    requestId: z.string().trim().min(1),
+    kind: z.literal("approval"),
+    title: z.string().trim().min(1),
+    description: z.string().trim().min(1).optional(),
+    options: z.array(agentInteractionOptionSchema),
+  })
+  .strict();
+
+/** Runtime acknowledgement that an interaction value was accepted. */
+export const agentInteractionResolvedSchema = z
+  .object({
+    type: z.literal("interaction.resolved"),
+    requestId: z.string().trim().min(1),
+  })
+  .strict();
+
+export const agentInteractionParamsSchema = z
+  .object({
+    id: z.string().trim().min(1).max(128),
+    requestId: z.string().trim().min(1).max(256),
+  })
+  .strict();
+
+export const agentInteractionResponseSchema = z
+  .object({ value: z.string().trim().min(1).max(200) })
+  .strict();
+
 /** One streamed runtime event (plan 13.1), JSON-serializable for SSE. */
 export const agentRuntimeEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("status"), status: z.enum(["starting", "running", "idle", "stopped"]) }).strict(),
@@ -137,10 +309,51 @@ export const agentRuntimeEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("assistant.completed"), markdown: z.string() }).strict(),
   z.object({ type: z.literal("tool.started"), callId: z.string(), name: z.string(), summary: z.string().optional() }).strict(),
   z.object({ type: z.literal("tool.completed"), callId: z.string(), name: z.string(), summary: z.string().optional(), isError: z.boolean() }).strict(),
+  agentInteractionRequestedSchema,
+  agentInteractionResolvedSchema,
+  z
+    .object({
+      type: z.literal("agent.activity"),
+      kind: z.enum([
+        "reasoning",
+        "command",
+        "job",
+        "subagent",
+        "plan",
+        "approval",
+        "workspace",
+        "runtime",
+      ]),
+      phase: z.enum(["started", "updated", "completed", "failed"]),
+      id: z.string().optional(),
+      title: z.string().optional(),
+      summary: z.string().optional(),
+      data: z.record(z.string(), z.unknown()).optional(),
+    })
+    .strict(),
   z.object({ type: z.literal("error"), message: z.string() }).strict(),
 ]);
 
+export const agentSessionDeleteResponseSchema = z
+  .object({ deleted: z.literal(true) })
+  .strict();
+
 export type AgentScope = z.infer<typeof agentScopeSchema>;
+export type AgentOrigin = z.infer<typeof agentOriginSchema>;
+export type AgentOriginKind = z.infer<typeof agentOriginKindSchema>;
+export type AgentWorkspaceBinding = z.infer<typeof agentWorkspaceBindingSchema>;
+export type AgentRuntimeModelCapability = z.infer<
+  typeof agentRuntimeModelCapabilitySchema
+>;
+export type AgentRuntimeCommandCapability = z.infer<
+  typeof agentRuntimeCommandCapabilitySchema
+>;
+export type AgentRuntimeProviderCapability = z.infer<
+  typeof agentRuntimeProviderCapabilitySchema
+>;
+export type AgentRuntimeCapabilities = z.infer<
+  typeof agentRuntimeCapabilitiesSchema
+>;
 export type AgentScopeKind = z.infer<typeof agentScopeKindSchema>;
 export type AgentSessionSummary = z.infer<typeof agentSessionSummarySchema>;
 export type AgentSessionResponse = z.infer<typeof agentSessionResponseSchema>;
@@ -148,8 +361,15 @@ export type AgentMessage = z.infer<typeof agentMessageSchema>;
 export type AgentMessagesResponse = z.infer<typeof agentMessagesResponseSchema>;
 export type AgentSessionCreate = z.infer<typeof agentSessionCreateSchema>;
 export type AgentMessageCreate = z.infer<typeof agentMessageCreateSchema>;
+export type AgentSessionUpdate = z.infer<typeof agentSessionUpdateSchema>;
 export type AgentMessageAccepted = z.infer<typeof agentMessageAcceptedSchema>;
 export type AgentParams = z.infer<typeof agentParamsSchema>;
 export type AgentRuntimeEvent = z.infer<typeof agentRuntimeEventSchema>;
 export type AgentSessionsQuery = z.infer<typeof agentSessionsQuerySchema>;
 export type AgentSessionsResponse = z.infer<typeof agentSessionsResponseSchema>;
+export type AgentSessionDeleteResponse = z.infer<typeof agentSessionDeleteResponseSchema>;
+export type AgentInteractionOption = z.infer<typeof agentInteractionOptionSchema>;
+export type AgentInteractionRequested = z.infer<typeof agentInteractionRequestedSchema>;
+export type AgentInteractionResolved = z.infer<typeof agentInteractionResolvedSchema>;
+export type AgentInteractionParams = z.infer<typeof agentInteractionParamsSchema>;
+export type AgentInteractionResponse = z.infer<typeof agentInteractionResponseSchema>;

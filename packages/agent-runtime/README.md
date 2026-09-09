@@ -1,30 +1,15 @@
 # @loongboard/agent-runtime
 
-## Purpose
+产品 Agent runtime。AgentRuntime、AgentSessionSpec、AgentRuntimeHost；不导入 DSH SDK 或持久化消息。
 
-Future home of the small LoongBoard-owned `AgentRuntime` contract.
+- [实现说明](../../docs/dsh-integration.md)
+- [源码入口](src/index.ts)
+- [本包修改约束](AGENTS.md)
+- [统一测试与验收](../../docs/testing.md)
 
-## Owns
+从应用仓库根目录运行本包检查：
 
-- Vendor-neutral runtime request and event types.
-
-## Does not own
-
-- DSH SDK imports or process lifecycle.
-- HTTP routes, persistence, or UI state.
-
-## Public API
-
-No Stage 0 API is exported yet.
-
-## Dependencies
-
-None in Stage 0.
-
-## Invariants
-
-Public types remain independent of `@deepseek-ai/*` and raw DSH event types.
-
-## Tests
-
-Contract tests will be added with the Stage 4 runtime task.
+```bash
+pnpm --filter @loongboard/agent-runtime test
+pnpm --filter @loongboard/agent-runtime typecheck
+```

@@ -18,4 +18,4 @@ agent:
   defaultProvider: deepseek-official
   defaultModel: deepseek-v4-flash
   defaultReasoningEffort: high
-  idleProcessMinutes: 20
+  idleProcessMinutes: 120

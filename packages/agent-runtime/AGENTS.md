@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Reserve the LoongBoard-owned runtime contract that the Server and product
+Own the LoongBoard runtime contract and session runtime host that the Server and product
 features use without knowing which external Agent runtime is underneath.
 
 ## Boundaries
@@ -10,7 +10,7 @@ features use without knowing which external Agent runtime is underneath.
 - Keep public types independent of DSH and other vendor SDKs.
 - Do not import `@deepseek-ai/*` here; that boundary belongs exclusively to
   `packages/agent-runtime-dsh/**`.
-- Do not add lifecycle behavior before its Stage 4 task is assigned.
+- Keep product persistence in the Server/database and SDK process details in the adapter.
 
 ## Verification
 

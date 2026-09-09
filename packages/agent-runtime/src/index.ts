@@ -1,6 +1,16 @@
-import type { AgentRuntimeEvent } from "@loongboard/contracts";
+import type {
+  AgentRuntimeCapabilities,
+  AgentRuntimeEvent,
+} from "@loongboard/contracts";
 
-export type { AgentRuntimeEvent, AgentScope } from "@loongboard/contracts";
+export type {
+  AgentRuntimeCapabilities,
+  AgentRuntimeCommandCapability,
+  AgentRuntimeEvent,
+  AgentRuntimeModelCapability,
+  AgentRuntimeProviderCapability,
+  AgentScope,
+} from "@loongboard/contracts";
 
 /** Everything the runtime needs to spawn/attach one LoongBoard session. */
 export interface AgentSessionSpec {
@@ -26,12 +36,16 @@ export interface AgentRuntime {
   /** Terminate the process owning this session; later runs resume it. */
   stop(sessionId: string): Promise<void>;
   close(): Promise<void>;
+  /** Resolve a runtime-owned approval or other interaction request. */
+  respond?(sessionId: string, requestId: string, value: unknown): Promise<void>;
   /**
    * Optional opaque runtime-side session id for `sessionId`, available after
    * the first successful run. Persisting it lets a later run resume model
    * context after the process was shut down for idleness (plan 13.3.10).
    */
   runtimeSessionId?(sessionId: string): string | null;
+  /** Discover capabilities through the runtime's public API, when available. */
+  discoverCapabilities?(spec: AgentSessionSpec): Promise<AgentRuntimeCapabilities>;
 }
 
 export interface AgentRuntimeHealth {
@@ -43,7 +57,7 @@ export interface AgentRuntimeHealth {
 /**
  * Vendor-neutral supervisor: keeps one runtime per session, tracks running
  * state, stops sessions on demand, and closes idle runtimes after
- * `idleCloseMs` of no activity (plan 19.4 default 20 minutes). Runtime
+ * `idleCloseMs` of no activity (plan 19.4 default 120 minutes). Runtime
  * instances are created lazily by the injected factory, so the core has no
  * DSH knowledge.
  */
@@ -53,11 +67,17 @@ export class AgentRuntimeHost {
   private readonly active = new Set<string>();
   private readonly factory: (spec: AgentSessionSpec) => AgentRuntime;
 
+  private idleCloseMs: number;
+
   constructor(
     factory: (spec: AgentSessionSpec) => AgentRuntime,
-    private readonly idleCloseMs = 20 * 60 * 1000,
+    idleCloseMs = 120 * 60 * 1000,
   ) {
+    if (!Number.isFinite(idleCloseMs) || idleCloseMs < 0) {
+      throw new Error("idleCloseMs must be a finite non-negative number");
+    }
     this.factory = factory;
+    this.idleCloseMs = idleCloseMs;
   }
 
   runtime(sessionId: string): AgentRuntime | undefined {
@@ -73,6 +93,47 @@ export class AgentRuntimeHost {
     return runtime;
   }
 
+  /**
+   * Probe a runtime without retaining it as a session runtime.  Adapters may
+   * spawn a subprocess for this operation, so the temporary instance is
+   * always closed before the promise resolves.
+   */
+  async discoverCapabilities(
+    spec: AgentSessionSpec,
+  ): Promise<AgentRuntimeCapabilities | null> {
+    const runtime = this.factory(spec);
+    try {
+      return runtime.discoverCapabilities === undefined
+        ? null
+        : await runtime.discoverCapabilities(spec);
+    } finally {
+      await runtime.close();
+    }
+  }
+
+  /** Change the idle retention policy and rearm only currently idle sessions. */
+  updateIdleCloseMs(idleCloseMs: number): void {
+    if (!Number.isFinite(idleCloseMs) || idleCloseMs < 0) {
+      throw new Error("idleCloseMs must be a finite non-negative number");
+    }
+    this.idleCloseMs = idleCloseMs;
+    for (const sessionId of this.runtimes.keys()) {
+      if (this.active.has(sessionId)) continue;
+      this.clearIdle(sessionId);
+      this.armIdle(sessionId);
+    }
+  }
+
+  idleCloseWindowMs(): number {
+    return this.idleCloseMs;
+  }
+
+  /** Stop and forget a runtime so the next turn applies a changed spec. */
+  async restart(sessionId: string): Promise<void> {
+    await this.stop(sessionId);
+    this.runtimes.delete(sessionId);
+  }
+
   isRunning(sessionId: string): boolean {
     return this.active.has(sessionId);
   }
@@ -84,14 +145,7 @@ export class AgentRuntimeHost {
 
   endRun(sessionId: string): void {
     this.active.delete(sessionId);
-    const runtime = this.runtimes.get(sessionId);
-    if (runtime !== undefined && this.idleCloseMs > 0) {
-      this.clearIdle(sessionId);
-      const timer = setTimeout(() => {
-        void this.stop(sessionId).catch(() => undefined);
-      }, this.idleCloseMs);
-      this.idleTimers.set(sessionId, timer);
-    }
+    this.armIdle(sessionId);
   }
 
   /** Stop the session's process now (cancel semantics, plan 13.4). */
@@ -124,5 +178,17 @@ export class AgentRuntimeHost {
       clearTimeout(timer);
       this.idleTimers.delete(sessionId);
     }
+  }
+
+  private armIdle(sessionId: string): void {
+    const runtime = this.runtimes.get(sessionId);
+    if (runtime === undefined || this.active.has(sessionId) || this.idleCloseMs === 0) {
+      return;
+    }
+    this.clearIdle(sessionId);
+    const timer = setTimeout(() => {
+      void this.stop(sessionId).catch(() => undefined);
+    }, this.idleCloseMs);
+    this.idleTimers.set(sessionId, timer);
   }
 }

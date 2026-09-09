@@ -2,6 +2,10 @@ import { NavLink } from "react-router-dom";
 import type { ReactNode } from "react";
 
 const settingsTabs = [
+  { to: "/settings/repositories", label: "Repositories", end: false },
+  { to: "/settings/integrations", label: "Integrations", end: false },
+  { to: "/settings/agent", label: "Agent", end: false },
+  { to: "/settings/checkpoint", label: "Checkpoint", end: false },
   { to: "/settings/domains", label: "Domains", end: false },
   { to: "/settings/schedules", label: "Schedules", end: false },
   { to: "/settings/health", label: "Health", end: false },

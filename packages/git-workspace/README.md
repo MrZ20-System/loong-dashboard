@@ -1,32 +1,15 @@
 # @loongboard/git-workspace
 
-## Purpose
+本地 Git 与 worktree。LocalGitWorkspace、WorktreePool、命令错误和 Knowledge runCheckpoint；不持有数据库或 DSH。
 
-Safe local Git and disposable worktree operations for LoongBoard.
+- [实现说明](../../docs/git-workspace.md)
+- [源码入口](src/index.ts)
+- [本包修改约束](AGENTS.md)
+- [统一测试与验收](../../docs/testing.md)
 
-## Owns
+从应用仓库根目录运行本包检查：
 
-- Local Git command adapters.
-- Worktree allocation and cleanup behavior.
-
-## Does not own
-
-- GitHub CLI synchronization.
-- SQLite schema or HTTP routes.
-- DSH process lifecycle.
-
-## Public API
-
-No Stage 0 API is exported yet.
-
-## Dependencies
-
-None in Stage 0.
-
-## Invariants
-
-Only this package executes local Git commands for the PR workspace.
-
-## Tests
-
-Future tests use temporary Git fixture repositories.
+```bash
+pnpm --filter @loongboard/git-workspace test
+pnpm --filter @loongboard/git-workspace typecheck
+```

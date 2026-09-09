@@ -52,6 +52,9 @@ export interface RepositoryRecord {
   defaultBranch: string;
   worktreeSlots: number;
   enabled: boolean;
+  /** Current locally indexed totals used by navigation/settings projections. */
+  pullRequestCount?: number;
+  issueCount?: number;
   createdAt: string;
   updatedAt: string;
 }

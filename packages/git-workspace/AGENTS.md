@@ -14,5 +14,4 @@ operations.
 
 ## Verification
 
-Future changes require temporary Git fixture integration tests and the root
-architecture check.
+Use focused command-adapter unit tests, temporary Git repositories when needed, and the root architecture check. Critical regressions follow docs/testing.md.

@@ -320,6 +320,10 @@ export const agentSessions = sqliteTable(
     scopeType: text("scope_type", {
       enum: ["pr", "issue", "knowledge", "general"],
     }).notNull(),
+    /** Origin kind is separate from the legacy scope_type discriminator. */
+    originKind: text("origin_kind", {
+      enum: ["pr", "issue", "knowledge", "general", "repository", "domain"],
+    }),
     repositoryId: text("repository_id").references(() => repositories.id, {
       onDelete: "set null",
     }),
@@ -330,6 +334,9 @@ export const agentSessions = sqliteTable(
       (): AnySQLiteColumn => knowledgeDocuments.id,
       { onDelete: "set null" },
     ),
+    domainId: text("domain_id"),
+    originRoute: text("origin_route"),
+    title: text("title"),
     dshSessionId: text("dsh_session_id"),
     dshHomePath: text("dsh_home_path").notNull(),
     workspacePath: text("workspace_path").notNull(),
@@ -468,6 +475,15 @@ export const scheduledTasks = sqliteTable(
     provider: text("provider").notNull(),
     model: text("model").notNull(),
     reasoningEffort: text("reasoning_effort").notNull(),
+    kind: text("kind", { enum: ["agent", "system"] }).notNull().default("agent"),
+    action: text("action"),
+    repositoryId: text("repository_id").references(() => repositories.id, {
+      onDelete: "set null",
+    }),
+    conversationId: text("conversation_id").references(
+      (): AnySQLiteColumn => agentSessions.id,
+      { onDelete: "set null" },
+    ),
     enabled: integer("enabled", { mode: "boolean" }).notNull(),
     lastRunAt: text("last_run_at"),
     nextRunAt: text("next_run_at"),
@@ -496,6 +512,10 @@ export const scheduledTaskRuns = sqliteTable(
     agentSessionId: text("agent_session_id").references(() => agentSessions.id, {
       onDelete: "set null",
     }),
+    conversationId: text("conversation_id").references(
+      (): AnySQLiteColumn => agentSessions.id,
+      { onDelete: "set null" },
+    ),
     error: text("error"),
   },
   (table) => [
