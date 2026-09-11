@@ -58,6 +58,8 @@ export interface DomainFileServiceOptions {
   /** Number of source versions retained per file. */
   historyLimit?: number;
   reclassification: DomainReclassification;
+  /** Injectable file watcher for deterministic lifecycle tests. */
+  watch?: typeof watch;
 }
 
 export interface DomainFileRefreshResult {
@@ -135,6 +137,7 @@ export class DomainFileService {
   private readonly versionsRoot: string;
   private readonly historyLimit: number;
   private readonly reclassification: DomainReclassification;
+  private readonly watch: typeof watch;
   private readonly projectedHashes = new Map<string, string>();
   private watcher: FSWatcher | null = null;
   private closed = false;
@@ -154,6 +157,7 @@ export class DomainFileService {
       throw new Error("Domain file historyLimit must be a positive integer");
     }
     this.reclassification = options.reclassification;
+    this.watch = options.watch ?? watch;
     mkdirSync(this.systemRoot, { recursive: true });
     mkdirSync(this.domainsRoot, { recursive: true });
     mkdirSync(this.promptsRoot, { recursive: true });
@@ -365,8 +369,22 @@ export class DomainFileService {
 
   start(): void {
     if (this.watcher !== null || this.closed) return;
+    let domainWatcher: FSWatcher | null = null;
+    let promptWatcher: FSWatcher | null = null;
+    let groupClosed = false;
+    const closeGroup = (): void => {
+      if (groupClosed) return;
+      groupClosed = true;
+      if (domainWatcher !== null) closeWatcher(domainWatcher);
+      if (promptWatcher !== null) closeWatcher(promptWatcher);
+    };
+    const compositeWatcher = { close: closeGroup } as FSWatcher;
+    const handleWatcherError = (): void => {
+      if (this.watcher === compositeWatcher) this.watcher = null;
+      closeGroup();
+    };
     try {
-      this.watcher = watch(this.domainsRoot, { recursive: true }, (_event, fileName) => {
+      domainWatcher = this.watch(this.domainsRoot, { recursive: true }, (_event, fileName) => {
         if (typeof fileName !== "string" || !fileName.endsWith(".json")) return;
         const candidate = resolve(this.domainsRoot, fileName);
         if (!isWithinRoot(this.domainsRoot, candidate)) return;
@@ -379,9 +397,10 @@ export class DomainFileService {
           // terminate because an editor temporarily wrote partial JSON.
         }
       });
+      domainWatcher.on("error", handleWatcherError);
       // The update prompt is a shared file. Watching it here gives the same
       // content-addressed history semantics as repository JSON edits.
-      const promptWatcher = watch(this.promptsRoot, (_event, fileName) => {
+      promptWatcher = this.watch(this.promptsRoot, (_event, fileName) => {
         if (typeof fileName !== "string" || fileName !== "update-domains.md") return;
         try {
           const path = this.promptPath();
@@ -392,22 +411,19 @@ export class DomainFileService {
           // An editor can briefly remove or replace the file while saving.
         }
       });
-      const domainWatcher = this.watcher;
-      this.watcher = {
-        close: () => {
-          domainWatcher.close();
-          promptWatcher.close();
-        },
-      } as FSWatcher;
+      promptWatcher.on("error", handleWatcherError);
+      if (!groupClosed) this.watcher = compositeWatcher;
     } catch {
+      closeGroup();
       // Reads lazily refresh when recursive watching is unavailable.
     }
   }
 
   async close(): Promise<void> {
     this.closed = true;
-    this.watcher?.close();
+    const watcher = this.watcher;
     this.watcher = null;
+    if (watcher !== null) closeWatcher(watcher);
   }
 
   private ensureSource(repositoryId: string, path: string): void {
@@ -551,6 +567,14 @@ export class DomainFileService {
       createdAt: version.createdAt,
       sizeBytes: Buffer.byteLength(version.content, "utf8"),
     };
+  }
+}
+
+function closeWatcher(watcher: FSWatcher): void {
+  try {
+    watcher.close();
+  } catch {
+    // A failed watcher is already outside the normal close path.
   }
 }
 

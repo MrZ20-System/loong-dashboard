@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -12,8 +13,20 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   DomainFileService,
+  type DomainFileServiceOptions,
   DomainSourceInvalidError,
 } from "../src/domain-file.js";
+
+type TestWatcher = EventEmitter & { closeCalls: number; close(): void };
+
+function testWatcher(): TestWatcher {
+  const watcher = new EventEmitter() as TestWatcher;
+  watcher.closeCalls = 0;
+  watcher.close = () => {
+    watcher.closeCalls += 1;
+  };
+  return watcher;
+}
 
 const resources: Array<{ database: DatabaseClient; root: string }> = [];
 
@@ -24,7 +37,9 @@ afterEach(() => {
   }
 });
 
-function fixture(): { service: DomainFileService; database: DatabaseClient; root: string } {
+function fixture(
+  watchFactory?: NonNullable<DomainFileServiceOptions["watch"]>,
+): { service: DomainFileService; database: DatabaseClient; root: string } {
   const root = mkdtempSync(join(tmpdir(), "loongboard-domain-file-"));
   const statePath = join(root, ".loong");
   mkdirSync(statePath, { recursive: true });
@@ -50,6 +65,7 @@ function fixture(): { service: DomainFileService; database: DatabaseClient; root
       status: () => ({ running: false, pendingCount: null }),
       close: async () => undefined,
     },
+    ...(watchFactory === undefined ? {} : { watch: watchFactory }),
   });
   return { service, database, root };
 }
@@ -116,5 +132,35 @@ describe("DomainFileService", () => {
     const { service } = fixture();
     expect(service.filePath("vllm.json")).toMatch(/domains\/vllm\.json\.json$/);
     expect(service.filePath("team/repo")).toMatch(/domains\/team%2Frepo\.json$/);
+  });
+
+  it("closes both watchers after an asynchronous error and ignores stale groups", async () => {
+    const watchers: TestWatcher[] = [];
+    const watchFactory = (() => {
+      const watcher = testWatcher();
+      watchers.push(watcher);
+      return watcher;
+    }) as unknown as NonNullable<DomainFileServiceOptions["watch"]>;
+    const { service } = fixture(watchFactory);
+    service.start();
+    expect(watchers).toHaveLength(2);
+
+    queueMicrotask(() => watchers[0]!.emit("error", new Error("domain watcher failed")));
+    await Promise.resolve();
+    expect(watchers[0]!.closeCalls).toBe(1);
+    expect(watchers[1]!.closeCalls).toBe(1);
+
+    service.start();
+    expect(watchers).toHaveLength(4);
+    queueMicrotask(() => watchers[1]!.emit("error", new Error("late prompt watcher error")));
+    await Promise.resolve();
+    expect(watchers[2]!.closeCalls).toBe(0);
+    expect(watchers[3]!.closeCalls).toBe(0);
+    await service.close();
+    expect(watchers[2]!.closeCalls).toBe(1);
+    expect(watchers[3]!.closeCalls).toBe(1);
+    await service.close();
+    expect(watchers[2]!.closeCalls).toBe(1);
+    expect(watchers[3]!.closeCalls).toBe(1);
   });
 });

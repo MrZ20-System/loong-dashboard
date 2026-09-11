@@ -7,6 +7,7 @@ import {
   statSync,
   unlinkSync,
   watch,
+  type FSWatcher,
 } from "node:fs";
 import { extname, resolve } from "node:path";
 
@@ -136,6 +137,8 @@ export interface KnowledgeControllerOptions {
   chats: AgentChatController;
   /** Knowledge-only Git checkpoint; off unless configured. */
   checkpoint?: KnowledgeCheckpointOptions;
+  /** Injectable file watcher for deterministic lifecycle tests. */
+  watch?: typeof watch;
 }
 
 /**
@@ -150,6 +153,7 @@ export class KnowledgeController {
   private readonly knowledgePath: string;
   private readonly historyLimit: number;
   private readonly chats: AgentChatController;
+  private readonly watch: typeof watch;
   private readonly checkpoint: {
     autoCommit: boolean;
     autoPush: boolean;
@@ -171,6 +175,7 @@ export class KnowledgeController {
     this.knowledgePath = options.knowledgePath;
     this.historyLimit = options.historyLimit ?? 10;
     this.chats = options.chats;
+    this.watch = options.watch ?? watch;
     this.checkpoint = {
       autoCommit: options.checkpoint?.autoCommit ?? false,
       autoPush: options.checkpoint?.autoPush ?? false,
@@ -423,12 +428,14 @@ export class KnowledgeController {
     // raised during that scan is delivered on the next event-loop turn and
     // marks the completed snapshot dirty, closing the scan/watch race.
     try {
-      this.watcher = watch(this.knowledgePath, { recursive: true }, (_event, fileName) => {
+      const watcher = this.watch(this.knowledgePath, { recursive: true }, (_event, fileName) => {
         if (typeof fileName !== "string") return;
         if (!fileName.endsWith(".md") && !fileName.endsWith(".markdown")) return;
         this.indexDirty = true;
         this.scheduleRescan();
       });
+      watcher.on("error", () => this.handleWatcherError(watcher));
+      this.watcher = watcher;
     } catch {
       // Recursive watching is unavailable on some platforms; every read
       // re-runs indexExternalChanges so content stays fresh.
@@ -446,11 +453,18 @@ export class KnowledgeController {
     this.closed = true;
     if (this.rescanTimer !== null) clearTimeout(this.rescanTimer);
     this.rescanTimer = null;
-    if (this.watcher !== null) {
-      this.watcher.close();
-      this.watcher = null;
-    }
+    const watcher = this.watcher;
+    this.watcher = null;
+    if (watcher !== null) closeWatcher(watcher);
     this.indexExternalChanges();
+  }
+
+  private handleWatcherError(watcher: FSWatcher): void {
+    if (this.watcher !== watcher) return;
+    this.watcher = null;
+    this.indexDirty = true;
+    closeWatcher(watcher);
+    this.scheduleRescan();
   }
 
   private scheduleRescan(): void {
@@ -590,6 +604,14 @@ export class KnowledgeController {
       createdAt: row?.createdAt ?? new Date().toISOString(),
       updatedAt: row?.updatedAt ?? new Date().toISOString(),
     };
+  }
+}
+
+function closeWatcher(watcher: FSWatcher): void {
+  try {
+    watcher.close();
+  } catch {
+    // A failed watcher is already outside the normal close path.
   }
 }
 
