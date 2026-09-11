@@ -2,6 +2,8 @@
 
 ## 运行结构
 
+LoongBoard 是 local-first 的单实例、单用户应用：一个本地 Fastify 进程拥有 SQLite、Scheduler、同步协调和 Agent runtime host；浏览器只访问该进程的 REST/SSE。它不是多用户控制面，也不依赖分布式队列或跨实例锁。
+
 ```mermaid
 flowchart LR
   Web[React 浏览器] -->|REST / SSE| Server[Fastify 本地服务]
@@ -43,7 +45,11 @@ flowchart LR
 
 代码和运行数据分离：代码、构建产物及依赖属于应用仓库或镜像；SQLite、Agent session、Knowledge、worktrees、Settings 和凭证路径由 `system.yaml` 指定。YAML 相对路径相对配置文件目录解析。Docker 将宿主机 data root 挂载为 `/data`，并通过 `LOONGBOARD_SERVER_HOST`/`LOONGBOARD_SERVER_PORT` 覆盖容器监听地址/端口，不改变这些数据路径。
 
-聊天和调度器注入同一个 `WorkspaceRunCoordinator`。SIGINT/SIGTERM 经 [lifecycle.ts](../apps/server/src/lifecycle.ts) 触发幂等关闭；app 的关闭钩子按顺序等待同步、重分类、Agent、Knowledge、Scheduler，最后关闭 SQLite。增加后台服务时必须同时接入退出清理。
+聊天和调度器注入同一个 `WorkspaceRunCoordinator`。Repository metadata 的 admission 还由 [sync-coordinator.ts](../apps/server/src/sync-coordinator.ts) 统一协调：同一仓库的 foreground sync / `fetch_pr` 优先于 History；metadata maintenance 以 batch 为边界让出 admission，不能在长批处理中饿死前台请求。后台 worker 不应另建一套 repository lock。
+
+SIGINT/SIGTERM 经 [lifecycle.ts](../apps/server/src/lifecycle.ts) 触发幂等关闭；app 的关闭钩子按顺序等待同步、重分类、Agent、Knowledge、Scheduler，最后关闭 SQLite。增加后台服务时必须同时接入退出清理。
+
+Scheduler 是现有唯一的定时入口。它为持久任务维护 timer map；metadata maintenance 使用现有 `repository.metadata-maintenance` system action（默认每天 03:00，按配置时区）。该 action 每天执行固定的 runtime sync-run history purge；只有 Repository retention 的 automatic archive 开关打开时才追加 metadata archive/prune，不会添加第二个 timer、后台 cron 或独立调度框架。
 
 ## 必须保持的边界
 
@@ -57,8 +63,16 @@ flowchart LR
 - Merged 没有独立表、同步类型或 GitHub crawler；Web 只对单个扁平分页结果按配置时区生成日期分割线。
 - `forward` 只推进 forward metadata watermark；`history` 独立维护 cursor、recovery anchor、目标日期和最老覆盖边界；`fetch_pr` 只处理目标 PR，不改变另外两者的状态。History 只补 metadata，不重建逐日状态，也不阻塞在整批历史 changed-files enrichment 上。
 - 数据库启动恢复 queued/running metadata/history run；同仓库持久化 running history 会阻止重复 admission，已启用但未达到目标的 bounded history 会以新 run 从持久 cursor 继续。
+- History 的 rate-limit floor 会把 GitHub `resetAt` 投影为持久 `resume_after`，到安全时间前不重新 admission；foreground 请求不会被该低优先级等待阻塞。
+- metadata maintenance 只在 archive transaction/batch 边界释放 repository admission；它不能删除 active metadata，恢复或 metadata refresh 会清除相应 archive/pruned 标记。
 - Domain 分类仅使用变更路径和规则，不调用模型。
 - 同一个 workspace path 同时只运行一个 Agent turn；slot 不代替会话持久化。
+
+## 代码、运行数据和安全边界
+
+应用代码、`dist` 和依赖属于 checkout 或镜像；`system.yaml`、`settings.json`、SQLite、Knowledge Markdown/Git、Agent session homes、凭证、Domain 文件和可选 Agent Archive 是运行数据，位置由配置和 data root 决定。Worktree 是可重建缓存，但 dirty 或未提交用户内容仍需保护。
+
+可选密码锁只保护 LoongBoard Web/API 的访问门禁。它把 scrypt 派生值和 HMAC 签名密钥写入 `runtime.statePath/auth.json`，以 HttpOnly、SameSite=Strict cookie 建立本地会话；它不加密 SQLite、Knowledge、Agent home、worktree 或任何其他运行数据。DSH 仍是外部 runtime，产品只保存 opaque runtime id 和 normalized 消息，不复制 DSH loop 或 title generation；会话标题只读取 DSH 原生 title 能力并投影 ownership，不由 LoongBoard 另行生成。
 
 [check-architecture.mjs](../scripts/check-architecture.mjs) 是依赖门禁的实现。外部输入在配置、HTTP、provider、DSH 通知和数据库约束处校验；内部类型化模块不重复校验，不把命令失败转为空数据。
 

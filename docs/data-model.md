@@ -13,6 +13,7 @@
 | pull_requests / pull_request_files | PR 当前元数据、按 head SHA 存储的变更路径；Merged 直接查询 `pull_requests.merged_at`，不复制数据 | [metadata-service](../packages/database/src/metadata-service.ts)、[classification-service](../packages/database/src/classification-service.ts) |
 | domain_rules / pull_request_domains | 路径规则和确定性标签关联 | [domain-service](../packages/database/src/domain-service.ts) |
 | issues / issue_comments | Issue 元数据、懒加载正文与评论缓存 | [metadata-service](../packages/database/src/metadata-service.ts) |
+| repository_maintenance_runs | metadata archive/prune 与 runtime history purge 的 durable 状态、选择器和计数 | [retention-service](../packages/database/src/retention-service.ts)、[sync-run-retention-service](../packages/database/src/sync-run-retention-service.ts) |
 | agent_sessions / agent_messages | scope、workspace、runtime id、状态、标准化消息；Archive projection 只读取 allowlist 字段 | [agent-service](../packages/database/src/agent-service.ts)、[agent-archive-service](../packages/database/src/agent-archive-service.ts) |
 | worktree_slots | PR affinity、目标 SHA、最近使用时间；物理 slot 删除后的缓存元数据清理 | [worktree-slot-service](../packages/database/src/worktree-slot-service.ts) |
 | knowledge_documents / document_versions | 文档身份/路径/hash/默认会话、完整内容短期版本 | [knowledge-service](../packages/database/src/knowledge-service.ts) |
@@ -24,7 +25,7 @@ Repository summary 的 list/get projection 同时返回本地 `pullRequestCount`
 
 ## 当前迁移序列
 
-[migrations](../packages/database/src/migrations) 中依次包含：001 初始模型、002 列表索引、003 Issue 状态约束、004 Domain 分类、005 Issue 详情缓存、006 Agent 来源元数据与统一 Scheduler 字段、007 持久 repository sync/history、008 曾引入的 PR Daily/lifecycle 数据、009 PR 查询模式索引、010 删除已废弃的 Daily/lifecycle/逐日 coverage 并加入 Merged partial index。007–009 可能已经存在于用户数据库，因此保留为升级历史；当前 schema 从 010 起不再包含 Daily 体系。新增 schema 变化必须添加新迁移，并同步 Drizzle 声明及 typed service，不能改写已执行迁移。
+[migrations](../packages/database/src/migrations) 中依次包含：001 初始模型、002 列表索引、003 Issue 状态约束、004 Domain 分类、005 Issue 详情缓存、006 Agent 来源元数据与统一 Scheduler 字段、007 持久 repository sync/history、008 曾引入的 PR Daily/lifecycle 数据、009 PR 查询模式索引、010 删除已废弃的 Daily/lifecycle/逐日 coverage 并加入 Merged partial index、011 持久 History rate-limit recovery、012 metadata retention 字段和 maintenance runs、013 Agent session title source。007–010 可能已经存在于用户数据库，因此保留为升级历史；当前 schema 不再包含 Daily 体系。011 的 `resume_after` 是 History 的下次安全 admission 时间；012 的 `archived_at`/`payload_pruned_at` 是可逆 metadata 状态；013 将升级前已有 title 标为 `manual`，避免自动覆盖。新增 schema 变化必须添加新迁移，并同步 Drizzle 声明及 typed service，不能改写已执行迁移。
 
 Domain 的用户源文件位于 system workspace 的 `domains/<repository-key>.json`，由 [DomainFileService](../apps/server/src/domain-file.ts) 负责安全路径、机械校验、pretty format 和外部编辑吸收；`domain_rules` 与 `pull_request_domains` 只是分类查询投影。文件解析失败时源文本仍可读，最近一次有效投影继续提供分类，修复后再投影并触发重分类。文件版本的内容和 hash 保存在 `runtime.statePath/domain-file-versions/`，它是短期恢复记录，不替代 JSON 源文件或 Git。
 
@@ -41,3 +42,13 @@ Knowledge 正文以 Markdown 为源，SQLite 的版本记录和聊天历史却�
 Worktree slot 行不承载 live ownership：`busy_session_id` 是兼容保留字段，维护和分配使用运行中 `agent_sessions.workspace_path` 与 `WorkspaceRunCoordinator` 的路径集合。Janitor 成功删除物理 worktree 后删除精确 repository/slot/path 行；busy、dirty 或 Git status 失败的 slot 不删除，缩容中的高编号 slot 以维护结果的 `pendingRetirement` 暂存。
 
 Agent Archive 不新增 SQLite source-of-truth 表。`listAgentArchiveProjection` 以两次批量查询读取 normalized `agent_sessions`/`agent_messages`，导出器只投影 session id、scope、workspace、模型配置、状态、时间和标准化 transcript 字段；`dsh_home_path`、凭证、provider secret、cache 及其他 runtime 文件不属于 archive projection。
+
+## 数据生命周期
+
+`pull_requests` 和 `issues` 的归档只写 `archived_at`，不删除实体行；默认列表是 `current`，还可显式读取 `archived` 或 `all`。Merged 是 `merged_at IS NOT NULL` 的投影，即使 PR 已归档仍保留在 Merged；Merged 查询不接受 archive filter，也不改变其 page/limit pagination。重新打开 Issue 或重新打开 PR 时会自动清除 archive 标记；继续处于 terminal 状态的 metadata update 不会自动解除归档，显式 restore 才会清除该标记。
+
+启用 payload prune 时，归档 worker 按默认 250、上限 500 的 batch 删除 PR changed-file rows 和 Issue comment/body 等重 payload，保留实体 metadata、Domain 投影和可判断为已清理的 `payload_pruned_at` marker。Issue detail 读到该 marker 或缓存版本落后时必须重新请求 provider；成功的 PR file/Issue detail refresh 会替换 payload 并清除 marker。归档前应先使用 preview 获取各 scope、文件、评论和 payload 计数；active/非 terminal 实体不在可选范围内。
+
+Archive maintenance run 的 `repository_maintenance_runs` 记录 `archive`/`prune`、manual/automatic trigger、cutoff、selector、状态和计数；worker 在同一 repository 的 batch boundary 释放 admission，foreground sync 可在边界进入。自动维护由现有 Scheduler 的 `repository.metadata-maintenance` system task 触发：该 task 每天执行 runtime history purge；retention policy 默认 OFF、7 天时只跳过 metadata archive/prune，开启后才按选择的 merged PR、closed PR、closed Issue 和 prune 运行。它不把两种清理合并成同一份选择器或 API。
+
+Runtime sync run history 使用固定策略：删除 requested-at 早于 30 天 cutoff 且不属于最近 100 条的 terminal runs；queued/running、`repository_history_state.last_run_id` 以及其他当前 sync-state 引用的 run 受保护，stream/target 子行随 parent cascade 删除。runtime history purge 也按 batch 写入 maintenance run 计数；不在每次 purge 后执行 `VACUUM`。SQLite free pages 和文件回收属于单独的低频、显式 optimize 运维动作，不能进入每次同步或维护热路径。

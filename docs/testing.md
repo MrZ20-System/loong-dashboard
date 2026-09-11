@@ -33,12 +33,28 @@ pnpm check:full
 
 `pnpm check:full` is `pnpm check` followed by `pnpm test:regression`.
 
+## 本次关键验证层
+
+新增或调整的行为应在最近边界保留轻量测试：
+
+- History admission、cursor continuation、`resume_after` 和 foreground 优先级在 Server coordinator tests 中验证；provider `resetAt`、真实 GitHub 分页和 quota 需要 live GitHub 环境。
+- metadata archive/restore、reopen auto-unarchive、payload prune marker、Merged projection、maintenance run 和 sync-run purge 在 database/service tests 中验证；SQLite 文件大小、free pages、快照恢复和实际 `VACUUM` 效果需要独立运维验证。
+- `title_source` 的 provisional/generated/manual ownership、首轮成功后的 native title、scheduled run 独立会话、delete 精确 `dsh-home` 在 runtime/Server tests 中验证；真实 DSH title RPC、模型推理、provider secrets 和工具调用需要固定版本 DSH 与凭证环境。
+- password lock 的 auth file 权限、scrypt/HMAC cookie、authVersion 失效、backoff、reset 和 API gate 在 Server tests 中验证；密码锁不加密数据，真实浏览器 cookie/HTTPS 属性仍需部署环境确认。
+- retention Settings、Archive/All 过滤、Security 页面和标题重命名在 Web component tests 中验证；布局、路由跳转、cookie 续期和交互可用性必须通过真实 browser acceptance。
+
 ## Manual acceptance
 
 Browser interaction, live GitHub access, and live DSH sessions are manual
 acceptance. Start the local application with `pnpm dev`, exercise the changed
 flow, and report exactly what was checked. A static or unit pass does not prove
 live credentials, remote API behavior, or browser layout.
+
+Production static serving and native `pnpm start` can be smoke-tested locally;
+Docker build, restart persistence and bind-mount restore require a host with
+Docker/Compose. Do not claim those paths passed when the runtime is absent.
+On macOS, run the final cross-package checks serially: parallel Vitest/watch
+processes can hit `EMFILE` even when assertions themselves pass.
 
 Add the smallest test at the nearest stable business boundary. Prefer pure
 functions and injected dependencies. Do not recreate broad stage suites,

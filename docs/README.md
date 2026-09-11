@@ -13,6 +13,7 @@
 | [前端](frontend.md) | 页面路由、Query、PR 工作台、Markdown 和编辑器 |
 | [HTTP 与事件](api.md) | 路由分组、共享 schema、SSE、错误边界 |
 | [数据模型](data-model.md) | 表与服务归属、迁移、持久状态和缓存 |
+| [数据生命周期](data-model.md#数据生命周期) | 归档、payload 清理、恢复和 runtime history 保留边界 |
 | [GitHub 同步与分类](github-sync.md) | HTTP provider、水位、文件补全、Issue 详情、Domain |
 | [Git 与 PR 工作区](git-workspace.md) | prepare、diff、文件读取、slot 复用与安全约束 |
 | [Agent 与 DSH](dsh-integration.md) | 会话、子进程、事件、取消与 workspace 互斥 |
@@ -21,6 +22,7 @@
 | [配置与运行](operations.md) | 安装、配置位置、GitHub 凭证、启动、备份和排错 |
 | [部署](deployment.md) | Native production、Docker Compose、静态托管、监听和升级 |
 | [Backup and Restore](backup-restore.md) | data root、SQLite、Knowledge、Agent session 和恢复边界 |
+| [安全与密码锁](operations.md#本地密码锁) | 可选本地锁、会话 cookie、reset 和恢复边界 |
 | [开发与验收](testing.md) | 改动顺序、测试分层、手工验收 |
 | [文档维护与清理记录](maintenance.md) | 旧方案去向、文档更新规则 |
 | [历史验收记录](validation-history.md) | 过去的检查及其适用边界 |

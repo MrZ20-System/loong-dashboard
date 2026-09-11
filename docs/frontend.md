@@ -20,6 +20,7 @@
 | `/settings/agent` | [AgentSettings](../apps/web/src/features/settings/SettingsControlCenter.tsx) |
 | `/settings/checkpoint` | [KnowledgeCheckpointSettingsPage](../apps/web/src/features/settings/SettingsControlCenter.tsx) |
 | `/settings/code-backup` | [CodeBackupSettingsPage](../apps/web/src/features/settings/SettingsControlCenter.tsx) |
+| `/settings/security` | [SecuritySettings](../apps/web/src/features/settings/SecuritySettings.tsx) |
 | `/settings/domains` | [DomainsSettingsPage](../apps/web/src/features/settings/DomainsSettingsPage.tsx) |
 | `/settings/schedules`、`/scheduled-tasks` | [ScheduledTasksPage](../apps/web/src/scheduled-tasks.tsx) |
 | `/settings/health` | [HealthPage](../apps/web/src/features/system/HealthPage.tsx) |
@@ -31,6 +32,8 @@
 各 `*-client.ts` 管理传输及 contracts 响应校验。Query 默认配置在 [app/query.ts](../apps/web/src/app/query.ts)，路由过滤和请求 hook 在 [app/hooks.ts](../apps/web/src/app/hooks.ts)。PR/Issue 同步成功后分别刷新相关查询，失败流保留旧数据。页面筛选和分页不能隐式触发远端同步。
 
 Pull Requests 只提供 Recently Updated 与 PR Number 两种当前事实视图。前者按 `updatedAt + number`、后者按 number 使用服务端分页；搜索在 SQLite 全结果集上执行，不只过滤当前页。Web 每页固定请求 100 条，URL 使用 `?page=N`，由共享 [Pagination](../apps/web/src/components/metadata/Pagination.tsx) 提供首尾页、邻近页码、省略号、Previous/Next 和可访问的 Go to page 输入。过滤、搜索或排序变化会回到第 1 页。
+
+PR/Issue 列表默认显示 current metadata，Archive filter 可切换 Archived 或 All；Merged 仍显示所有 `merged_at` projection，包括已归档 PR，并继续使用 page/limit 分页。payload 被 prune 的详情由 Server 在需要时重新获取，不能在 Web 中把空文件或空评论当成成功缓存。
 
 Merged 是独立 repository 页面，使用与 PR 相同的 `page`/`limit=100` 分页和 Pagination 组件，不累计旧页或提供 Load older。每一页按 response 的 `calendarTimeZone` 和 `mergedAt` 分成清晰的每日 timeline group；日期标题、Codicon merge 节点、贯穿线和 bordered list card 用于明确日期边界。点击条目进入现有 PR Detail；Merged 不读取 Daily Snapshot，也不请求正文、diff 或完整文件。
 
@@ -44,9 +47,9 @@ Full File 使用目标 revision 的 RepositoryTree；文件缓存见 [pr-file-ca
 
 [agent-chat.tsx](../apps/web/src/agent-chat.tsx) 用 HTTP 历史加 SSE 展示实时对话，提供 Stop、revision 提示与 workspace sync。[markdown.tsx](../apps/web/src/markdown.tsx) 统一 GFM/Mermaid 渲染；[knowledge-editor.tsx](../apps/web/src/knowledge-editor.tsx) 统一 Monaco Markdown 编辑及主题。不要为新页面复制 Markdown 或聊天实现。
 
-Agent 会话由 `AgentSessionSelectionProvider` 按 origin scope 在 Query 页面、PR/Issue/Knowledge 侧栏和 [GlobalAgentDock](../apps/web/src/features/agent/GlobalAgentDock.tsx) 之间共享。显式打开已有会话使用 `/agent?session=<id>`；全局 Agent 页支持搜索、来源、repository 和状态过滤，并提供来源跳转及删除。只有用户点击新建或打开 dock 后才会调用 ensure，导航和设置加载不会隐式创建会话。聊天中的 command、model 和 reasoning 选项来自 runtime capabilities。输入 `/` 会打开 runtime command 列表，按 command id 或 label 的连续子串过滤，选择后只插入 runtime 提供的真实 command id；当前 session 的模型与 reasoning 切换通过 session reconfiguration 接口提交。运行时活动、工具、approval interaction 和 streaming 事件仍由 SSE 展示。Global Dock 展开时隐藏 launcher，关闭后恢复；面板在 viewport 内自适应，消息区独立滚动，composer 固定在面板底部并在窄屏换行。
+Agent 会话由 `AgentSessionSelectionProvider` 按 origin scope 在 Query 页面、PR/Issue/Knowledge 侧栏和 [GlobalAgentDock](../apps/web/src/features/agent/GlobalAgentDock.tsx) 之间共享。显式打开已有会话使用 `/agent?session=<id>`；全局 Agent 页支持搜索、来源、repository 和状态过滤，并提供来源跳转及删除。列表展示 `provisional`、native `generated` 或用户 `manual` title；inline rename 一旦成功，后续 native title 不再覆盖。只有用户点击新建或打开 dock 后才会调用 ensure，导航和设置加载不会隐式创建会话。聊天中的 command、model 和 reasoning 选项来自 runtime capabilities。输入 `/` 会打开 runtime command 列表，按 command id 或 label 的连续子串过滤，选择后只插入 runtime 提供的真实 command id；当前 session 的模型与 reasoning 切换通过 session reconfiguration 接口提交。运行时活动、工具、approval interaction 和 streaming 事件仍由 SSE 展示。Global Dock 展开时隐藏 launcher，关闭后恢复；面板在 viewport 内自适应，消息区独立滚动，composer 固定在面板底部并在窄屏换行。
 
-[SettingsControlCenter](../apps/web/src/features/settings/SettingsControlCenter.tsx) 使用 [settings-client](../apps/web/src/settings-client.ts) 调用 Server 控制端点。Repository 设置独立维护 forward 自动同步和频率；更老元数据统一由 Historical PR coverage 的目标日期及 7/30/90 quick actions 控制，不再并列显示另一套 Initial sync range。History 启用后按 bounded run 持续向目标推进，Recent syncs 展示目标、时间、耗时、状态和处理量。同步成功会刷新 repository Query，因此侧栏和 Board 计数会更新。GitHub token 和 provider secret 只在密码输入中写入，保存后不会回显。Knowledge 和 Code backup 页面展示 source ref、remote backup branch、独立 checkpoint/push cadence、最近成功、下次运行、错误及 Run now/Push now；Code backup 同页的 Agent history 区域展示独立 archive path、export/push cadence、状态、Export checkpoint now 和 Push now。代码仓库路径由服务端安装根决定，只读展示。
+[SettingsControlCenter](../apps/web/src/features/settings/SettingsControlCenter.tsx) 使用 [settings-client](../apps/web/src/settings-client.ts) 调用 Server 控制端点。Repository 设置独立维护 forward 自动同步和频率，以及默认 OFF/7 天的 metadata retention policy；Retention 区域提供 scope、payload prune、按 server timezone 的本地日期 preview 和 Archive & clean。Storage maintenance 区域提供 runtime sync-run history preview/cleanup，但策略固定为 30 天 cutoff + 最新 100 条，不能在 Web 中调整。更老元数据统一由 Historical PR coverage 的目标日期及 7/30/90 quick actions 控制，不再并列显示另一套 Initial sync range。History 启用后按 bounded run 持续向目标推进，Recent syncs 展示目标、时间、耗时、状态和处理量。同步成功会刷新 repository Query，因此侧栏和 Board 计数会更新。GitHub token 和 provider secret 只在密码输入中写入，保存后不会回显。Security 页面管理本地 password lock；password 不写入 settings。Knowledge 和 Code backup 页面展示 source ref、remote backup branch、独立 checkpoint/push cadence、最近成功、下次运行、错误及 Run now/Push now；Code backup 同页的 Agent history 区域展示独立 archive path、export/push cadence、状态、Export checkpoint now 和 Push now。代码仓库路径由服务端安装根决定，只读展示。
 
 Repository Settings 的 Worktrees 区域维护每 repository 的 maximum slots（1-8）和 idle cleanup TTL，并展示 configured/physical/active/idle/dirty/pending retirement；`Clean unused now` 只回收可安全删除的 clean、非 busy worktree，不代表 Agent 全局并发。
 

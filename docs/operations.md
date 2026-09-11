@@ -31,6 +31,8 @@ pnpm dev
 
 `agent.idleProcessMinutes` 缺省为 120，`0` 表示 Never。该时间从 turn 完成后开始计算，不限制正在执行的 Agent 长任务；已有显式配置继续生效。`system.yaml` 的 Agent 字段是安装级 fallback；服务启动后会把 `settings.json` 中保存的 default provider/model/reasoning 和 retention overrides 应用到 Agent runtime。Scheduled Task 自己保存的模型配置不受该默认值 hydration 覆盖。
 
+Repository metadata retention 位于每个 Repository Settings：默认 automatic archive 为 OFF、cutoff 为 7 天，scope 可分别选择 merged PR、closed PR 和 closed Issue，另有 `prunePayloadWhenArchived` 开关。手动维护先用本地日期执行 preview，再确认 Archive & clean；Server 按配置时区转换为 UTC，并以默认 250 条（内部允许 200–500）的 batch 执行。归档不删除 PR/Issue metadata，Archived/All 视图仍可读；restore 或 reopen 会解除归档，继续处于 terminal 状态的 metadata update 不会自动解除归档。payload 被清理后，PR files/Issue detail 会在下一次需要时重新从 GitHub 获取。现有 `repository.metadata-maintenance` system schedule 每天都会执行 runtime sync-run history purge，即使 automatic archive 为 OFF；只有 archive/prune 阶段受该开关控制，不另加 timer。手动 Storage maintenance 使用同一固定 30 天 + 最新 100 条策略。
+
 Repository Settings 另存于 system workspace 的 `settings.json`：forward sync 的开关与频率是用户 operational policy；已有成功水位的增量从 watermark 前 2 分钟读取。更老数据的范围只由 SQLite 中持久的 History target 控制，Settings 使用日期选择器及 7/30/90 天 quick actions，不再暴露一套重复的 Initial sync range。手动 Sync now 与自动 `repository.sync` 使用同一 forward 规则。
 
 Repository Worktree Settings 的 maximum slots 与 idle cleanup TTL 是 operational override；它们覆盖 `system.yaml` 的安装级 fallback，不写入 `worktree_slots`。维护为低频或显式操作：自动 TTL 及缩容只处理 clean、非 busy slot，手动 Clean unused now 忽略 TTL 但仍保护 busy、dirty 和 status 失败的 slot。Settings/API 展示 configured/physical/active/idle/dirty/pending retirement；缩容不会因忽略高编号目录而留下磁盘孤儿。
@@ -60,7 +62,7 @@ SIGINT/SIGTERM 触发服务的有序退出。服务启动会把数据库中上�
 
 ### GitHub history 与 Merged 验收边界
 
-数据库启动会执行有序迁移至 010；010 删除旧 Daily/lifecycle/逐日 coverage 表并建立 Merged partial index。History 保留每个实体的 cursor、recovery anchor、target date 和最老 metadata 覆盖边界。非空 cursor 续跑不会重新套用 anchor cutoff，只有明确的 GitHub invalid/expired cursor 才进行一次 anchor-overlap 恢复；未知 GraphQL 错误应使本次 history 失败并保留原状态。History 是低优先级 admission，forward 和 `fetch_pr` 必须保留可用容量。
+数据库启动会执行有序迁移至 013；010 删除旧 Daily/lifecycle/逐日 coverage 表并建立 Merged partial index，011 持久化 History rate-limit recovery，012 增加 metadata retention/maintenance runs，013 增加 Agent title source。History 保留每个实体的 cursor、recovery anchor、target date、最老 metadata 覆盖边界和 `resume_after`。非空 cursor 续跑不会重新套用 anchor cutoff，只有明确的 GitHub invalid/expired cursor 才进行一次 anchor-overlap 恢复；未知 GraphQL 错误应使本次 history 失败并保留原状态。History 是低优先级 admission，forward、`fetch_pr` 和 metadata maintenance 的 batch boundary 必须保留可用容量。
 
 单个 History run 仍有页预算并可显示 `partial`；这不是 2000 条总上限。只要 enabled、cursor 未结束且未触发 pause/error/rate-limit floor，Coordinator 会以新 run 继续，重启后也从持久 cursor/anchor 恢复。History 只 upsert metadata，不请求 lifecycle timeline、不构造 Daily Snapshot，也不对整批历史 PR 立即补 changed files。
 
@@ -80,6 +82,14 @@ SIGINT/SIGTERM 触发服务的有序退出。服务启动会把数据库中上�
 | GitHub 显示未配置 | Settings 的 credential source、`gh auth status`、环境变量和私有 credential 文件权限；不要打印 token |
 | 计划未执行 | enabled、timezone、nextRunAt、workspace busy、服务是否在线 |
 
-Repository metadata sync、Knowledge checkpoint、Knowledge push、Code backup 和 Agent Archive 共享 Scheduler。system task action 包括 `repository.sync`、`knowledge.checkpoint`、`knowledge.push`、`git.checkpoint`、`git.push`、`agent.archive.checkpoint`、`agent.archive.push`；调整 Settings 中的开关或频率会更新同一条持久任务，重启不会根据旧的 `settings.json` 重新启用已禁用任务。System task 不占用 Agent workspace lock；真正的同步、Knowledge 或 Archive subsystem 负责自己的资源协调。Agent scheduled task 每次 run 都新建独立 conversation，run history 保存 conversationId，可继续打开旧 run；旧 conversation 的人工模型修改不影响下一次 run。Archive export checkpoint 只读取 normalized allowlist 并对现有 Git 仓库提交，Archive push 只执行显式 refspec；两者失败均保留 Scheduler history，不自动初始化或合并远端。
+Repository metadata sync、metadata maintenance、Knowledge checkpoint、Knowledge push、Code backup 和 Agent Archive 共享 Scheduler。system task action 包括 `repository.sync`、`repository.metadata-maintenance`、`knowledge.checkpoint`、`knowledge.push`、`git.checkpoint`、`git.push`、`agent.archive.checkpoint`、`agent.archive.push`；调整 Settings 中的开关或频率会更新同一条持久任务，重启不会根据旧的 `settings.json` 重新启用已禁用任务。System task 不占用 Agent workspace lock；真正的同步、metadata maintenance、Knowledge 或 Archive subsystem 负责自己的资源协调。Agent scheduled task 每次 run 都新建独立 conversation，run history 保存 conversationId，可继续打开旧 run；旧 conversation 的人工模型修改不影响下一次 run。Runtime sync history 的 purge 策略固定为 30 天 cutoff + 保留最新 100 条，并保护 queued/running 和当前引用；它与 metadata archive 分开。Archive export checkpoint 只读取 normalized allowlist 并对现有 Git 仓库提交，Archive push 只执行显式 refspec；两者失败均保留 Scheduler history，不自动初始化或合并远端。
+
+## 本地密码锁
+
+密码锁是可选的 Web/API 访问门禁，不是数据加密功能。启用、修改、停用和 Logout 位于 Settings → Security；密码本身永不进入 `settings.json`、SQLite、Knowledge、Agent transcript 或 API 响应。服务只在 `runtime.statePath/auth.json` 保存 scrypt 派生值、随机 salt、HMAC signing secret、版本和时间戳；文件为 0600，父目录收紧为 0700，写入使用临时文件、fsync 和原子 rename。
+
+解锁会签发仅含版本/时间信息的 HMAC 会话 cookie：`HttpOnly`、`SameSite=Strict`、`Path=/`，HTTPS 环境追加 `Secure`，默认有效期 8 小时。密码失败使用进程内短暂 backoff；密码轮换、停用或重新启用会改变 `authVersion`/签名密钥，使旧 cookie 失效。`/api/health`、`/api/health/live`、auth status/unlock 和生产静态入口保持可访问，其他 API 需要有效 cookie。
+
+恢复使用精确的 `runtime.statePath/auth.json` reset：native 先 `pnpm build` 再 `pnpm auth:reset`，Docker 在同一 `/data` bind mount 内运行 reset。reset 后必须重启 Server 才重新加载文件；它只删除 auth 文件，不触碰 SQLite、Knowledge、Agent session、Git 或 worktree。不要在文档、配置示例或日志中放置真实密码、token 或 provider secret。
 
 检查命令与手工验收边界见 [testing.md](testing.md)。历史环境限制见 [validation-history.md](validation-history.md)，不将旧机器 workaround 当作安装步骤。

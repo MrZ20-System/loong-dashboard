@@ -21,10 +21,12 @@
 
 ## 控制中心与系统任务
 
-Repository 自动同步、Worktree maintenance、Knowledge checkpoint/push、LoongBoard code checkpoint/push 和 Agent archive export/push 使用稳定任务 ID，由 Settings 与 Schedules 操作同一 scheduler 记录；修改 cron/enabled 后重启不能被旧 settings.json 覆盖。系统任务动作使用 `repository.sync`、`repository.worktrees.cleanup`、`knowledge.checkpoint`、`knowledge.push`、`git.checkpoint`、`git.push`、`agent.archive.checkpoint`、`agent.archive.push`。Worktree cleanup 每个 repository 使用固定低频（当前 6 小时）任务，不占 Agent workspace lock；Settings 只负责容量/TTL policy，不重复保存 cadence。checkpoint/export 与 push 始终是独立 cadence；Archive export 会先生成 allowlist projection 再提交，push 不会再次 export 或 commit。
+Repository 自动同步、metadata retention、Worktree maintenance、Knowledge checkpoint/push、LoongBoard code checkpoint/push 和 Agent archive export/push 使用稳定任务 ID，由 Settings 与 Schedules 操作同一 scheduler 记录；修改 cron/enabled 后重启不能被旧 settings.json 覆盖。系统任务动作使用 `repository.sync`、`repository.metadata-maintenance`、`repository.worktrees.cleanup`、`knowledge.checkpoint`、`knowledge.push`、`git.checkpoint`、`git.push`、`agent.archive.checkpoint`、`agent.archive.push`。Metadata maintenance 默认每天 03:00；该 task 固定执行 runtime sync-run history purge，只有 retention automatic archive 开启时才追加 terminal metadata archive/prune。每个 repository 的 worker 在 transaction batch boundary 让出 admission，不能新增第二个 timer。Worktree cleanup 每个 repository 使用固定低频（当前 6 小时）任务，不占 Agent workspace lock；Settings 只负责容量/TTL policy，不重复保存 cadence。checkpoint/export 与 push 始终是独立 cadence；Archive export 会先生成 allowlist projection 再提交，push 不会再次 export 或 commit。
 
 `scheduled_tasks` 的 `enabled`、cron 和 `nextRunAt` 是运行时权威；settings.json 只保存非调度设置及必要的镜像值，启动不会用旧设置重新启用已禁用任务。`git.push` 通过显式 source ref 到 remote backup branch 推送，不 checkout、不 force、不 pull/rebase/merge；`knowledge.push` 同样只推送既有 source ref，不隐式创建 checkpoint commit。
 
 Agent Archive 的 archive path 必须是明确的现有或可创建目录，不能指向 runtime state、agent-sessions、provider-secrets、worktrees、Knowledge 或代码仓库（包括其子目录）。设置和执行都不会自动 `git init`；目标不是 Git 仓库时，export checkpoint 和 push 会记录清晰失败。
 
 Schedules 支持编辑 cron/timezone/prompt、启停、Run now、历史和打开 conversation；系统任务链接到对应 Settings。每个 run 的 conversation 都可独立打开；人工修改旧 conversation 不影响后续 run。运行中的会话不能删除或重配置。
+
+Repository sync run history 的 purge 不是普通同步路径，也不与 metadata archive 混用：固定删除 30 天前且不在最新 100 条内的 terminal runs，保护 queued/running、History 的 `last_run_id` 和其他当前引用；stream/target 子行随 parent cascade 删除。SQLite free pages 不会因每次 purge 自动 `VACUUM`，文件整理属于单独的显式 optimize 运维动作。
