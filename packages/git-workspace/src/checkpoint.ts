@@ -1,4 +1,25 @@
+import { spawnSync } from "node:child_process";
+
 import { runGitText } from "./git-command.js";
+
+/**
+ * Synchronously probe a path without mutating it. This is intentionally kept
+ * in the Git workspace package so callers never need to execute Git directly.
+ */
+export function isGitRepository(repositoryPath: string): boolean {
+  const result = spawnSync(
+    "git",
+    ["rev-parse", "--is-inside-work-tree"],
+    {
+      cwd: repositoryPath,
+      encoding: "utf8",
+      shell: false,
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 5_000,
+    },
+  );
+  return result.status === 0 && typeof result.stdout === "string" && result.stdout.trim() === "true";
+}
 
 /**
  * Deterministic Git checkpoint. The caller chooses the repository and owns the

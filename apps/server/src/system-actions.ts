@@ -30,6 +30,7 @@ import type { RepositorySyncCoordinator } from "./sync-coordinator.js";
 import type { SystemConfig } from "./config.js";
 import type { WorktreeMaintenanceService } from "./worktree-maintenance.js";
 import { GitRepositoryLock } from "./git-repository-lock.js";
+import { CODE_BACKUP_UNAVAILABLE_MESSAGE } from "./settings.js";
 
 /** Runtime-only state updated by successful backup/checkpoint actions. */
 export interface SystemActionState {
@@ -168,6 +169,9 @@ export function createSystemActionExecutor(
     }],
     ["git.checkpoint", async () => {
       const state = options.state.codeBackup;
+      if (!state.available) {
+        throw new Error(CODE_BACKUP_UNAVAILABLE_MESSAGE);
+      }
       const result = await lock.run(state.repositoryPath, () =>
         runCheckpoint({
           repositoryPath: state.repositoryPath,
@@ -184,6 +188,9 @@ export function createSystemActionExecutor(
     }],
     ["git.push", async () => {
       const state = options.state.codeBackup;
+      if (!state.available) {
+        throw new Error(CODE_BACKUP_UNAVAILABLE_MESSAGE);
+      }
       const result = await lock.run(state.repositoryPath, () =>
         pushBackupRef({
           repositoryPath: state.repositoryPath,

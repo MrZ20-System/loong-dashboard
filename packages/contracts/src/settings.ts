@@ -240,6 +240,8 @@ export const knowledgeCheckpointSettingsUpdateSchema = z
 export const codeBackupSettingsSchema = z
   .object({
     repositoryPath: z.string().trim().min(1),
+    /** Runtime-only probe result; never persisted in Settings V2. */
+    available: z.boolean(),
     automaticCheckpoint: z.boolean(),
     checkpointIntervalMinutes: z.number().int().positive().nullable().optional(),
     automaticPush: z.boolean(),

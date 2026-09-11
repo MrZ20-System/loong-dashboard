@@ -37,7 +37,9 @@ Repository Settings 以 Settings V2 policy 形式保存在 system workspace 的 
 
 Repository Worktree Settings 的 maximum slots 与 idle cleanup TTL 是 operational override；它们覆盖 `system.yaml` 的安装级 fallback，不写入 `worktree_slots`。维护为低频或显式操作：自动 TTL 及缩容只处理 clean、非 busy slot，手动 Clean unused now 忽略 TTL 但仍保护 busy、dirty 和 status 失败的 slot。Settings/API 展示 configured/physical/active/idle/dirty/pending retirement；缩容不会因忽略高编号目录而留下磁盘孤儿。
 
-Agent Archive 使用独立的 archive repository/path 配置。Settings → Code backup 同页的 Agent history 区域支持 export/checkpoint cadence、独立 push cadence、source ref、remote、remote backup branch（默认 `agent-history-backup`）和最近状态。运行 exporter 时，`agent_sessions` 与 `agent_messages` 的 normalized projection 是唯一输入；输出为 `conversations/<safe-session-id>/metadata.json` 和 `transcript.jsonl`。DSH source of truth 仍在各会话的 runtime home；LoongBoard 当前 adapter 没有稳定官方 export 时，archive 明确是 normalized transcript fallback。导出不复制 `dsh-home`、provider secrets、credentials、cache 或其他 runtime 目录，且重复运行不会重写未变化文件。archive path 必须独立于 runtime state、agent-sessions、provider-secrets、worktrees、Knowledge 和代码仓库；目标不存在时可创建，但不会自动 `git init`。
+Agent Archive 使用独立的 archive repository/path 配置。默认目录是 `systemRoot/agent-history`；用户明确保存的自定义 `archiveRepositoryPath`（archive directory）优先，因此 Docker 的典型默认路径是 `/data/agent-history`。Settings → Code backup 同页的 Agent history 区域支持 export/checkpoint cadence、独立 push cadence、source ref、remote、remote backup branch（默认 `agent-history-backup`）和最近状态。运行 exporter 时，`agent_sessions` 与 `agent_messages` 的 normalized projection 是唯一输入；输出为 `conversations/<safe-session-id>/metadata.json` 和 `transcript.jsonl`。DSH source of truth 仍在各会话的 runtime home；LoongBoard 当前 adapter 没有稳定官方 export 时，archive 明确是 normalized transcript fallback。导出不复制 `dsh-home`、provider secrets、credentials、cache 或其他 runtime 目录，且重复运行不会重写未变化文件。archive path 必须独立于 runtime state、agent-sessions、provider-secrets、worktrees、Knowledge 和代码仓库；目标不存在时可创建，但不会自动 `git init`。
+
+Code backup 的 `repositoryPath` 和 `available` 是 runtime-only 状态：Server 启动时检查真实 code checkout 是否为 Git repository，SettingsDocumentV2 只保存 checkpoint/push policy，不保存这两个字段。镜像部署通常没有 `.git`，此时 `available=false`，自动 checkpoint/push 不会被投影为可执行任务，手工动作也会被拒绝并返回精确提示 `Code backup unavailable in container-image deployment.`。即使如此，保存其他 Code backup 字段、路由字段和 Agent Archive 仍可用。
 
 ## 凭证
 
@@ -53,6 +55,7 @@ Settings → Integrations → GitHub 是 GitHub 凭证的唯一控制入口。�
 | runtime.statePath/loongboard.sqlite3 | 索引、消息、短期版本、任务状态，需备份 |
 | runtime.statePath/agent-sessions | 每会话 DSH home，随会话保留；不作为 Agent Archive 的输入目录 |
 | runtime.worktreesPath | PR slot 缓存；清理前由 WorktreeJanitor 确认没有 busy/dirty 内容，Git status 失败时 fail closed |
+| system workspace/agent-history | Agent Archive 默认目录；Docker 中对应 `/data/agent-history`，用户保存的自定义 archive path 优先 |
 | system workspace/settings.json | 控制中心非秘密设置；严格 Settings V2 policy。缺失文件或 V1 文档会迁移为完整 V2；V2 的未知、缺失或非法字段会拒绝并保留原文件，V1 迁移可能丢弃 legacy 未知字段 |
 | system workspace/domains/*.json | Domain JSON 源文件；文件名普通 key 可读，异常 key 编码 |
 | system workspace/prompts/update-domains.md | Agent 更新 Domain 使用的可编辑 prompt |
@@ -80,6 +83,7 @@ SIGINT/SIGTERM 触发服务的有序退出。服务启动会把数据库中上�
 | Knowledge 内容不一致 | 磁盘文件、watcher、id/hash、版本记录 |
 | Domain 分类不一致 | `domains/*.json`、source 的 `parseError`、`domain_rules` 投影和重分类状态；非法 JSON 不会覆盖上一次有效投影 |
 | GitHub 显示未配置 | Settings 的 credential source、`gh auth status`、环境变量和私有 credential 文件权限；不要打印 token |
+| Code backup 不可用 | 先看 Settings API 的 runtime `available` 和只读 `repositoryPath`；镜像 checkout 没有 `.git` 时保持自动/手工 Code backup 关闭，使用页面提示，不要把它写入 settings |
 | 计划未执行 | enabled、timezone、nextRunAt、workspace busy、服务是否在线 |
 
 Repository metadata sync、metadata maintenance、Knowledge checkpoint、Knowledge push、Code backup 和 Agent Archive 共享 Scheduler。system task action 包括 `repository.sync`、`repository.metadata-maintenance`、`knowledge.checkpoint`、`knowledge.push`、`git.checkpoint`、`git.push`、`agent.archive.checkpoint`、`agent.archive.push`；调整 Settings 中的 policy 会先持久化 JSON，再更新同一条稳定任务，重启也会按 JSON policy 重新投影。Task GET、history 和 Run now 仍可用，但通用 scheduled-task PUT 不允许修改 system task。System task 不占用 Agent workspace lock；真正的同步、metadata maintenance、Knowledge 或 Archive subsystem 负责自己的资源协调。Agent scheduled task 每次 run 都新建独立 session，run history 保存 `agentSessionId`，可继续打开旧 run；旧 session 的人工模型修改不影响下一次 run。Runtime sync history 的 purge 策略固定为 30 天 cutoff + 保留最新 100 条，并保护 queued/running 和当前引用；它与 metadata archive 分开。Archive export checkpoint 只读取 normalized allowlist 并对现有 Git 仓库提交，Archive push 只执行显式 refspec；两者失败均保留 Scheduler history，不自动初始化或合并远端。

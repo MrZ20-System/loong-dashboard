@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { pushBackupRef, runCheckpoint } from "../src/index.js";
+import { isGitRepository, pushBackupRef, runCheckpoint } from "../src/index.js";
 
 let root: string;
 let repo: string;
@@ -33,6 +33,14 @@ afterAll(() => {
 });
 
 describe("runCheckpoint", () => {
+  it("detects a real Git repository and rejects a plain directory", () => {
+    const plain = path.join(root, "plain-directory");
+    fs.mkdirSync(plain);
+    expect(isGitRepository(repo)).toBe(true);
+    expect(isGitRepository(plain)).toBe(false);
+    expect(isGitRepository(path.join(root, "missing-directory"))).toBe(false);
+  });
+
   it("commits pending changes and skips a clean repository", async () => {
     fs.writeFileSync(path.join(repo, "notes.md"), "# Second\n");
     const committed = await runCheckpoint({

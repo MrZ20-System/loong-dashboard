@@ -101,6 +101,46 @@ function createFixture(): {
 }
 
 describe("SchedulerEngine session lifecycle", () => {
+  it("waits for an active scheduled Agent run before closing", async () => {
+    const { database, directory, task } = createFixture();
+    let startedResolve!: () => void;
+    let releaseResolve!: () => void;
+    const started = new Promise<void>((resolve) => {
+      startedResolve = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseResolve = resolve;
+    });
+    const chats = {
+      ...fakeChats(database),
+      runSessionTurn: async () => {
+        startedResolve();
+        await release;
+        return { status: "idle" };
+      },
+    } as unknown as AgentChatController;
+    const engine = new SchedulerEngine({
+      database,
+      chats,
+      workspaceRuns: new WorkspaceRunCoordinator(),
+      agentSessionsPath: join(directory, "agent-sessions"),
+    });
+
+    await engine.runNow(task.id);
+    await started;
+    let closed = false;
+    const closing = engine.close().then(() => {
+      closed = true;
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(closed).toBe(false);
+
+    releaseResolve();
+    await closing;
+    expect(closed).toBe(true);
+    expect((await waitForTerminalRun(database, task.id)).status).toBe("completed");
+  });
+
   it("creates a new Agent session for every run and keeps run history addressable", async () => {
     const { database, directory, task } = createFixture();
     const engine = new SchedulerEngine({

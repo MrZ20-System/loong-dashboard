@@ -91,7 +91,7 @@ describe("SettingsController", () => {
         pushIntervalMinutes: null,
       },
       agentArchive: {
-        archiveRepositoryPath: join(root, "agent-archive"),
+        archiveRepositoryPath: join(root, "agent-history"),
       },
     });
   });
@@ -595,6 +595,92 @@ describe("SettingsController", () => {
       }),
     });
     expect(restarted.agentArchiveSettingsSync().archiveRepositoryPath).toBe(archivePath);
+  });
+
+  it("rejects enabling unavailable code backup before writing the policy", async () => {
+    const { root, statePath, database } = fixture();
+    const settingsPath = join(root, "settings.json");
+    let updateCalls = 0;
+    const controller = new SettingsController({
+      database,
+      systemRoot: root,
+      statePath,
+      environment: {},
+      credential: new GitHubCredentialService({
+        filePath: join(statePath, "github-credential.json"),
+        environment: {},
+        ghExecutable: "false",
+      }),
+      codeBackup: {
+        get: () => ({ available: false }),
+        update: () => {
+          updateCalls += 1;
+          return { available: false };
+        },
+        runCheckpoint: () => {
+          throw new Error("Git must not be called");
+        },
+        runPush: () => {
+          throw new Error("Git must not be called");
+        },
+      },
+    });
+    const before = readFileSync(settingsPath, "utf8");
+
+    await expect(controller.codeBackupSettings()).resolves.toMatchObject({
+      repositoryPath: root,
+      available: false,
+    });
+
+    await expect(controller.updateCodeBackup({ automaticCheckpoint: true })).rejects.toThrow(
+      "Code backup unavailable in container-image deployment.",
+    );
+    await expect(controller.updateCodeBackup({ automaticPush: true })).rejects.toThrow(
+      "Code backup unavailable in container-image deployment.",
+    );
+    await expect(controller.runCodeBackupCheckpoint()).rejects.toThrow(
+      "Code backup unavailable in container-image deployment.",
+    );
+    await expect(controller.runCodeBackupPush()).rejects.toThrow(
+      "Code backup unavailable in container-image deployment.",
+    );
+
+    expect(updateCalls).toBe(0);
+    expect(readFileSync(settingsPath, "utf8")).toBe(before);
+  });
+
+  it("uses the runtime code checkout path without persisting it in Settings V2", async () => {
+    const { root, statePath, database } = fixture();
+    const runtimeRepositoryPath = join(root, "installed-loongboard");
+    const controller = new SettingsController({
+      database,
+      systemRoot: root,
+      statePath,
+      environment: {},
+      credential: new GitHubCredentialService({
+        filePath: join(statePath, "github-credential.json"),
+        environment: {},
+        ghExecutable: "false",
+      }),
+      codeBackup: {
+        get: () => ({ repositoryPath: runtimeRepositoryPath, available: true }),
+        update: () => ({ repositoryPath: runtimeRepositoryPath, available: true }),
+      },
+    });
+
+    await expect(controller.codeBackupSettings()).resolves.toMatchObject({
+      repositoryPath: runtimeRepositoryPath,
+      available: true,
+    });
+    await expect(controller.updateCodeBackup({ sourceRef: "release" })).resolves.toMatchObject({
+      repositoryPath: runtimeRepositoryPath,
+      sourceRef: "release",
+    });
+    expect(controller.codeBackupSettingsSync().repositoryPath).toBe(runtimeRepositoryPath);
+
+    const persisted = JSON.parse(readFileSync(join(root, "settings.json"), "utf8")) as Record<string, any>;
+    expect(persisted.codeBackup).not.toHaveProperty("repositoryPath");
+    expect(settingsDocumentV2Schema.parse(persisted)).toEqual(persisted);
   });
 
   it("hydrates persisted Agent overrides over system defaults after restart", () => {

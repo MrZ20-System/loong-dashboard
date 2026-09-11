@@ -124,7 +124,7 @@ export type KnowledgeCheckpointRuntime = Pick<
 
 /** Scheduler authority for the LoongBoard source repository backup tasks. */
 export interface CodeBackupBridge {
-  get?: () => Promise<Partial<CodeBackupRuntime> | null> | Partial<CodeBackupRuntime> | null;
+  get?: () => Partial<CodeBackupRuntime> | null;
   update?: (
     patch: CodeBackupSettingsUpdate,
   ) => Promise<Partial<CodeBackupRuntime> | null> | Partial<CodeBackupRuntime> | null;
@@ -134,8 +134,17 @@ export interface CodeBackupBridge {
 
 export type CodeBackupRuntime = Pick<
   CodeBackupSettings,
-  "lastCheckpointAt" | "nextCheckpointAt" | "lastPushAt" | "nextPushAt" | "lastError"
+  | "repositoryPath"
+  | "available"
+  | "lastCheckpointAt"
+  | "nextCheckpointAt"
+  | "lastPushAt"
+  | "nextPushAt"
+  | "lastError"
 >;
+
+export const CODE_BACKUP_UNAVAILABLE_MESSAGE =
+  "Code backup unavailable in container-image deployment.";
 
 /** Scheduler authority for the normalized Agent conversation archive. */
 export interface AgentArchiveBridge {
@@ -264,7 +273,7 @@ export class SettingsController {
         pushIntervalMinutes: checkpoint.pushIntervalMinutes,
       },
       agentArchive: {
-        archiveRepositoryPath: resolve(this.systemRoot, "agent-archive"),
+        archiveRepositoryPath: resolve(this.systemRoot, "agent-history"),
       },
     };
   }
@@ -549,7 +558,8 @@ export class SettingsController {
     const stored = this.readDocument().codeBackup;
     const runtime = await this.codeBackupBridge?.get?.();
     return codeBackupSettingsSchema.parse({
-      repositoryPath: this.systemRoot,
+      repositoryPath: runtime?.repositoryPath ?? this.systemRoot,
+      available: runtime?.available ?? true,
       ...stored,
       nextCheckpointAt: runtime?.nextCheckpointAt ?? null,
       lastCheckpointAt: runtime?.lastCheckpointAt ?? null,
@@ -561,8 +571,10 @@ export class SettingsController {
 
   codeBackupSettingsSync(): CodeBackupSettings {
     const stored = this.readDocument().codeBackup;
+    const runtime = this.codeBackupBridge?.get?.();
     return codeBackupSettingsSchema.parse({
-      repositoryPath: this.systemRoot,
+      repositoryPath: runtime?.repositoryPath ?? this.systemRoot,
+      available: runtime?.available ?? true,
       ...stored,
       nextCheckpointAt: null,
       lastCheckpointAt: null,
@@ -574,6 +586,13 @@ export class SettingsController {
 
   async updateCodeBackup(patch: CodeBackupSettingsUpdate): Promise<CodeBackupSettings> {
     const validated = codeBackupSettingsUpdateSchema.parse(patch);
+    const availabilityRuntime = await this.codeBackupBridge?.get?.();
+    if (
+      availabilityRuntime?.available === false &&
+      (validated.automaticCheckpoint === true || validated.automaticPush === true)
+    ) {
+      throw new InvalidRequestError(CODE_BACKUP_UNAVAILABLE_MESSAGE);
+    }
     const current = this.readDocument().codeBackup;
     const nextPolicy = { ...current, ...validated };
     this.updateDocument((document) => {
@@ -581,7 +600,9 @@ export class SettingsController {
     });
     const runtime = await this.codeBackupBridge?.update?.(validated);
     return codeBackupSettingsSchema.parse({
-      repositoryPath: this.systemRoot,
+      repositoryPath:
+        runtime?.repositoryPath ?? availabilityRuntime?.repositoryPath ?? this.systemRoot,
+      available: runtime?.available ?? availabilityRuntime?.available ?? true,
       ...nextPolicy,
       nextCheckpointAt: runtime?.nextCheckpointAt ?? null,
       lastCheckpointAt: runtime?.lastCheckpointAt ?? null,
@@ -592,6 +613,7 @@ export class SettingsController {
   }
 
   async runCodeBackupCheckpoint(): Promise<{ accepted: true }> {
+    await this.assertCodeBackupAvailable();
     if (this.codeBackupBridge?.runCheckpoint === undefined) {
       throw new InvalidRequestError("Code backup checkpoint runner is not configured");
     }
@@ -600,6 +622,7 @@ export class SettingsController {
   }
 
   async runCodeBackupPush(): Promise<{ accepted: true }> {
+    await this.assertCodeBackupAvailable();
     if (this.codeBackupBridge?.runPush === undefined) {
       throw new InvalidRequestError("Code backup push runner is not configured");
     }
@@ -716,6 +739,13 @@ export class SettingsController {
   private requireRepository(repositoryId: string): void {
     if (getRepository(this.database, repositoryId) === null) {
       throw new RepositoryNotFoundError(repositoryId);
+    }
+  }
+
+  private async assertCodeBackupAvailable(): Promise<void> {
+    const runtime = await this.codeBackupBridge?.get?.();
+    if (runtime?.available === false) {
+      throw new InvalidRequestError(CODE_BACKUP_UNAVAILABLE_MESSAGE);
     }
   }
 

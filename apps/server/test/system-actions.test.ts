@@ -45,6 +45,7 @@ function state(): SystemActionState {
     },
     codeBackup: {
       repositoryPath: "/tmp/code",
+      available: true,
       automaticCheckpoint: false,
       checkpointIntervalMinutes: null,
       automaticPush: false,
@@ -151,4 +152,19 @@ describe("system action registry", () => {
     expect(start).toHaveBeenCalledWith("repo", "system");
     expect(waitForRun).toHaveBeenCalledWith("sync-1");
   });
+
+  it.each(["git.checkpoint", "git.push"])(
+    "fails %s before Git when code backup is unavailable",
+    async (action) => {
+      const unavailable = state();
+      unavailable.codeBackup.available = false;
+      await expect(
+        executor({ state: unavailable }).executeSystem({
+          task: task(action),
+          run: {} as never,
+          workspacePath: null,
+        }),
+      ).rejects.toThrow("Code backup unavailable in container-image deployment.");
+    },
+  );
 });

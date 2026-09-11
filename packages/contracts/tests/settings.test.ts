@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  codeBackupSettingsSchema,
   knowledgeCheckpointSettingsSchema,
   settingsDocumentV2Schema,
 } from "../src/index.js";
@@ -107,6 +108,24 @@ describe("settings contracts", () => {
     expect(knowledgeCheckpointSettingsSchema.safeParse({
       ...canonical,
       intervalMinutes: null,
+    }).success).toBe(false);
+  });
+
+  it("keeps Code backup availability runtime-only", () => {
+    const projection = codeBackupSettingsSchema.parse({
+      repositoryPath: "/checkout",
+      available: false,
+      ...document.codeBackup,
+      lastCheckpointAt: null,
+      nextCheckpointAt: null,
+      lastPushAt: null,
+      nextPushAt: null,
+      lastError: null,
+    });
+    expect(projection.available).toBe(false);
+    expect(settingsDocumentV2Schema.safeParse({
+      ...document,
+      codeBackup: { ...document.codeBackup, available: false },
     }).success).toBe(false);
   });
 });

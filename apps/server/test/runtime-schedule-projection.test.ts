@@ -11,8 +11,9 @@ import {
 import type { GitHubMetadataProvider } from "@loongboard/github";
 import { afterEach, describe, expect, it } from "vitest";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
+import { fileURLToPath } from "node:url";
 
 import { createServerRuntime, type ServerRuntime } from "../src/runtime.js";
 import { parseSystemConfig } from "../src/config.js";
@@ -265,6 +266,8 @@ describe("system schedule projection", () => {
       checkpointIntervalMinutes: 30,
       automaticPush: false,
       pushIntervalMinutes: 120,
+      repositoryPath: resolve(fileURLToPath(new URL("../../..", import.meta.url))),
+      available: true,
     });
     expect((await runtime.settings.agentArchiveSettings())).toMatchObject({
       enabled: false,

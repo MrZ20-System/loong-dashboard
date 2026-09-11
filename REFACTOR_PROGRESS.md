@@ -1,7 +1,7 @@
 # LoongBoard Pre-Freeze Refactor Progress
 
 - Baseline SHA: `57d1cedafab9a1510d6616619cc33859f56d125d`
-- Current phase: Phase 4 — runtime composition cleanup
+- Current phase: Phase 5 — Server application boundary cleanup
 
 ## Frozen product semantics
 
@@ -30,10 +30,11 @@
 - Phase 2 review fixes: preserved the Agent archive repository path as durable policy, rejected Agent-to-system task conversion through the generic scheduler endpoint, and aligned strict-V2 operational documentation.
 - Phase 3: kept `SchedulerEngine` as the single time/run engine, moved the nine canonical system-action handlers to `apps/server/src/system-actions.ts`, and moved Settings-to-task projection to `apps/server/src/system-schedules.ts` before scheduler start and after Settings updates.
 - Phase 3 cron migration: replaced the custom cron parser with numeric five-field `validateCron`/`nextOccurrence` wrappers over `cron-parser`; named and extended syntax is rejected, and timezone/DST/DOM-DOW calculation remains delegated to the library.
+- Phase 4: reduced `runtime.ts` to the composition root; centralized Settings, backup, worktree, and Agent runtime adapters in `runtime-settings-adapters.ts`; corrected the Agent Archive default to `systemRoot/agent-history` with an explicit persisted custom path taking precedence; added runtime-only Code backup Git availability detection and container-image UI/action guards; and ordered shutdown so Scheduler waits for active scheduled Agent runs before Agent runtime close.
 
 ## Pending changes
 
-- Phases 4–13: execute the supplied canonicalization plan in dependency order.
+- Phases 5–13: execute the supplied canonicalization plan in dependency order.
 
 ## Migrations added
 
@@ -73,6 +74,11 @@
 - Phase 3 Scheduler cron: 1 file, 11 tests passed.
 - Phase 3 Server system actions/schedules/runtime projection/scheduler persistence/scheduled tasks/archive: 6 files, 23 tests passed after follow-up.
 - Phase 3 Scheduler and Server typechecks passed; `git diff --check` passed.
+- Phase 4 Contracts Settings: 4 tests passed.
+- Phase 4 Git workspace checkpoint/availability: 6 tests passed.
+- Phase 4 Server focused coverage: 40 tests passed across 6 files; SchedulerEngine active-run close waiting is covered by focused tests. The createServerRuntime/app.close end-to-end lifecycle was not run because the macOS single-file setup triggers `EMFILE`.
+- Phase 4 Web Settings: 3 tests passed.
+- Phase 4 Contracts, Git workspace, Server, and Web typechecks passed; `git diff --check` passed.
 
 ## Known failures
 

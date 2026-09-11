@@ -45,7 +45,9 @@ docker compose up -d --build
 
 容器内 YAML 的相对路径相对 `/data`，所以 `./knowledge`、`./.loong`、`./.worktrees` 分别落在 `/data/knowledge`、`/data/.loong`、`/data/.worktrees`。首次启动前必须确认 `/data/system.yaml` 存在，并且其中配置的 repository path 对容器可访问。
 
-镜像安装 Node、Git 和 CA certificates。宿主机不需要为这些组件提供挂载。GitHub 凭证通过 Settings 保存，或在启动容器时显式传入 `GH_TOKEN`/`GITHUB_TOKEN`；宿主机的 `gh` 登录状态不会自动进入容器。Dockerfile 不 COPY SSH key、token、`system.yaml`、`.loong`、knowledge 或 worktrees。Code backup 不会因为 Docker 启动自动开启，仍由用户配置。
+镜像安装 Node、Git 和 CA certificates。宿主机不需要为这些组件提供挂载。GitHub 凭证通过 Settings 保存，或在启动容器时显式传入 `GH_TOKEN`/`GITHUB_TOKEN`；宿主机的 `gh` 登录状态不会自动进入容器。Dockerfile 不 COPY SSH key、token、`system.yaml`、`.loong`、knowledge 或 worktrees。Code backup 的 `repositoryPath` 和 `available` 由运行时从真实 code checkout 探测，不写入 SettingsDocumentV2；镜像 checkout 没有 `.git` 时 `available=false`，自动 checkpoint/push 会关闭，手工 Checkpoint now/Push now 会拒绝，并显示 `Code backup unavailable in container-image deployment.`。Code backup 的 policy 仍可保存，但不能开启必失败的自动任务。
+
+Agent Archive 默认使用持久 data root 下的 `/data/agent-history`；用户明确保存的自定义 archive path 优先。容器重建不会删除宿主机 data directory，因此默认 archive 不会随容器层丢失。Settings 页面在 code backup unavailable 时仍可保存普通字段、路由字段和 Agent Archive 设置。
 
 停止、启动和查看日志：
 

@@ -394,14 +394,14 @@ export function createSystemScheduleProjector(options: {
         taskId: SYSTEM_TASK_IDS.codeCheckpoint,
         name: "Code checkpoint",
         action: "git.checkpoint",
-        enabled: state.automaticCheckpoint,
+        enabled: state.available && state.automaticCheckpoint,
         interval: state.checkpointIntervalMinutes ?? null,
       },
       {
         taskId: SYSTEM_TASK_IDS.codePush,
         name: "Code push",
         action: "git.push",
-        enabled: state.automaticPush,
+        enabled: state.available && state.automaticPush,
         interval: state.pushIntervalMinutes ?? null,
       },
     );
@@ -481,6 +481,7 @@ export function createSystemScheduleProjector(options: {
       const pushRun = latestCompletedRun(pushRuns);
       return {
         repositoryPath: state.repositoryPath,
+        available: state.available,
         nextCheckpointAt: checkpointTask?.nextRunAt ?? null,
         nextPushAt: pushTask?.nextRunAt ?? null,
         lastCheckpointAt: checkpointRun?.finishedAt ?? state.lastCheckpointAt,

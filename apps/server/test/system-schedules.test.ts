@@ -100,6 +100,7 @@ const knowledge = {
 
 const codeBackup = {
   repositoryPath: "/tmp/code",
+  available: true,
   automaticCheckpoint: false,
   checkpointIntervalMinutes: 30,
   automaticPush: false,
@@ -214,6 +215,19 @@ describe("system schedule projector", () => {
 
     addRun(database, SYSTEM_TASK_IDS.codePush, "2026-01-03T00:00:00.000Z", "failed", "new error");
     expect(projector.codeBackupStatus(codeBackup).lastError).toBe("new error");
+  });
+
+  it("disables code backup tasks when the runtime repository is unavailable", () => {
+    const { database, projector } = fixture();
+    projector.projectCodeBackup({
+      ...codeBackup,
+      available: false,
+      automaticCheckpoint: true,
+      automaticPush: true,
+    });
+
+    expect(getScheduledTask(database, SYSTEM_TASK_IDS.codeCheckpoint)?.enabled).toBe(false);
+    expect(getScheduledTask(database, SYSTEM_TASK_IDS.codePush)?.enabled).toBe(false);
   });
 });
 

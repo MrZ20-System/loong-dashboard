@@ -65,7 +65,7 @@ const DEFAULTS: SettingsDocumentV2 = {
     remoteBranch: "loongboard-backup",
   },
   agentArchive: {
-    archiveRepositoryPath: "agent-archive",
+    archiveRepositoryPath: "agent-history",
     enabled: false,
     exportIntervalMinutes: null,
     automaticPush: false,

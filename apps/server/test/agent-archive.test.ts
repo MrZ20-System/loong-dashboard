@@ -1,7 +1,6 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { fileURLToPath } from "node:url";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 
 import {
   appendAgentMessage,
@@ -160,9 +159,7 @@ describe("AgentArchiveExporter", () => {
     const root = mkdtempSync(join(tmpdir(), "loongboard-agent-archive-runtime-"));
     directories.push(root);
     const archivePath = join(root, "configured-archive");
-    const codeRepositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
-    const defaultArchivePath = resolve(codeRepositoryRoot, "..", "agent-archive");
-    const defaultExisted = existsSync(defaultArchivePath);
+    const defaultArchivePath = join(root, "agent-history");
     mkdirSync(join(root, "knowledge"), { recursive: true });
     mkdirSync(join(root, "worktrees"), { recursive: true });
     writeFileSync(
@@ -204,6 +201,45 @@ describe("AgentArchiveExporter", () => {
     expect(response.statusCode).toBe(200);
     expect(response.json().archiveRepositoryPath).toBe(archivePath);
     expect(existsSync(archivePath)).toBe(true);
-    expect(existsSync(defaultArchivePath)).toBe(defaultExisted);
+    expect(existsSync(defaultArchivePath)).toBe(false);
+  });
+
+  it("uses systemRoot/agent-history when no archive path is persisted", async () => {
+    const root = mkdtempSync(join(tmpdir(), "loongboard-agent-archive-default-"));
+    directories.push(root);
+    mkdirSync(join(root, "knowledge"), { recursive: true });
+    mkdirSync(join(root, "worktrees"), { recursive: true });
+    const config = parseSystemConfig({
+      version: 1,
+      timezone: "UTC",
+      repositories: [],
+      knowledge: { path: join(root, "knowledge"), inbox: "inbox", historyLimit: 10 },
+      runtime: {
+        statePath: join(root, ".loong"),
+        worktreesPath: join(root, "worktrees"),
+        serverHost: "127.0.0.1",
+        serverPort: 4174,
+      },
+      agent: {
+        defaultProvider: "deepseek-official",
+        defaultModel: "deepseek-v4-flash",
+        defaultReasoningEffort: "high",
+        idleProcessMinutes: 0,
+      },
+    }, join(root, "system.yaml"));
+    const emptyProvider = {
+      async *fetchPullRequestUpdates() { /* no repositories */ },
+      async *fetchIssueUpdates() { /* no repositories */ },
+      async fetchPullRequestFiles() { return []; },
+      async fetchIssueDetail() { throw new Error("not used"); },
+    } as unknown as GitHubMetadataProvider;
+
+    const runtime = createServerRuntime({ config, systemRoot: root, provider: emptyProvider });
+    runtimes.push(runtime);
+
+    expect(runtime.settings.agentArchiveSettingsSync().archiveRepositoryPath).toBe(
+      join(root, "agent-history"),
+    );
+    expect(existsSync(join(root, "agent-history"))).toBe(true);
   });
 });
