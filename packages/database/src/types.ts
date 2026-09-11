@@ -147,6 +147,7 @@ export interface RepositoryHistoryState {
   recoveryAnchorUpdatedAt: string | null;
   lastRunId: string | null;
   lastError: string | null;
+  resumeAfter: string | null;
   updatedAt: string;
 }
 

@@ -99,6 +99,7 @@ describe("database migrations", () => {
         { id: "008_pull_request_lifecycle" },
         { id: "009_list_query_modes" },
         { id: "010_remove_daily_projections" },
+        { id: "011_history_rate_limit_recovery" },
       ]);
     } finally {
       database.close();
@@ -130,7 +131,14 @@ describe("database migrations", () => {
         expect.objectContaining({ id: "008_pull_request_lifecycle" }),
         expect.objectContaining({ id: "009_list_query_modes" }),
         expect.objectContaining({ id: "010_remove_daily_projections" }),
+        expect.objectContaining({ id: "011_history_rate_limit_recovery" }),
       ]);
+      expect(
+        database
+          .prepare("PRAGMA table_info(repository_history_state)")
+          .all()
+          .some((row) => (row as { name: string }).name === "resume_after"),
+      ).toBe(true);
     } finally {
       database.close();
     }

@@ -287,6 +287,101 @@ export function markSyncRunStarted(
   return readSyncRun(database, runId)!;
 }
 
+/**
+ * Admit a queued forward run atomically with its repository stream state.
+ * Queued runs are intentionally invisible to the forward watermark/state
+ * until the per-repository coordinator has selected them for execution.
+ */
+export function beginQueuedForwardSync(
+  database: DatabaseClient,
+  input: {
+    repositoryId: string;
+    runId: string;
+    startedAt?: Date | string;
+  },
+): SyncRunRecord {
+  const value = runTimestamp(input.startedAt);
+  requireRepository(database, input.repositoryId);
+  database.transaction(() => {
+    const run = readSyncRun(database, input.runId);
+    if (run === null || run.repositoryId !== input.repositoryId || run.kind !== "forward") {
+      throw new InvalidSyncTransitionError(
+        input.runId,
+        "pull_request",
+        "Queued forward sync run is missing or belongs to another repository",
+      );
+    }
+    if (run.status !== "queued") {
+      throw new InvalidSyncTransitionError(
+        input.runId,
+        "pull_request",
+        "Queued forward sync run is no longer queued",
+      );
+    }
+    insertMissingSyncRows(database, input.repositoryId);
+    const running = database
+      .prepare(
+        `SELECT 1 FROM repository_sync_state
+         WHERE repository_id = ? AND status = 'running' LIMIT 1`,
+      )
+      .get(input.repositoryId);
+    if (running !== undefined) throw new SyncAlreadyRunningError(input.repositoryId);
+
+    database
+      .prepare(
+        `UPDATE repository_sync_state SET
+          status = 'running', last_attempt_at = ?, last_error = NULL
+         WHERE repository_id = ? AND entity_kind IN ('pull_request', 'issue')`,
+      )
+      .run(value, input.repositoryId);
+    database
+      .prepare(
+        `UPDATE repository_sync_runs
+         SET status = 'running', started_at = COALESCE(started_at, ?)
+         WHERE id = ? AND status = 'queued'`,
+      )
+      .run(value, input.runId);
+    database
+      .prepare(
+        `UPDATE repository_sync_run_streams
+         SET status = 'running', started_at = COALESCE(started_at, ?)
+         WHERE run_id = ? AND status = 'queued'`,
+      )
+      .run(value, input.runId);
+  })();
+  return getSyncRun(database, input.runId);
+}
+
+/** Mark a not-yet-admitted run interrupted while preserving durable history state. */
+export function interruptSyncRun(
+  database: DatabaseClient,
+  runId: string,
+  interruptedAt?: Date | string,
+  reason = "Sync cancelled before admission",
+): SyncRunRecord {
+  const at = runTimestamp(interruptedAt);
+  const existing = getSyncRun(database, runId);
+  if (existing.status === "queued" || existing.status === "running") {
+    database.transaction(() => {
+      database
+        .prepare(
+          `UPDATE repository_sync_run_streams
+           SET status = 'interrupted', finished_at = ?, error = ?
+           WHERE run_id = ? AND status IN ('queued', 'running')`,
+        )
+        .run(at, reason, runId);
+      database
+        .prepare(
+          `UPDATE repository_sync_runs
+           SET status = 'interrupted', finished_at = ?, error = ?
+           WHERE id = ? AND status IN ('queued', 'running')`,
+        )
+        .run(at, reason, runId);
+    })();
+  }
+  return getSyncRun(database, runId);
+}
+
 export interface SyncRunPageUpdate {
   entityKind: EntityKind;
   pagesFetched?: number;
@@ -576,6 +671,7 @@ function mapHistoryState(row: Record<string, unknown>): RepositoryHistoryState {
     recoveryAnchorUpdatedAt: (row.recovery_anchor_updated_at as string | null) ?? null,
     lastRunId: (row.last_run_id as string | null) ?? null,
     lastError: (row.last_error as string | null) ?? null,
+    resumeAfter: (row.resume_after as string | null) ?? null,
     updatedAt: row.updated_at as string,
   };
 }
@@ -605,6 +701,7 @@ export interface UpdateHistoryStateInput {
   recoveryAnchorUpdatedAt?: string | null;
   lastRunId?: string | null;
   lastError?: string | null;
+  resumeAfter?: Date | string | null;
   updatedAt?: Date | string;
 }
 
@@ -620,7 +717,7 @@ export function updateRepositoryHistoryState(
       `UPDATE repository_history_state SET
          enabled = ?, status = ?, target_date = ?, oldest_covered_day = ?,
          cursor = ?, recovery_anchor_updated_at = ?, last_run_id = ?,
-         last_error = ?, updated_at = ?
+         last_error = ?, resume_after = ?, updated_at = ?
        WHERE repository_id = ? AND entity_kind = ?`,
     )
     .run(
@@ -634,6 +731,9 @@ export function updateRepositoryHistoryState(
         : input.recoveryAnchorUpdatedAt,
       input.lastRunId === undefined ? current.lastRunId : input.lastRunId,
       input.lastError === undefined ? current.lastError : input.lastError,
+      input.resumeAfter === undefined || input.resumeAfter === null
+        ? input.resumeAfter === null ? null : current.resumeAfter
+        : runTimestamp(input.resumeAfter),
       runTimestamp(input.updatedAt),
       repositoryId,
       entityKind,

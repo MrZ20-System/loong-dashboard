@@ -10,6 +10,7 @@ import { repositorySyncHistoryMigration } from "./migrations/007-repository-sync
 import { pullRequestLifecycleMigration } from "./migrations/008-pull-request-lifecycle.js";
 import { listQueryModesMigration } from "./migrations/009-list-query-modes.js";
 import { removeDailyProjectionsMigration } from "./migrations/010-remove-daily-projections.js";
+import { historyRateLimitRecoveryMigration } from "./migrations/011-history-rate-limit-recovery.js";
 import {
   recoverInterruptedSyncRuns,
   recoverInterruptedSyncStates,
@@ -31,6 +32,7 @@ const migrations: readonly Migration[] = [
   pullRequestLifecycleMigration,
   listQueryModesMigration,
   removeDailyProjectionsMigration,
+  historyRateLimitRecoveryMigration,
 ];
 
 function orderedMigrations(items: readonly Migration[]): readonly Migration[] {

@@ -203,6 +203,7 @@ export const repositoryHistoryState = sqliteTable(
       onDelete: "set null",
     }),
     lastError: text("last_error"),
+    resumeAfter: text("resume_after"),
     updatedAt: text("updated_at").notNull(),
   },
   (table) => [

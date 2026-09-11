@@ -2,6 +2,7 @@ import {
   completeSyncRunStream,
   completeSyncStream,
   createSyncRun,
+  beginQueuedForwardSync,
   failSyncRunStream,
   failSyncStream,
   getRepository,
@@ -11,10 +12,10 @@ import {
   getSyncRun,
   listRepositories,
   listCurrentPullRequestEnrichmentStates,
+  interruptSyncRun,
   markSyncRunStarted,
   recordSyncRunPage,
   recordSyncRunTarget,
-  startRepositorySync,
   SyncAlreadyRunningError,
   updateRepositoryHistoryState,
   upsertIssuePage,
@@ -52,7 +53,7 @@ const HISTORY_RATE_LIMIT_FLOOR = 200;
  * a provider that returns very small pages from turning continuation into a
  * tight loop, while still making an enabled history setting self-progressing.
  */
-const HISTORY_CONTINUATION_DELAY_MS = 25;
+const HISTORY_CONTINUATION_DELAY_MS = 250;
 
 export interface SyncCoordinatorLogger {
   error(...arguments_: readonly unknown[]): void;
@@ -145,6 +146,7 @@ interface FetchJob extends BaseJob {
 }
 
 type RepositorySyncJob = ForwardJob | HistoryJob | FetchJob;
+type ForegroundJob = ForwardJob | FetchJob;
 
 class RepositoryConcurrencyLimiter {
   private active = 0;
@@ -244,6 +246,12 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
   private readonly enricher: PullRequestFileEnricher | undefined;
   private readonly pending = new Set<Promise<void>>();
   private readonly activeRepositories = new Set<string>();
+  /** One admitted or globally-waiting job per repository. */
+  private readonly scheduledJobs = new Map<string, RepositorySyncJob>();
+  /** Foreground work is durable but remains outside repository running state until admitted. */
+  private readonly foregroundQueues = new Map<string, ForegroundJob[]>();
+  /** At most one continuation may wait behind the foreground FIFO. */
+  private readonly pendingHistoryJobs = new Map<string, HistoryJob>();
   private readonly historyContinuationTimers = new Map<string, {
     timer: ReturnType<typeof setTimeout>;
     cancel: () => void;
@@ -291,12 +299,25 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
 
   start(repositoryId: string, trigger: SyncRunTrigger = "manual"): SyncRun {
     if (this.closed) throw new Error("Cannot start a sync after coordinator close");
-    this.assertRepositoryAvailable(repositoryId);
     const repository = this.requireRepository(repositoryId);
+    this.assertForegroundAvailable(repositoryId);
+    if (this.hasForegroundJob(repositoryId, (job) => job.kind === "forward")) {
+      throw new SyncAlreadyRunningError(repositoryId);
+    }
     const pullRequestState = getRepositorySyncState(this.database, repositoryId, "pull_request");
     const issueState = getRepositorySyncState(this.database, repositoryId, "issue");
-    const run = startRepositorySync(this.database, repositoryId, this.timestamp(), trigger);
-    this.schedule({
+    const run = createSyncRun(this.database, {
+      repositoryId,
+      kind: "forward",
+      trigger,
+      attemptStartedAt: this.timestamp(),
+      watermarkBefore: {
+        pull_request: pullRequestState.watermarkUpdatedAt,
+        issue: issueState.watermarkUpdatedAt,
+      },
+      entityKinds: ["pull_request", "issue"],
+    });
+    this.enqueueForeground({
       run,
       repository,
       kind: "forward",
@@ -325,8 +346,8 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
     recoverInterrupted = false,
   ): SyncRun {
     if (this.closed) throw new Error("Cannot start a sync after coordinator close");
-    if (!continuation) this.assertRepositoryAvailable(repositoryId);
     const repository = this.requireRepository(repositoryId);
+    if (!continuation) this.assertHistoryAvailable(repositoryId);
     const pullRequestState = getRepositoryHistoryState(this.database, repositoryId, "pull_request");
     const issueState = getRepositoryHistoryState(this.database, repositoryId, "issue");
     if (
@@ -361,6 +382,7 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
         targetDate,
         lastRunId: run.syncRunId,
         lastError: null,
+        resumeAfter: null,
       });
     }
     if (issueNeedsWork) {
@@ -370,9 +392,10 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
         targetDate,
         lastRunId: run.syncRunId,
         lastError: null,
+        resumeAfter: null,
       });
     }
-    this.schedule({
+    const job: HistoryJob = {
       run,
       repository,
       kind: "history",
@@ -384,7 +407,12 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
       pageBudget: this.historyPageBudget,
       pullRequestNeedsWork,
       issueNeedsWork,
-    });
+    };
+    if (continuation && this.hasLocalWork(repositoryId)) {
+      this.pendingHistoryJobs.set(repositoryId, job);
+    } else {
+      this.schedule(job);
+    }
     return this.attachCompletion(run);
   }
 
@@ -405,6 +433,7 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
           : "paused",
         targetDate,
         lastError: enabled ? null : state.lastError,
+        resumeAfter: enabled ? targetChanged ? null : state.resumeAfter : null,
       });
     }
   }
@@ -433,10 +462,19 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
         "pull_request",
       );
       const issueState = getRepositoryHistoryState(this.database, repository.id, "issue");
+      this.clearExpiredHistoryResumeAfter(repository.id);
+      if (this.historyResumeAfter(repository.id) !== null) {
+        this.scheduleHistoryContinuation(repository.id);
+        continue;
+      }
       const resumable = [pullRequestState, issueState].some(
         (state) => this.canResumePersistedHistory(state),
       );
-      if (!resumable || this.activeRepositories.has(repository.id)) continue;
+      if (!resumable) continue;
+      if (this.hasLocalWork(repository.id)) {
+        this.scheduleHistoryContinuation(repository.id);
+        continue;
+      }
       try {
         this.startHistoryBatch(
           repository.id,
@@ -464,8 +502,13 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
       throw new Error("Pull request number must be a positive integer");
     }
     if (this.closed) throw new Error("Cannot start a sync after coordinator close");
-    this.assertRepositoryAvailable(repositoryId);
     const repository = this.requireRepository(repositoryId);
+    this.assertForegroundAvailable(repositoryId);
+    if (this.hasForegroundJob(repositoryId, (job) =>
+      job.kind === "fetch_pr" && job.number === number,
+    )) {
+      throw new SyncAlreadyRunningError(repositoryId);
+    }
     const run = createSyncRun(this.database, {
       repositoryId,
       kind: "fetch_pr",
@@ -473,7 +516,7 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
       selector: { number },
       entityKinds: ["pull_request"],
     });
-    this.schedule({
+    this.enqueueForeground({
       run,
       repository,
       kind: "fetch_pr",
@@ -501,10 +544,13 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
 
   async close(): Promise<void> {
     this.closed = true;
-    for (const [repositoryId, continuation] of this.historyContinuationTimers) {
-      continuation.cancel();
-      this.historyContinuationTimers.delete(repositoryId);
+    for (const continuation of [...this.historyContinuationTimers.values()]) continuation.cancel();
+    for (const queue of this.foregroundQueues.values()) {
+      for (const job of queue) this.interruptQueuedJob(job);
     }
+    this.foregroundQueues.clear();
+    for (const job of this.pendingHistoryJobs.values()) this.interruptQueuedJob(job);
+    this.pendingHistoryJobs.clear();
     await this.waitForIdle();
   }
 
@@ -534,20 +580,114 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
     return run;
   }
 
+  private enqueueForeground(job: ForegroundJob): void {
+    const queue = this.foregroundQueues.get(job.repository.id) ?? [];
+    queue.push(job);
+    this.foregroundQueues.set(job.repository.id, queue);
+    // Foreground work should never wait for a history delay.  The durable
+    // cursor remains in place and the unified pump will re-arm it afterwards.
+    this.cancelHistoryContinuation(job.repository.id);
+    this.pumpRepository(job.repository.id);
+  }
+
+  private hasForegroundJob(
+    repositoryId: string,
+    predicate: (job: ForegroundJob) => boolean,
+  ): boolean {
+    const scheduled = this.scheduledJobs.get(repositoryId);
+    if (scheduled !== undefined && scheduled.kind !== "history" && predicate(scheduled)) {
+      return true;
+    }
+    return this.foregroundQueues.get(repositoryId)?.some(predicate) ?? false;
+  }
+
+  private hasLocalWork(repositoryId: string): boolean {
+    return this.activeRepositories.has(repositoryId) ||
+      (this.foregroundQueues.get(repositoryId)?.length ?? 0) > 0 ||
+      this.pendingHistoryJobs.has(repositoryId);
+  }
+
+  /** Admit the repository's next foreground job, then its history continuation. */
+  private pumpRepository(repositoryId: string, timerFired = false): void {
+    if (this.closed || this.scheduledJobs.has(repositoryId)) return;
+
+    const foreground = this.foregroundQueues.get(repositoryId);
+    if (foreground !== undefined && foreground.length > 0) {
+      const job = foreground.shift()!;
+      if (foreground.length === 0) this.foregroundQueues.delete(repositoryId);
+      this.schedule(job);
+      return;
+    }
+
+    const history = this.pendingHistoryJobs.get(repositoryId);
+    if (history !== undefined) {
+      this.pendingHistoryJobs.delete(repositoryId);
+      this.schedule(history);
+      return;
+    }
+
+    if (timerFired) {
+      this.clearExpiredHistoryResumeAfter(repositoryId);
+      if (this.historyResumeAfter(repositoryId) !== null) {
+        this.scheduleHistoryContinuation(repositoryId);
+        return;
+      }
+      if (!this.hasHistoryContinuationIntent(repositoryId)) return;
+      const pullRequestState = getRepositoryHistoryState(
+        this.database,
+        repositoryId,
+        "pull_request",
+      );
+      const issueState = getRepositoryHistoryState(this.database, repositoryId, "issue");
+      try {
+        this.startHistoryBatch(
+          repositoryId,
+          {
+            targetDate: pullRequestState.targetDate ?? issueState.targetDate,
+            trigger: "system",
+          },
+          true,
+          true,
+        );
+      } catch (error: unknown) {
+        this.logError("Unable to continue repository history", error, { repositoryId });
+      }
+      return;
+    }
+
+    this.scheduleHistoryContinuation(repositoryId);
+  }
+
   private schedule(job: RepositorySyncJob): void {
+    if (this.closed) {
+      this.interruptQueuedJob(job);
+      return;
+    }
+    this.scheduledJobs.set(job.repository.id, job);
     this.activeRepositories.add(job.repository.id);
     const task = this.limiter
       .run(async () => {
-        markSyncRunStarted(this.database, job.run.syncRunId, this.timestamp());
+        const startedAt = this.timestamp();
+        // The public SyncRun is allocated when the request is queued, but all
+        // provider windows must be anchored to actual repository admission.
+        job.run.startedAt = startedAt;
+        if (job.kind === "forward") {
+          beginQueuedForwardSync(this.database, {
+            repositoryId: job.repository.id,
+            runId: job.run.syncRunId,
+            startedAt,
+          });
+        } else {
+          markSyncRunStarted(this.database, job.run.syncRunId, startedAt);
+        }
         await this.execute(job);
       }, job.kind === "history" ? "history" : "foreground")
       .catch((error: unknown) => this.recordUnexpectedFailure(job, error))
       .finally(() => {
+        this.scheduledJobs.delete(job.repository.id);
         this.activeRepositories.delete(job.repository.id);
         this.resolveCompletion(job.run.syncRunId);
-        if (job.kind === "history") {
-          this.scheduleHistoryContinuation(job.repository.id);
-        }
+        this.pumpRepository(job.repository.id);
       });
     this.pending.add(task);
     task.then(
@@ -564,99 +704,63 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
    */
   private scheduleHistoryContinuation(repositoryId: string): void {
     if (this.closed || this.historyContinuationTimers.has(repositoryId)) return;
-    if (this.activeRepositories.has(repositoryId)) return;
+    if (this.scheduledJobs.has(repositoryId)) return;
+    if ((this.foregroundQueues.get(repositoryId)?.length ?? 0) > 0) return;
+    if (this.pendingHistoryJobs.has(repositoryId)) return;
+    this.clearExpiredHistoryResumeAfter(repositoryId);
+    if (!this.hasHistoryContinuationIntent(repositoryId)) return;
 
-    const pullRequestState = getRepositoryHistoryState(
-      this.database,
-      repositoryId,
-      "pull_request",
-    );
-    const issueState = getRepositoryHistoryState(this.database, repositoryId, "issue");
-    const states = [pullRequestState, issueState];
-    if (
-      !states.some(
-        (state) =>
-          state.enabled &&
-          state.status === "running" &&
-          state.cursor !== null,
-      )
-    ) {
-      return;
-    }
-
-    let resolveTimer!: () => void;
+    const resumeAfter = this.historyResumeAfter(repositoryId);
+    const delay = resumeAfter === null
+      ? HISTORY_CONTINUATION_DELAY_MS
+      : Math.max(0, Date.parse(resumeAfter) - this.now().getTime());
+    const waitForIdle = resumeAfter === null;
+    let resolveTimer: (() => void) | undefined;
     let settled = false;
-    const waitForTimer = new Promise<void>((resolve) => {
-      resolveTimer = resolve;
-    });
+    const waitForTimer = waitForIdle
+      ? new Promise<void>((resolve) => {
+          resolveTimer = resolve;
+        })
+      : undefined;
     const settle = (): void => {
       if (settled) return;
       settled = true;
-      resolveTimer();
+      resolveTimer?.();
     };
     const timer = setTimeout(() => {
       this.historyContinuationTimers.delete(repositoryId);
-      if (this.closed || this.activeRepositories.has(repositoryId)) {
-        settle();
-        return;
-      }
-      try {
-        const currentPullRequestState = getRepositoryHistoryState(
-          this.database,
-          repositoryId,
-          "pull_request",
-        );
-        const currentIssueState = getRepositoryHistoryState(
-          this.database,
-          repositoryId,
-          "issue",
-        );
-        if (
-          ![currentPullRequestState, currentIssueState].some(
-            (state) =>
-              state.enabled &&
-              state.status === "running" &&
-              state.cursor !== null,
-          )
-        ) {
-          settle();
-          return;
-        }
-        this.startHistoryBatch(
-          repositoryId,
-          {
-            targetDate: currentPullRequestState.targetDate ?? currentIssueState.targetDate,
-            trigger: "system",
-          },
-          true,
-        );
-      } catch (error: unknown) {
-        this.logError("Unable to continue repository history", error, { repositoryId });
-        const message = error instanceof Error ? error.message : String(error);
-        for (const state of ["pull_request", "issue"] as const) {
-          const current = getRepositoryHistoryState(this.database, repositoryId, state);
-          if (current.status === "running") {
-            updateRepositoryHistoryState(this.database, repositoryId, state, {
-              status: "failed",
-              lastError: message,
-            });
-          }
-        }
-      } finally {
-        settle();
-      }
-    }, HISTORY_CONTINUATION_DELAY_MS);
+      settle();
+      if (!this.closed) this.pumpRepository(repositoryId, true);
+    }, Math.min(delay, 2_147_483_647));
     const cancel = (): void => {
       clearTimeout(timer);
       this.historyContinuationTimers.delete(repositoryId);
       settle();
     };
     this.historyContinuationTimers.set(repositoryId, { timer, cancel });
-    this.pending.add(waitForTimer);
-    waitForTimer.then(
-      () => this.pending.delete(waitForTimer),
-      () => this.pending.delete(waitForTimer),
-    );
+    if (waitForTimer !== undefined) {
+      this.pending.add(waitForTimer);
+      waitForTimer.then(
+        () => this.pending.delete(waitForTimer),
+        () => this.pending.delete(waitForTimer),
+      );
+    }
+  }
+
+  private cancelHistoryContinuation(repositoryId: string): void {
+    this.historyContinuationTimers.get(repositoryId)?.cancel();
+  }
+
+  private interruptQueuedJob(job: RepositorySyncJob): void {
+    try {
+      interruptSyncRun(this.database, job.run.syncRunId, this.timestamp());
+    } catch (error: unknown) {
+      this.logError("Unable to interrupt queued sync run", error, {
+        repositoryId: job.repository.id,
+        runId: job.run.syncRunId,
+      });
+    }
+    this.resolveCompletion(job.run.syncRunId);
   }
 
   private async execute(job: RepositorySyncJob): Promise<void> {
@@ -899,25 +1003,34 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
       ? job.pullRequestOldestObserved.value
       : job.issueOldestObserved.value;
     const paused = state.status === "paused";
+    const rateLimitPaused =
+      !completed &&
+      !paused &&
+      state.enabled &&
+      state.cursor !== null &&
+      rateLimit !== undefined &&
+      rateLimit.remaining < HISTORY_RATE_LIMIT_FLOOR &&
+      Number.isFinite(Date.parse(rateLimit.resetAt));
     const canContinue =
       !completed &&
       !paused &&
       state.enabled &&
       state.cursor !== null &&
-      (rateLimit === undefined || rateLimit.remaining >= HISTORY_RATE_LIMIT_FLOOR);
+      !rateLimitPaused;
     if (state.cursor === null || completed) {
       const boundary = oldest ?? this.calendarDay(this.timestamp());
       const target = job.targetDate ?? boundary;
       updateRepositoryHistoryState(this.database, job.repository.id, entityKind, {
         oldestCoveredDay: target,
         status: paused ? "paused" : completed || target <= boundary ? "completed" : "idle",
+        resumeAfter: null,
       });
     } else {
       updateRepositoryHistoryState(this.database, job.repository.id, entityKind, {
-        // Keep the stream running while a cursor remains and the provider did
-        // not stop us for rate-limit safety.  The coordinator will admit one
-        // delayed bounded continuation from this durable state.
+        // A low-watermark page is a durable pause, not a provider error.  No
+        // continuation is admitted until the provider's reset timestamp.
         status: canContinue ? "running" : paused ? "paused" : "idle",
+        resumeAfter: rateLimitPaused ? rateLimit!.resetAt : null,
       });
     }
     completeSyncRunStream(this.database, job.run.syncRunId, entityKind, {
@@ -986,9 +1099,16 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
         error,
         failedAt: this.timestamp(),
       });
-      failSyncRunStream(this.database, job.run.syncRunId, entityKind, error, this.timestamp());
     } catch (failure: unknown) {
       this.logError("Unable to record metadata sync failure", failure, {
+        repositoryId: job.repository.id,
+        entityKind,
+      });
+    }
+    try {
+      failSyncRunStream(this.database, job.run.syncRunId, entityKind, error, this.timestamp());
+    } catch (failure: unknown) {
+      this.logError("Unable to record metadata sync run failure", failure, {
         repositoryId: job.repository.id,
         entityKind,
       });
@@ -1044,6 +1164,55 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
     return job.targetDate !== null && oldestDay !== null && oldestDay <= job.targetDate;
   }
 
+  private hasHistoryContinuationIntent(repositoryId: string): boolean {
+    return [
+      getRepositoryHistoryState(this.database, repositoryId, "pull_request"),
+      getRepositoryHistoryState(this.database, repositoryId, "issue"),
+    ].some((state) => this.historyStateHasContinuationIntent(state));
+  }
+
+  private historyStateHasContinuationIntent(state: RepositoryHistoryState): boolean {
+    if (!state.enabled || state.cursor === null) return false;
+    if (state.status === "paused" || state.status === "completed") return false;
+    if (
+      state.targetDate !== null &&
+      state.oldestCoveredDay !== null &&
+      state.oldestCoveredDay <= state.targetDate
+    ) {
+      return false;
+    }
+    return state.status === "running" || this.canResumePersistedHistory(state);
+  }
+
+  private historyResumeAfter(repositoryId: string): string | null {
+    const now = this.now().getTime();
+    let latest: string | null = null;
+    for (const state of [
+      getRepositoryHistoryState(this.database, repositoryId, "pull_request"),
+      getRepositoryHistoryState(this.database, repositoryId, "issue"),
+    ]) {
+      if (!this.historyStateHasContinuationIntent(state) || state.resumeAfter === null) continue;
+      const timestamp = Date.parse(state.resumeAfter);
+      if (!Number.isFinite(timestamp) || timestamp <= now) continue;
+      if (latest === null || Date.parse(latest) < timestamp) latest = state.resumeAfter;
+    }
+    return latest;
+  }
+
+  private clearExpiredHistoryResumeAfter(repositoryId: string): void {
+    const now = this.now().getTime();
+    for (const entityKind of ["pull_request", "issue"] as const) {
+      const state = getRepositoryHistoryState(this.database, repositoryId, entityKind);
+      if (state.resumeAfter === null) continue;
+      const timestamp = Date.parse(state.resumeAfter);
+      if (!state.enabled || state.status === "paused" || !Number.isFinite(timestamp) || timestamp <= now) {
+        updateRepositoryHistoryState(this.database, repositoryId, entityKind, {
+          resumeAfter: null,
+        });
+      }
+    }
+  }
+
   private canResumePersistedHistory(state: RepositoryHistoryState): boolean {
     if (!state.enabled || state.cursor === null || state.lastRunId === null) return false;
     try {
@@ -1054,10 +1223,18 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
     }
   }
 
-  private assertRepositoryAvailable(repositoryId: string): void {
-    if (this.activeRepositories.has(repositoryId)) {
+  private assertForegroundAvailable(repositoryId: string): void {
+    const status = getRepositorySyncStatus(this.database, repositoryId);
+    if (
+      (status.pullRequests.status === "running" || status.issues.status === "running") &&
+      !this.hasForegroundJob(repositoryId, () => true)
+    ) {
       throw new SyncAlreadyRunningError(repositoryId);
     }
+  }
+
+  private assertHistoryAvailable(repositoryId: string): void {
+    if (this.hasLocalWork(repositoryId)) throw new SyncAlreadyRunningError(repositoryId);
     const status = getRepositorySyncStatus(this.database, repositoryId);
     if (status.pullRequests.status === "running" || status.issues.status === "running") {
       throw new SyncAlreadyRunningError(repositoryId);
