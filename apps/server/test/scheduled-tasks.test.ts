@@ -103,28 +103,88 @@ describe("scheduled task repository bindings", () => {
       payload: { action: "repository.sync" },
     });
     expect(rejectedUpdate.statusCode).toBe(400);
-    expect(rejectedUpdate.json().error.message).toContain("repositoryId");
+    expect(rejectedUpdate.json().error.message).toContain("managed by Settings");
 
     const bound = await app.inject({
       method: "POST",
       url: "/api/scheduled-tasks",
       payload: {
         ...baseSystemTask,
-        action: "knowledge.checkpoint",
+        action: "repository.sync",
         repositoryId: "repo",
       },
     });
     expect(bound.statusCode).toBe(201);
-    const boundId = bound.json().id as string;
-    const acceptedUpdate = await app.inject({
-      method: "PUT",
-      url: `/api/scheduled-tasks/${boundId}`,
-      payload: { action: "repository.sync" },
-    });
-    expect(acceptedUpdate.statusCode).toBe(200);
-    expect(acceptedUpdate.json()).toMatchObject({
+    expect(bound.json()).toMatchObject({
       action: "repository.sync",
       repositoryId: "repo",
     });
+  });
+
+  it("rejects generic PUT updates for system tasks", async () => {
+    const { app, database } = setup();
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/scheduled-tasks",
+      payload: {
+        ...baseSystemTask,
+        action: "knowledge.checkpoint",
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const taskId = created.json().id as string;
+
+    const rejected = await app.inject({
+      method: "PUT",
+      url: `/api/scheduled-tasks/${taskId}`,
+      payload: { cronExpression: "*/5 * * * *", enabled: true },
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.json().error.message).toContain("managed by Settings");
+
+    const current = database
+      .prepare("SELECT enabled, cron_expression FROM scheduled_tasks WHERE id = ?")
+      .get(taskId) as { enabled: number; cron_expression: string };
+    expect(current).toEqual({ enabled: 0, cron_expression: "0 * * * *" });
+  });
+
+  it("rejects converting an Agent task into a system task without changing it", async () => {
+    const { app, database } = setup();
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/scheduled-tasks",
+      payload: {
+        name: "Agent task",
+        cronExpression: "0 * * * *",
+        timezone: "UTC",
+        kind: "agent",
+        prompt: "Review the repository.",
+        workspacePath: "/workspace/repo",
+        provider: "provider",
+        model: "model",
+        reasoningEffort: "high",
+        enabled: false,
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const taskId = created.json().id as string;
+    const before = database
+      .prepare("SELECT * FROM scheduled_tasks WHERE id = ?")
+      .get(taskId);
+
+    const rejected = await app.inject({
+      method: "PUT",
+      url: `/api/scheduled-tasks/${taskId}`,
+      payload: { kind: "system", action: "knowledge.checkpoint" },
+    });
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.json().error.message).toContain("managed by Settings");
+
+    const after = database
+      .prepare("SELECT * FROM scheduled_tasks WHERE id = ?")
+      .get(taskId);
+    expect(after).toEqual(before);
   });
 });

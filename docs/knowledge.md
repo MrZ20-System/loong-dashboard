@@ -20,6 +20,6 @@ Web 的 Preview 隐藏开头 YAML front matter，Edit 使用 Monaco 并保留完
 
 ## 可选 Git checkpoint
 
-配置支持 `knowledge.checkpoint.autoCommit`、`autoPush`、`remote`、`sourceRef`、`remoteBranch`；`branch` 保留为旧 source-ref 别名，默认 remote backup branch 为 `loongboard-knowledge-backup`。Settings → Checkpoint 提供独立 checkpoint/push 周期、运行状态、Run now 和 Push now。Knowledge push 只执行显式 ref push，不隐式创建 checkpoint commit。执行 [runCheckpoint](../packages/git-workspace/src/checkpoint.ts) 时会在知识仓库执行 `git add -A` 和 commit，覆盖该仓库全部待提交变更。
+配置支持 `knowledge.checkpoint.autoCommit`、`autoPush`、`remote`、`sourceRef`、`remoteBranch`、`checkpointIntervalMinutes` 和 `pushIntervalMinutes`；默认 remote backup branch 为 `loongboard-knowledge-backup`。Settings → Checkpoint 提供独立 checkpoint/push 周期、运行状态、Run now 和 Push now。Knowledge push 只执行显式 ref push，不隐式创建 checkpoint commit。执行 [runCheckpoint](../packages/git-workspace/src/checkpoint.ts) 时会在知识仓库执行 `git add -A` 和 commit，覆盖该仓库全部待提交变更。
 
 失败记录在 Scheduler history 并显示于 Settings，不自动 pull、merge、rebase 或重试，也不回滚已保存的 Markdown。修改这部分时同时检查 [config.ts](../apps/server/src/config.ts)、controller 与 Git adapter，不能把“默认关闭”写成“未实现”。

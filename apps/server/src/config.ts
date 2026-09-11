@@ -49,9 +49,10 @@ const baseSystemConfigSchema = z
             remote: z.string().trim().min(1).optional().default("origin"),
             sourceRef: z.string().trim().min(1).optional(),
             remoteBranch: z.string().trim().min(1).optional().default("loongboard-knowledge-backup"),
-            /** Legacy alias for sourceRef. */
-            branch: z.string().trim().min(1).optional(),
+            checkpointIntervalMinutes: z.number().int().positive().nullable().optional(),
+            pushIntervalMinutes: z.number().int().positive().nullable().optional(),
           })
+          .strict()
           .optional(),
       })
       .strict(),

@@ -7,6 +7,14 @@ knowledge:
   path: ./knowledge
   inbox: inbox
   historyLimit: 10
+  checkpoint:
+    autoCommit: false
+    autoPush: false
+    remote: origin
+    sourceRef: main
+    remoteBranch: loongboard-knowledge-backup
+    checkpointIntervalMinutes: null
+    pushIntervalMinutes: null
 
 runtime:
   statePath: ./.loong

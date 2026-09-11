@@ -11,6 +11,7 @@ import { join, resolve } from "node:path";
 import {
   getRepositorySyncStatus,
   getRepository,
+  listRepositories,
   RepositoryNotFoundError,
   type DatabaseClient,
 } from "@loongboard/database";
@@ -23,7 +24,6 @@ import {
   codeBackupSettingsUpdateSchema,
   githubIntegrationSchema,
   githubTokenUpdateSchema,
-  jsonSourceSchema,
   knowledgeCheckpointSettingsSchema,
   knowledgeCheckpointSettingsUpdateSchema,
   providerSecretUpdateSchema,
@@ -32,6 +32,7 @@ import {
   repositorySettingsUpdateSchema,
   savedResponseSchema,
   removedResponseSchema,
+  settingsDocumentV2Schema,
   type AgentRuntimeSettings,
   type AgentRuntimeSettingsUpdate,
   type AgentArchiveSettings,
@@ -39,24 +40,25 @@ import {
   type CodeBackupSettings,
   type CodeBackupSettingsUpdate,
   type GitHubIntegration,
-  type JsonSource,
   type KnowledgeCheckpointSettings,
   type KnowledgeCheckpointSettingsUpdate,
   type RepositorySettings,
   type RepositorySettingsUpdate,
-  type RepositoryRetentionSettings,
   type RepositoryWorktreeSettings,
+  type SettingsDocumentV2,
 } from "@loongboard/contracts";
 import {
   GitHubCredentialService,
-  type GitHubCredentialSource,
-  type GitHubConnectionStatus,
   type GitHubMetadataProvider,
 } from "@loongboard/github";
 import { atomicWrite, isWithinRoot } from "@loongboard/knowledge";
 import type { FastifyInstance } from "fastify";
 
 import { InvalidRequestError, parseRequest, sendParsed } from "./route-helpers.js";
+import {
+  migrateSettingsV1ToV2,
+  type SettingsDocumentDefaults,
+} from "./settings-document.js";
 
 /**
  * Runtime data needed by the control center. The Server owns this adapter so
@@ -81,52 +83,74 @@ export interface AgentRuntimeSnapshot {
 export interface RepositorySettingsBridge {
   get?: (
     repositoryId: string,
-  ) => Promise<Partial<RepositorySettings> | null> | Partial<RepositorySettings> | null;
+  ) => Promise<Partial<RepositorySettingsRuntime> | null> | Partial<RepositorySettingsRuntime> | null;
   update?: (
     repositoryId: string,
     patch: RepositorySettingsUpdate,
-  ) => Promise<Partial<RepositorySettings> | null> | Partial<RepositorySettings> | null;
+  ) => Promise<Partial<RepositorySettingsRuntime> | null> | Partial<RepositorySettingsRuntime> | null;
 }
+
+export type RepositorySettingsRuntime = Pick<RepositorySettings, "nextSyncAt">;
 
 /** Worktree maintenance adapter; Settings remains the policy authority. */
 export interface RepositoryWorktreeBridge {
-  inspect?: (repositoryId: string) => Promise<Partial<RepositoryWorktreeSettings> | null> | Partial<RepositoryWorktreeSettings> | null;
-  reconcile?: (repositoryId: string) => Promise<Partial<RepositoryWorktreeSettings> | null> | Partial<RepositoryWorktreeSettings> | null;
-  cleanupUnused?: (repositoryId: string) => Promise<Partial<RepositoryWorktreeSettings> | null> | Partial<RepositoryWorktreeSettings> | null;
+  inspect?: (repositoryId: string) => Promise<Partial<RepositoryWorktreeRuntime> | null> | Partial<RepositoryWorktreeRuntime> | null;
+  reconcile?: (repositoryId: string) => Promise<Partial<RepositoryWorktreeRuntime> | null> | Partial<RepositoryWorktreeRuntime> | null;
+  cleanupUnused?: (repositoryId: string) => Promise<Partial<RepositoryWorktreeRuntime> | null> | Partial<RepositoryWorktreeRuntime> | null;
 }
+
+export type RepositoryWorktreeRuntime = Omit<
+  RepositoryWorktreeSettings,
+  "configuredSlots" | "idleCleanupTtlHours"
+>;
 
 /** Shared scheduler authority for the Knowledge-only checkpoint. */
 export interface KnowledgeCheckpointBridge {
   get?: () =>
-    | Promise<Partial<KnowledgeCheckpointSettings> | null>
-    | Partial<KnowledgeCheckpointSettings>
+    | Promise<Partial<KnowledgeCheckpointRuntime> | null>
+    | Partial<KnowledgeCheckpointRuntime>
     | null;
   update?: (
     patch: KnowledgeCheckpointSettingsUpdate,
-  ) => Promise<Partial<KnowledgeCheckpointSettings> | null> | Partial<KnowledgeCheckpointSettings> | null;
+  ) => Promise<Partial<KnowledgeCheckpointRuntime> | null> | Partial<KnowledgeCheckpointRuntime> | null;
   run?: () => Promise<void> | void;
   push?: () => Promise<void> | void;
 }
 
+export type KnowledgeCheckpointRuntime = Pick<
+  KnowledgeCheckpointSettings,
+  "nextRunAt" | "lastSuccessAt" | "lastError"
+>;
+
 /** Scheduler authority for the LoongBoard source repository backup tasks. */
 export interface CodeBackupBridge {
-  get?: () => Promise<Partial<CodeBackupSettings> | null> | Partial<CodeBackupSettings> | null;
+  get?: () => Promise<Partial<CodeBackupRuntime> | null> | Partial<CodeBackupRuntime> | null;
   update?: (
     patch: CodeBackupSettingsUpdate,
-  ) => Promise<Partial<CodeBackupSettings> | null> | Partial<CodeBackupSettings> | null;
+  ) => Promise<Partial<CodeBackupRuntime> | null> | Partial<CodeBackupRuntime> | null;
   runCheckpoint?: () => Promise<void> | void;
   runPush?: () => Promise<void> | void;
 }
 
+export type CodeBackupRuntime = Pick<
+  CodeBackupSettings,
+  "lastCheckpointAt" | "nextCheckpointAt" | "lastPushAt" | "nextPushAt" | "lastError"
+>;
+
 /** Scheduler authority for the normalized Agent conversation archive. */
 export interface AgentArchiveBridge {
-  get?: () => Promise<Partial<AgentArchiveSettings> | null> | Partial<AgentArchiveSettings> | null;
+  get?: () => Promise<Partial<AgentArchiveRuntime> | null> | Partial<AgentArchiveRuntime> | null;
   update?: (
     patch: AgentArchiveSettingsUpdate,
-  ) => Promise<Partial<AgentArchiveSettings> | null> | Partial<AgentArchiveSettings> | null;
+  ) => Promise<Partial<AgentArchiveRuntime> | null> | Partial<AgentArchiveRuntime> | null;
   runExport?: () => Promise<void> | void;
   runPush?: () => Promise<void> | void;
 }
+
+export type AgentArchiveRuntime = Pick<
+  AgentArchiveSettings,
+  "lastExportAt" | "nextExportAt" | "lastPushAt" | "nextPushAt" | "lastError"
+>;
 
 export interface SettingsControllerOptions {
   database: DatabaseClient;
@@ -155,44 +179,6 @@ export interface SettingsControllerOptions {
 export interface SettingsRoutesDependencies {
   controller: SettingsController;
 }
-
-interface SettingsDocument {
-  [key: string]: unknown;
-  version?: number;
-  repositories?: Record<string, unknown>;
-  github?: Record<string, unknown>;
-  agent?: Record<string, unknown>;
-  checkpoint?: Record<string, unknown>;
-  codeBackup?: Record<string, unknown>;
-  agentArchive?: Record<string, unknown>;
-  providers?: Record<string, unknown>;
-}
-
-const DEFAULT_RETENTION_MINUTES = 120;
-const DEFAULT_SYNC_FREQUENCY_MINUTES = 60;
-const DEFAULT_SYNC_LOOKBACK_DAYS = 30;
-const DEFAULT_REPOSITORY_RETENTION: RepositoryRetentionSettings = {
-  automaticArchiveEnabled: false,
-  archiveAfterDays: 7,
-  includeMergedPrs: true,
-  includeClosedPrs: true,
-  includeClosedIssues: true,
-  prunePayloadWhenArchived: true,
-};
-const DEFAULT_CHECKPOINT: KnowledgeCheckpointSettings = {
-  autoCommit: false,
-  autoPush: false,
-  remote: "origin",
-  sourceRef: "main",
-  remoteBranch: "loongboard-knowledge-backup",
-  branch: "main",
-  intervalMinutes: null,
-  checkpointIntervalMinutes: null,
-  pushIntervalMinutes: null,
-  nextRunAt: null,
-  lastSuccessAt: null,
-  lastError: null,
-};
 
 /**
  * Durable settings boundary used by the Settings control center.
@@ -248,35 +234,71 @@ export class SettingsController {
         filePath: join(this.statePath, "github-credential.json"),
         environment: this.environment,
       });
+    // Validate and normalize the durable boundary before the controller can
+    // serve a read or accept a write. Missing and V1 documents are rewritten
+    // atomically by readDocument; invalid V2 input is left untouched.
+    this.readDocument();
+  }
+
+  private documentDefaults(): SettingsDocumentDefaults {
+    const repositories: SettingsDocumentDefaults["repositories"] = {};
+    for (const repository of listRepositories(this.database)) {
+      repositories[repository.id] = { configuredSlots: repository.worktreeSlots };
+    }
+    const checkpoint = this.defaults.checkpoint ?? {};
+    return {
+      repositories,
+      agent: {
+        defaultProvider: this.defaults.defaultProvider,
+        defaultModel: this.defaults.defaultModel,
+        defaultReasoning: this.defaults.defaultReasoning,
+        retentionMinutes: this.defaults.retentionMinutes,
+      },
+      knowledgeBackup: {
+        autoCommit: checkpoint.autoCommit,
+        autoPush: checkpoint.autoPush,
+        remote: checkpoint.remote,
+        sourceRef: checkpoint.sourceRef,
+        remoteBranch: checkpoint.remoteBranch,
+        checkpointIntervalMinutes: checkpoint.checkpointIntervalMinutes,
+        pushIntervalMinutes: checkpoint.pushIntervalMinutes,
+      },
+      agentArchive: {
+        archiveRepositoryPath: resolve(this.systemRoot, "agent-archive"),
+      },
+    };
   }
 
   async repository(repositoryId: string): Promise<RepositorySettings> {
     this.requireRepository(repositoryId);
     const document = this.readDocument();
-    const stored = readRecord(document.repositories?.[repositoryId]);
+    const stored = document.repositories[repositoryId];
     const sync = getRepositorySyncStatus(this.database, repositoryId);
-    const worktree = this.readWorktreeSettings(stored.worktrees, repositoryId);
     const persisted: RepositorySettings = {
       repositoryId,
-      automaticSync: readBoolean(stored.automaticSync, false),
-      syncFrequencyMinutes: readPositiveInteger(
-        stored.syncFrequencyMinutes,
-        DEFAULT_SYNC_FREQUENCY_MINUTES,
-      ),
-      syncLookbackDays: readSyncLookbackDays(stored.syncLookbackDays),
-      nextSyncAt: readNullableString(stored.nextSyncAt),
+      automaticSync: stored.automaticSync,
+      syncFrequencyMinutes: stored.syncFrequencyMinutes,
+      syncLookbackDays: stored.syncLookbackDays,
+      nextSyncAt: null,
       lastSyncAt: latestTimestamp(sync.pullRequests.lastSuccessAt, sync.issues.lastSuccessAt),
       lastError: latestError(sync.pullRequests, sync.issues),
-      retention: this.readRetentionSettings(stored.retention),
-      worktrees: worktree,
+      retention: stored.retention,
+      worktrees: {
+        ...stored.worktrees,
+        physicalSlots: 0,
+        active: 0,
+        idle: 0,
+        dirty: 0,
+        pendingRetirement: 0,
+      },
     };
-    const authoritative = await this.repositorySchedules?.get?.(repositoryId);
+    const runtime = await this.repositorySchedules?.get?.(repositoryId);
     const status = await this.worktreeBridge?.inspect?.(repositoryId);
     return repositorySettingsSchema.parse({
       ...persisted,
-      ...(authoritative ?? {}),
+      nextSyncAt: runtime?.nextSyncAt ?? null,
       repositoryId,
-      worktrees: { ...worktree, ...(status ?? {}) },
+      worktrees: mergeWorktreeRuntime(persisted.worktrees, status),
     });
   }
 
@@ -284,22 +306,25 @@ export class SettingsController {
   repositorySettingsSync(repositoryId: string): RepositorySettings {
     this.requireRepository(repositoryId);
     const document = this.readDocument();
-    const stored = readRecord(document.repositories?.[repositoryId]);
+    const stored = document.repositories[repositoryId];
     const sync = getRepositorySyncStatus(this.database, repositoryId);
-    const worktree = this.readWorktreeSettings(stored.worktrees, repositoryId);
     return repositorySettingsSchema.parse({
       repositoryId,
-      automaticSync: readBoolean(stored.automaticSync, false),
-      syncFrequencyMinutes: readPositiveInteger(
-        stored.syncFrequencyMinutes,
-        DEFAULT_SYNC_FREQUENCY_MINUTES,
-      ),
-      syncLookbackDays: readSyncLookbackDays(stored.syncLookbackDays),
-      nextSyncAt: readNullableString(stored.nextSyncAt),
+      automaticSync: stored.automaticSync,
+      syncFrequencyMinutes: stored.syncFrequencyMinutes,
+      syncLookbackDays: stored.syncLookbackDays,
+      nextSyncAt: null,
       lastSyncAt: latestTimestamp(sync.pullRequests.lastSuccessAt, sync.issues.lastSuccessAt),
       lastError: latestError(sync.pullRequests, sync.issues),
-      retention: this.readRetentionSettings(stored.retention),
-      worktrees: worktree,
+      retention: stored.retention,
+      worktrees: {
+        ...stored.worktrees,
+        physicalSlots: 0,
+        active: 0,
+        idle: 0,
+        dirty: 0,
+        pendingRetirement: 0,
+      },
     });
   }
 
@@ -310,7 +335,18 @@ export class SettingsController {
     this.requireRepository(repositoryId);
     const validated = repositorySettingsUpdateSchema.parse(patch);
     const current = await this.repository(repositoryId);
-    const authoritative = await this.repositorySchedules?.update?.(repositoryId, {
+    const policy = this.readDocument().repositories[repositoryId];
+    const nextPolicy = {
+      automaticSync: validated.automaticSync ?? policy.automaticSync,
+      syncFrequencyMinutes: validated.syncFrequencyMinutes ?? policy.syncFrequencyMinutes,
+      syncLookbackDays: validated.syncLookbackDays ?? policy.syncLookbackDays,
+      retention: { ...policy.retention, ...(validated.retention ?? {}) },
+      worktrees: { ...policy.worktrees, ...(validated.worktrees ?? {}) },
+    };
+    this.updateDocument((document) => {
+      document.repositories[repositoryId] = nextPolicy;
+    });
+    const runtime = await this.repositorySchedules?.update?.(repositoryId, {
       ...(validated.automaticSync === undefined ? {} : { automaticSync: validated.automaticSync }),
       ...(validated.syncFrequencyMinutes === undefined ? {} : { syncFrequencyMinutes: validated.syncFrequencyMinutes }),
       ...(validated.syncLookbackDays === undefined ? {} : { syncLookbackDays: validated.syncLookbackDays }),
@@ -318,36 +354,24 @@ export class SettingsController {
         ? {}
         : { retention: { ...current.retention, ...validated.retention } }),
     });
-    const next = repositorySettingsSchema.parse({
-      ...current,
-      ...validated,
-      retention: { ...current.retention, ...(validated.retention ?? {}) },
-      worktrees: { ...current.worktrees, ...(validated.worktrees ?? {}) },
-      ...(authoritative ?? {}),
-      repositoryId,
-    });
-    this.updateDocument((document) => {
-      const repositories = readObject(document.repositories);
-      repositories[repositoryId] = {
-        ...readRecord(repositories[repositoryId]),
-        automaticSync: next.automaticSync,
-        syncFrequencyMinutes: next.syncFrequencyMinutes,
-        syncLookbackDays: next.syncLookbackDays,
-        retention: next.retention,
-        worktrees: {
-          configuredSlots: next.worktrees.configuredSlots,
-          idleCleanupTtlHours: next.worktrees.idleCleanupTtlHours,
-        },
-        ...(next.nextSyncAt === undefined ? {} : { nextSyncAt: next.nextSyncAt }),
-      };
-      document.repositories = repositories;
-    });
     const reconciled = validated.worktrees === undefined
       ? null
       : await this.worktreeBridge?.reconcile?.(repositoryId);
     return repositorySettingsSchema.parse({
-      ...next,
-      worktrees: { ...next.worktrees, ...(reconciled ?? {}) },
+      repositoryId,
+      ...nextPolicy,
+      nextSyncAt: runtime?.nextSyncAt ?? null,
+      lastSyncAt: current.lastSyncAt,
+      lastError: current.lastError,
+      worktrees: {
+        ...nextPolicy.worktrees,
+        physicalSlots: current.worktrees.physicalSlots,
+        active: current.worktrees.active,
+        idle: current.worktrees.idle,
+        dirty: current.worktrees.dirty,
+        pendingRetirement: current.worktrees.pendingRetirement,
+        ...(reconciled ?? {}),
+      },
     });
   }
 
@@ -358,27 +382,26 @@ export class SettingsController {
     const result = await this.worktreeBridge.cleanupUnused(repositoryId);
     return repositorySettingsSchema.parse({
       ...current,
-      worktrees: { ...current.worktrees, ...(result ?? {}) },
+      worktrees: mergeWorktreeRuntime(current.worktrees, result),
     });
   }
 
   async githubIntegration(): Promise<GitHubIntegration> {
     const credential = await this.credential.summary();
-    const stored = readRecord(this.readDocument().github);
-    const verifiedSource = readCredentialSource(stored.verifiedSource);
+    const stored = this.readDocument().github;
     const verification =
       credential.configured &&
-      verifiedSource !== undefined &&
-      verifiedSource === credential.source
+      stored.verifiedSource !== null &&
+      stored.verifiedSource === credential.source
         ? stored
-        : {};
+        : null;
     return githubIntegrationSchema.parse({
       configured: credential.configured,
       source: credential.source,
-      account: readAccount(verification.account),
-      rest: readQuota(verification.rest),
-      graphql: readQuota(verification.graphql),
-      lastVerifiedAt: readNullableString(verification.lastVerifiedAt),
+      account: verification?.account ?? null,
+      rest: verification?.rest ?? null,
+      graphql: verification?.graphql ?? null,
+      lastVerifiedAt: verification?.lastVerifiedAt ?? null,
     });
   }
 
@@ -394,7 +417,6 @@ export class SettingsController {
     const now = new Date().toISOString();
     this.updateDocument((document) => {
       document.github = {
-        ...readRecord(document.github),
         verifiedSource: summary.source,
         account: connection.account,
         rest: connection.rest,
@@ -421,7 +443,7 @@ export class SettingsController {
   }
 
   async agentSettings(): Promise<AgentRuntimeSettings> {
-    const stored = readRecord(this.readDocument().agent);
+    const stored = this.readDocument().agent;
     const runtime = await this.agent?.snapshot?.();
     const capabilities = runtime?.capabilities ?? null;
     return agentRuntimeSettingsSchema.parse({
@@ -429,22 +451,10 @@ export class SettingsController {
       version: runtime?.version ?? null,
       profile: runtime?.profile ?? null,
       connected: runtime?.connected ?? true,
-      defaultProvider: readNullableString(
-        stored.defaultProvider,
-        this.defaults.defaultProvider ?? null,
-      ),
-      defaultModel: readNullableString(
-        stored.defaultModel,
-        this.defaults.defaultModel ?? null,
-      ),
-      defaultReasoning: readNullableString(
-        stored.defaultReasoning,
-        this.defaults.defaultReasoning ?? null,
-      ),
-      retentionMinutes: readNonNegativeInteger(
-        stored.retentionMinutes,
-        this.defaults.retentionMinutes ?? DEFAULT_RETENTION_MINUTES,
-      ),
+      defaultProvider: stored.defaultProvider,
+      defaultModel: stored.defaultModel,
+      defaultReasoning: stored.defaultReasoning,
+      retentionMinutes: stored.retentionMinutes,
       capabilities,
     });
   }
@@ -457,44 +467,27 @@ export class SettingsController {
    */
   hydrateAgentRuntime(): void {
     if (this.agent?.update === undefined) return;
-    const stored = readRecord(this.readDocument().agent);
+    const stored = this.readDocument().agent;
     const patch: AgentRuntimeSettingsUpdate = {
-      defaultProvider: readNullableString(
-        stored.defaultProvider,
-        this.defaults.defaultProvider ?? null,
-      ),
-      defaultModel: readNullableString(
-        stored.defaultModel,
-        this.defaults.defaultModel ?? null,
-      ),
-      defaultReasoning: readNullableString(
-        stored.defaultReasoning,
-        this.defaults.defaultReasoning ?? null,
-      ),
-      retentionMinutes: readNonNegativeInteger(
-        stored.retentionMinutes,
-        this.defaults.retentionMinutes ?? DEFAULT_RETENTION_MINUTES,
-      ),
+      defaultProvider: stored.defaultProvider,
+      defaultModel: stored.defaultModel,
+      defaultReasoning: stored.defaultReasoning,
+      retentionMinutes: stored.retentionMinutes,
     };
     this.agent.update(patch);
   }
 
   async updateAgent(patch: AgentRuntimeSettingsUpdate): Promise<AgentRuntimeSettings> {
     const validated = agentRuntimeSettingsUpdateSchema.parse(patch);
-    await this.agent?.update?.(validated);
     this.updateDocument((document) => {
-      const agent = readRecord(document.agent);
-      for (const key of [
-        "defaultProvider",
-        "defaultModel",
-        "defaultReasoning",
-        "retentionMinutes",
-      ] as const) {
-        const value = validated[key];
-        if (value !== undefined) agent[key] = value;
-      }
+      const agent = { ...document.agent };
+      if (validated.defaultProvider !== undefined) agent.defaultProvider = validated.defaultProvider;
+      if (validated.defaultModel !== undefined) agent.defaultModel = validated.defaultModel;
+      if (validated.defaultReasoning !== undefined) agent.defaultReasoning = validated.defaultReasoning;
+      if (validated.retentionMinutes !== undefined) agent.retentionMinutes = validated.retentionMinutes;
       document.agent = agent;
     });
+    await this.agent?.update?.(validated);
     return this.agentSettings();
   }
 
@@ -505,15 +498,6 @@ export class SettingsController {
     } else {
       this.saveLocalProviderSecret(input.provider, input.secret);
     }
-    this.updateDocument((document) => {
-      const providers = readObject(document.providers);
-      providers[input.provider] = {
-        ...readRecord(providers[input.provider]),
-        configured: true,
-        updatedAt: new Date().toISOString(),
-      };
-      document.providers = providers;
-    });
     return savedResponseSchema.parse({ saved: true });
   }
 
@@ -551,76 +535,60 @@ export class SettingsController {
   }
 
   async checkpointSettings(): Promise<KnowledgeCheckpointSettings> {
-    const stored = readRecord(this.readDocument().checkpoint);
-    const authoritative = await this.checkpointBridge?.get?.();
+    const stored = this.readDocument().knowledgeBackup;
+    const runtime = await this.checkpointBridge?.get?.();
     return knowledgeCheckpointSettingsSchema.parse({
-      ...DEFAULT_CHECKPOINT,
-      ...(this.defaults.checkpoint ?? {}),
       ...stored,
-      ...(authoritative ?? {}),
+      nextRunAt: runtime?.nextRunAt ?? null,
+      lastSuccessAt: runtime?.lastSuccessAt ?? null,
+      lastError: runtime?.lastError ?? null,
     });
   }
 
   async codeBackupSettings(): Promise<CodeBackupSettings> {
-    const stored = readRecord(this.readDocument().codeBackup);
-    const authoritative = await this.codeBackupBridge?.get?.();
+    const stored = this.readDocument().codeBackup;
+    const runtime = await this.codeBackupBridge?.get?.();
     return codeBackupSettingsSchema.parse({
-      repositoryPath: readString(stored.repositoryPath, process.cwd()),
-      automaticCheckpoint: readBoolean(stored.automaticCheckpoint, false),
-      checkpointIntervalMinutes: readNullablePositiveInteger(stored.checkpointIntervalMinutes),
-      automaticPush: readBoolean(stored.automaticPush, false),
-      pushIntervalMinutes: readNullablePositiveInteger(stored.pushIntervalMinutes),
-      sourceRef: readString(stored.sourceRef, "main"),
-      remote: readString(stored.remote, "origin"),
-      remoteBranch: readString(stored.remoteBranch, "loongboard-backup"),
-      ...(authoritative ?? {}),
+      repositoryPath: this.systemRoot,
+      ...stored,
+      nextCheckpointAt: runtime?.nextCheckpointAt ?? null,
+      lastCheckpointAt: runtime?.lastCheckpointAt ?? null,
+      nextPushAt: runtime?.nextPushAt ?? null,
+      lastPushAt: runtime?.lastPushAt ?? null,
+      lastError: runtime?.lastError ?? null,
     });
   }
 
   codeBackupSettingsSync(): CodeBackupSettings {
-    const stored = readRecord(this.readDocument().codeBackup);
-    const authoritative = this.codeBackupBridge?.get?.();
-    const runtime = authoritative !== undefined && !(authoritative instanceof Promise)
-      ? authoritative
-      : null;
+    const stored = this.readDocument().codeBackup;
     return codeBackupSettingsSchema.parse({
-      // The application repository is an installation/topology fact, not a
-      // user-editable setting. A runtime bridge supplies the resolved root;
-      // the cwd fallback only supports controller-only tests.
-      repositoryPath: runtime?.repositoryPath ?? process.cwd(),
-      automaticCheckpoint: readBoolean(stored.automaticCheckpoint, runtime?.automaticCheckpoint ?? false),
-      checkpointIntervalMinutes: readNullablePositiveInteger(stored.checkpointIntervalMinutes) ?? runtime?.checkpointIntervalMinutes ?? null,
-      automaticPush: readBoolean(stored.automaticPush, runtime?.automaticPush ?? false),
-      pushIntervalMinutes: readNullablePositiveInteger(stored.pushIntervalMinutes) ?? runtime?.pushIntervalMinutes ?? null,
-      sourceRef: readString(stored.sourceRef, runtime?.sourceRef ?? "main"),
-      remote: readString(stored.remote, runtime?.remote ?? "origin"),
-      remoteBranch: readString(stored.remoteBranch, runtime?.remoteBranch ?? "loongboard-backup"),
+      repositoryPath: this.systemRoot,
+      ...stored,
+      nextCheckpointAt: null,
+      lastCheckpointAt: null,
+      nextPushAt: null,
+      lastPushAt: null,
+      lastError: null,
     });
   }
 
   async updateCodeBackup(patch: CodeBackupSettingsUpdate): Promise<CodeBackupSettings> {
     const validated = codeBackupSettingsUpdateSchema.parse(patch);
-    const current = await this.codeBackupSettings();
-    const authoritative = await this.codeBackupBridge?.update?.(validated);
-    const next = codeBackupSettingsSchema.parse({ ...current, ...validated, ...(authoritative ?? {}) });
+    const current = this.readDocument().codeBackup;
+    const nextPolicy = { ...current, ...validated };
     this.updateDocument((document) => {
-      const codeBackup = readRecord(document.codeBackup);
-      // Scheduling fields belong to SQLite scheduled_tasks. Keep the JSON
-      // document as a compatibility read source, but do not write a second
-      // cadence/enablement authority from the Settings UI.
-      delete codeBackup.automaticCheckpoint;
-      delete codeBackup.checkpointIntervalMinutes;
-      delete codeBackup.automaticPush;
-      delete codeBackup.pushIntervalMinutes;
-      delete codeBackup.repositoryPath;
-      document.codeBackup = {
-        ...codeBackup,
-        sourceRef: next.sourceRef,
-        remote: next.remote,
-        remoteBranch: next.remoteBranch,
-      };
+      document.codeBackup = nextPolicy;
     });
-    return next;
+    const runtime = await this.codeBackupBridge?.update?.(validated);
+    return codeBackupSettingsSchema.parse({
+      repositoryPath: this.systemRoot,
+      ...nextPolicy,
+      nextCheckpointAt: runtime?.nextCheckpointAt ?? null,
+      lastCheckpointAt: runtime?.lastCheckpointAt ?? null,
+      nextPushAt: runtime?.nextPushAt ?? null,
+      lastPushAt: runtime?.lastPushAt ?? null,
+      lastError: runtime?.lastError ?? null,
+    });
   }
 
   async runCodeBackupCheckpoint(): Promise<{ accepted: true }> {
@@ -640,67 +608,48 @@ export class SettingsController {
   }
 
   async agentArchiveSettings(): Promise<AgentArchiveSettings> {
-    const stored = readRecord(this.readDocument().agentArchive);
-    const authoritative = await this.agentArchiveBridge?.get?.();
+    const stored = this.readDocument().agentArchive;
+    const runtime = await this.agentArchiveBridge?.get?.();
     return agentArchiveSettingsSchema.parse({
-      ...(authoritative ?? {}),
-      archiveRepositoryPath: readString(
-        stored.archiveRepositoryPath,
-        authoritative?.archiveRepositoryPath ?? resolve(this.systemRoot, "agent-archive"),
-      ),
-      enabled: readBoolean(stored.enabled, authoritative?.enabled ?? false),
-      exportIntervalMinutes: readNullablePositiveInteger(stored.exportIntervalMinutes) ?? authoritative?.exportIntervalMinutes ?? null,
-      automaticPush: readBoolean(stored.automaticPush, authoritative?.automaticPush ?? false),
-      pushIntervalMinutes: readNullablePositiveInteger(stored.pushIntervalMinutes) ?? authoritative?.pushIntervalMinutes ?? null,
-      sourceRef: readString(stored.sourceRef, authoritative?.sourceRef ?? "main"),
-      remote: readString(stored.remote, authoritative?.remote ?? "origin"),
-      remoteBranch: readString(stored.remoteBranch, authoritative?.remoteBranch ?? "agent-history-backup"),
+      ...stored,
+      nextExportAt: runtime?.nextExportAt ?? null,
+      lastExportAt: runtime?.lastExportAt ?? null,
+      nextPushAt: runtime?.nextPushAt ?? null,
+      lastPushAt: runtime?.lastPushAt ?? null,
+      lastError: runtime?.lastError ?? null,
     });
   }
 
   agentArchiveSettingsSync(): AgentArchiveSettings {
-    const stored = readRecord(this.readDocument().agentArchive);
-    const authoritative = this.agentArchiveBridge?.get?.();
-    const runtime = authoritative !== undefined && !(authoritative instanceof Promise)
-      ? authoritative
-      : null;
+    const stored = this.readDocument().agentArchive;
     return agentArchiveSettingsSchema.parse({
-      archiveRepositoryPath: readString(
-        stored.archiveRepositoryPath,
-        runtime?.archiveRepositoryPath ?? resolve(this.systemRoot, "agent-archive"),
-      ),
-      enabled: readBoolean(stored.enabled, runtime?.enabled ?? false),
-      exportIntervalMinutes: readNullablePositiveInteger(stored.exportIntervalMinutes) ?? runtime?.exportIntervalMinutes ?? null,
-      automaticPush: readBoolean(stored.automaticPush, runtime?.automaticPush ?? false),
-      pushIntervalMinutes: readNullablePositiveInteger(stored.pushIntervalMinutes) ?? runtime?.pushIntervalMinutes ?? null,
-      sourceRef: readString(stored.sourceRef, runtime?.sourceRef ?? "main"),
-      remote: readString(stored.remote, runtime?.remote ?? "origin"),
-      remoteBranch: readString(stored.remoteBranch, runtime?.remoteBranch ?? "agent-history-backup"),
+      ...stored,
+      nextExportAt: null,
+      lastExportAt: null,
+      nextPushAt: null,
+      lastPushAt: null,
+      lastError: null,
     });
   }
 
   async updateAgentArchive(patch: AgentArchiveSettingsUpdate): Promise<AgentArchiveSettings> {
     const validated = agentArchiveSettingsUpdateSchema.parse(patch);
-    const current = await this.agentArchiveSettings();
-    const authoritative = await this.agentArchiveBridge?.update?.(validated);
-    const next = agentArchiveSettingsSchema.parse({ ...current, ...validated, ...(authoritative ?? {}) });
+    const current = this.readDocument().agentArchive;
+    const nextPolicy = { ...current, ...validated };
     this.updateDocument((document) => {
-      const archive = readRecord(document.agentArchive);
-      // enabled/cadence are owned by scheduled_tasks. Persist only the
-      // archive target and Git routing policy as the friendly UI projection.
-      delete archive.enabled;
-      delete archive.exportIntervalMinutes;
-      delete archive.automaticPush;
-      delete archive.pushIntervalMinutes;
       document.agentArchive = {
-        ...archive,
-        archiveRepositoryPath: next.archiveRepositoryPath,
-        sourceRef: next.sourceRef,
-        remote: next.remote,
-        remoteBranch: next.remoteBranch,
+        ...nextPolicy,
       };
     });
-    return next;
+    const runtime = await this.agentArchiveBridge?.update?.(validated);
+    return agentArchiveSettingsSchema.parse({
+      ...nextPolicy,
+      nextExportAt: runtime?.nextExportAt ?? null,
+      lastExportAt: runtime?.lastExportAt ?? null,
+      nextPushAt: runtime?.nextPushAt ?? null,
+      lastPushAt: runtime?.lastPushAt ?? null,
+      lastError: runtime?.lastError ?? null,
+    });
   }
 
   async runAgentArchiveExport(): Promise<{ accepted: true }> {
@@ -721,11 +670,12 @@ export class SettingsController {
 
   /** Synchronous seed used while composing the runtime before timers start. */
   checkpointSettingsSync(): KnowledgeCheckpointSettings {
-    const stored = readRecord(this.readDocument().checkpoint);
+    const stored = this.readDocument().knowledgeBackup;
     return knowledgeCheckpointSettingsSchema.parse({
-      ...DEFAULT_CHECKPOINT,
-      ...(this.defaults.checkpoint ?? {}),
       ...stored,
+      nextRunAt: null,
+      lastSuccessAt: null,
+      lastError: null,
     });
   }
 
@@ -733,42 +683,18 @@ export class SettingsController {
     patch: KnowledgeCheckpointSettingsUpdate,
   ): Promise<KnowledgeCheckpointSettings> {
     const validated = knowledgeCheckpointSettingsUpdateSchema.parse(patch);
-    // `branch` was historically the source ref. When an older client sends
-    // only that alias, normalize it before merging with the new field so the
-    // default `sourceRef: main` cannot mask the requested branch.
-    const normalized =
-      validated.sourceRef === undefined && validated.branch !== undefined
-        ? { ...validated, sourceRef: validated.branch }
-        : validated;
-    const current = await this.checkpointSettings();
-    const next = knowledgeCheckpointSettingsSchema.parse({
-      ...current,
-      ...normalized,
-    });
-    const authoritative = await this.checkpointBridge?.update?.(next);
-    const persisted = knowledgeCheckpointSettingsSchema.parse({
-      ...next,
-      ...(authoritative ?? {}),
-    });
+    const current = this.readDocument().knowledgeBackup;
+    const nextPolicy = { ...current, ...validated };
     this.updateDocument((document) => {
-      const checkpoint = readRecord(document.checkpoint);
-      // Scheduling fields belong to SQLite scheduled_tasks. Legacy values
-      // remain readable above, but every new Settings save removes their
-      // duplicate JSON authority.
-      delete checkpoint.autoCommit;
-      delete checkpoint.autoPush;
-      delete checkpoint.checkpointIntervalMinutes;
-      delete checkpoint.pushIntervalMinutes;
-      delete checkpoint.intervalMinutes;
-      document.checkpoint = {
-        ...checkpoint,
-        remote: persisted.remote,
-        sourceRef: persisted.sourceRef ?? persisted.branch,
-        remoteBranch: persisted.remoteBranch ?? "loongboard-knowledge-backup",
-        branch: persisted.sourceRef ?? persisted.branch,
-      };
+      document.knowledgeBackup = nextPolicy;
     });
-    return persisted;
+    const runtime = await this.checkpointBridge?.update?.(validated);
+    return knowledgeCheckpointSettingsSchema.parse({
+      ...nextPolicy,
+      nextRunAt: runtime?.nextRunAt ?? null,
+      lastSuccessAt: runtime?.lastSuccessAt ?? null,
+      lastError: runtime?.lastError ?? null,
+    });
   }
 
   async runCheckpoint(): Promise<{ accepted: true }> {
@@ -793,61 +719,15 @@ export class SettingsController {
     }
   }
 
-  private readWorktreeSettings(value: unknown, repositoryId: string): RepositoryWorktreeSettings {
-    const stored = readRecord(value);
-    const repository = getRepository(this.database, repositoryId);
-    return {
-      configuredSlots: readBoundedInteger(stored.configuredSlots, repository?.worktreeSlots ?? 1, 1, 8),
-      idleCleanupTtlHours: readBoundedInteger(stored.idleCleanupTtlHours, 24, 1, 24 * 365),
-      physicalSlots: 0,
-      active: 0,
-      idle: 0,
-      dirty: 0,
-      pendingRetirement: 0,
-    };
-  }
-
-  private readRetentionSettings(value: unknown): RepositoryRetentionSettings {
-    const stored = readRecord(value);
-    return {
-      automaticArchiveEnabled: readBoolean(
-        stored.automaticArchiveEnabled,
-        DEFAULT_REPOSITORY_RETENTION.automaticArchiveEnabled,
-      ),
-      archiveAfterDays: readBoundedInteger(
-        stored.archiveAfterDays,
-        DEFAULT_REPOSITORY_RETENTION.archiveAfterDays,
-        1,
-        3650,
-      ),
-      includeMergedPrs: readBoolean(
-        stored.includeMergedPrs,
-        DEFAULT_REPOSITORY_RETENTION.includeMergedPrs,
-      ),
-      includeClosedPrs: readBoolean(
-        stored.includeClosedPrs,
-        DEFAULT_REPOSITORY_RETENTION.includeClosedPrs,
-      ),
-      includeClosedIssues: readBoolean(
-        stored.includeClosedIssues,
-        DEFAULT_REPOSITORY_RETENTION.includeClosedIssues,
-      ),
-      prunePayloadWhenArchived: readBoolean(
-        stored.prunePayloadWhenArchived,
-        DEFAULT_REPOSITORY_RETENTION.prunePayloadWhenArchived,
-      ),
-    };
-  }
-
   private clearGithubVerification(): void {
     this.updateDocument((document) => {
-      const github = readRecord(document.github);
-      delete github.verifiedSource;
-      delete github.account;
-      delete github.rest;
-      delete github.graphql;
-      delete github.lastVerifiedAt;
-      document.github = github;
+      document.github = {
+        verifiedSource: null,
+        account: null,
+        rest: null,
+        graphql: null,
+        lastVerifiedAt: null,
+      };
     });
   }
 
@@ -860,8 +740,13 @@ export class SettingsController {
     chmodSync(path, 0o600);
   }
 
-  private readDocument(): SettingsDocument {
-    if (!existsSync(this.settingsPath)) return { version: 1 };
+  private readDocument(): SettingsDocumentV2 {
+    if (!existsSync(this.settingsPath)) {
+      const document = migrateSettingsV1ToV2(undefined, this.documentDefaults());
+      ensureRegularTarget(this.settingsPath);
+      atomicWrite(this.settingsPath, `${JSON.stringify(document, null, 2)}\n`);
+      return document;
+    }
     ensureRegularTarget(this.settingsPath);
     let raw: string;
     try {
@@ -876,15 +761,44 @@ export class SettingsController {
       throw new Error("settings.json is invalid JSON");
     }
     if (!isRecord(decoded)) throw new Error("settings.json must contain an object");
-    return decoded as SettingsDocument;
+    let document = migrateSettingsV1ToV2(decoded, this.documentDefaults());
+    const migrated = decoded.version !== 2;
+    if (migrated) {
+      ensureRegularTarget(this.settingsPath);
+      atomicWrite(this.settingsPath, `${JSON.stringify(document, null, 2)}\n`);
+      return document;
+    }
+    const defaults = this.documentDefaults();
+    let addedRepository = false;
+    for (const repository of Object.keys(defaults.repositories ?? {})) {
+      if (document.repositories[repository] !== undefined) continue;
+      const repositoryDocument = migrateSettingsV1ToV2(
+        { version: 1, repositories: { [repository]: {} } },
+        { repositories: { [repository]: defaults.repositories?.[repository] ?? {} } },
+      );
+      document = {
+        ...document,
+        repositories: {
+          ...document.repositories,
+          [repository]: repositoryDocument.repositories[repository],
+        },
+      };
+      addedRepository = true;
+    }
+    if (addedRepository) {
+      document = settingsDocumentV2Schema.parse(document);
+      ensureRegularTarget(this.settingsPath);
+      atomicWrite(this.settingsPath, `${JSON.stringify(document, null, 2)}\n`);
+    }
+    return document;
   }
 
-  private updateDocument(mutator: (document: SettingsDocument) => void): void {
+  private updateDocument(mutator: (document: SettingsDocumentV2) => void): void {
     const document = this.readDocument();
     mutator(document);
-    document.version = 1;
+    const validated = settingsDocumentV2Schema.parse(document);
     ensureRegularTarget(this.settingsPath);
-    atomicWrite(this.settingsPath, `${JSON.stringify(document, null, 2)}\n`);
+    atomicWrite(this.settingsPath, `${JSON.stringify(validated, null, 2)}\n`);
   }
 }
 
@@ -1003,55 +917,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function readRecord(value: unknown): Record<string, unknown> {
-  return isRecord(value) ? { ...value } : {};
-}
-
-function readObject(value: unknown): Record<string, unknown> {
-  return isRecord(value) ? value : {};
-}
-
-function readBoolean(value: unknown, fallback: boolean): boolean {
-  return typeof value === "boolean" ? value : fallback;
-}
-
-function readString(value: unknown, fallback: string): string {
-  return typeof value === "string" && value.trim().length > 0 ? value : fallback;
-}
-
-function readPositiveInteger(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isInteger(value) && value > 0
-    ? value
-    : fallback;
-}
-
-function readBoundedInteger(value: unknown, fallback: number, minimum: number, maximum: number): number {
-  return typeof value === "number" && Number.isInteger(value) && value >= minimum && value <= maximum
-    ? value
-    : Math.min(maximum, Math.max(minimum, fallback));
-}
-
-function readNullablePositiveInteger(value: unknown): number | null {
-  return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : null;
-}
-
-function readSyncLookbackDays(value: unknown): 7 | 30 {
-  return value === 7 || value === 30 ? value : DEFAULT_SYNC_LOOKBACK_DAYS;
-}
-
-function readNonNegativeInteger(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isInteger(value) && value >= 0
-    ? value
-    : fallback;
-}
-
-function readNullableString(value: unknown, fallback?: string | null): string | null {
-  if (value === null) return null;
-  return typeof value === "string" && value.trim().length > 0
-    ? value
-    : fallback ?? null;
-}
-
 function latestTimestamp(...timestamps: Array<string | null>): string | null {
   return timestamps
     .filter((value): value is string => value !== null)
@@ -1065,39 +930,25 @@ function latestError(...states: Array<{ lastAttemptAt: string | null; lastError:
   return failed[0]?.lastError ?? null;
 }
 
-function readCredentialSource(value: unknown): GitHubCredentialSource | undefined {
-  return value === "settings" ||
-    value === "GH_TOKEN" ||
-    value === "GITHUB_TOKEN" ||
-    value === "gh" ||
-    value === "none"
-    ? value
-    : undefined;
-}
-
-function readAccount(value: unknown): GitHubIntegration["account"] {
-  if (!isRecord(value) || typeof value.login !== "string" || value.login.trim().length === 0) {
-    return null;
-  }
+function mergeWorktreeRuntime(
+  policy: RepositoryWorktreeSettings,
+  runtime: Partial<RepositoryWorktreeRuntime> | null | undefined,
+): RepositoryWorktreeSettings {
+  if (runtime === null || runtime === undefined) return policy;
   return {
-    login: value.login,
-    ...(value.name === null || typeof value.name === "string" ? { name: value.name } : {}),
+    ...policy,
+    physicalSlots: runtime.physicalSlots ?? policy.physicalSlots,
+    active: runtime.active ?? policy.active,
+    idle: runtime.idle ?? policy.idle,
+    dirty: runtime.dirty ?? policy.dirty,
+    pendingRetirement: runtime.pendingRetirement ?? policy.pendingRetirement,
+    ...(runtime.pendingRetirementPaths === undefined
+      ? {}
+      : { pendingRetirementPaths: runtime.pendingRetirementPaths }),
+    ...(runtime.dirtyPaths === undefined ? {} : { dirtyPaths: runtime.dirtyPaths }),
+    ...(runtime.busyPaths === undefined ? {} : { busyPaths: runtime.busyPaths }),
+    ...(runtime.errors === undefined ? {} : { errors: runtime.errors }),
   };
-}
-
-function readQuota(value: unknown): GitHubIntegration["rest"] {
-  if (!isRecord(value)) return null;
-  const remaining = value.remaining;
-  const limit = value.limit;
-  const resetAt = value.resetAt;
-  if (
-    typeof remaining !== "number" || !Number.isInteger(remaining) || remaining < 0 ||
-    typeof limit !== "number" || !Number.isInteger(limit) || limit <= 0 ||
-    !(resetAt === null || typeof resetAt === "string")
-  ) {
-    return null;
-  }
-  return { remaining, limit, resetAt };
 }
 
 function safeProviderPath(root: string, provider: string): string {

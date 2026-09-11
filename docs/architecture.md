@@ -49,11 +49,12 @@ flowchart LR
 
 SIGINT/SIGTERM 经 [lifecycle.ts](../apps/server/src/lifecycle.ts) 触发幂等关闭；app 的关闭钩子按顺序等待同步、重分类、Agent、Knowledge、Scheduler，最后关闭 SQLite。增加后台服务时必须同时接入退出清理。
 
-Scheduler 是现有唯一的定时入口。它为持久任务维护 timer map；metadata maintenance 使用现有 `repository.metadata-maintenance` system action（默认每天 03:00，按配置时区）。该 action 每天执行固定的 runtime sync-run history purge；只有 Repository retention 的 automatic archive 开关打开时才追加 metadata archive/prune，不会添加第二个 timer、后台 cron 或独立调度框架。
+Scheduler 是现有唯一的定时入口。它为持久任务维护 timer map；metadata maintenance 使用现有 `repository.metadata-maintenance` system action（默认每天 03:00，按配置时区）。该 action 每天执行固定的 runtime sync-run history purge；只有 Repository retention 的 automatic archive 开关打开时才追加 metadata archive/prune，不会添加第二个 timer、后台 cron 或独立调度框架。Settings V2 是 system schedule policy authority；runtime 启动和 Settings 更新都会把 policy 投影到稳定的 `scheduled_tasks` 行，Scheduler 只执行 projection 并记录 runtime facts。
 
 ## 必须保持的边界
 
 - Web/Server 共享 contracts，禁止复制 HTTP schema。
+- `settings.json` V2 保存用户 policy；`scheduled_tasks` 是 system schedule projection，`scheduled_task_runs` 是 runtime history，runtime facts 不反向写 Settings。
 - 只有 agent-runtime-dsh 可以导入 `@deepseek-ai/*`；产品层消费自身事件。
 - 只有 github 包执行 `gh`；当前 GitHub 数据传输使用 HTTP fetch。
 - Git 命令在 git-workspace；Knowledge 的 checkpoint 也由该包执行。

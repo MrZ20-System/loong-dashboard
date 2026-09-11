@@ -21,6 +21,9 @@ import {
   getRepositorySyncState,
   type DatabaseClient,
 } from "@loongboard/database";
+import {
+  settingsDocumentV2Schema,
+} from "@loongboard/contracts";
 import { GitHubCredentialService } from "@loongboard/github";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -56,7 +59,67 @@ function fixture() {
 }
 
 describe("SettingsController", () => {
-  it("persists non-secret settings beside the system config and preserves unknown fields", async () => {
+  it("materializes a complete V2 document for a missing file", () => {
+    const { root, statePath, database } = fixture();
+    new SettingsController({
+      database,
+      systemRoot: root,
+      statePath,
+      environment: {},
+      credential: new GitHubCredentialService({
+        filePath: join(statePath, "github-credential.json"),
+        environment: {},
+        ghExecutable: "false",
+      }),
+    });
+
+    const persisted = JSON.parse(readFileSync(join(root, "settings.json"), "utf8")) as Record<string, unknown>;
+    expect(settingsDocumentV2Schema.safeParse(persisted).success).toBe(true);
+    expect(persisted).toMatchObject({
+      version: 2,
+      repositories: {
+        vllm: {
+          automaticSync: false,
+          syncFrequencyMinutes: 60,
+          syncLookbackDays: 30,
+          worktrees: { configuredSlots: 1, idleCleanupTtlHours: 24 },
+        },
+      },
+      knowledgeBackup: {
+        sourceRef: "main",
+        checkpointIntervalMinutes: null,
+        pushIntervalMinutes: null,
+      },
+      agentArchive: {
+        archiveRepositoryPath: join(root, "agent-archive"),
+      },
+    });
+  });
+
+  it("materializes a newly configured repository into an existing V2 document", () => {
+    const { root, statePath, database } = fixture();
+    const credential = () => new GitHubCredentialService({
+      filePath: join(statePath, "github-credential.json"),
+      environment: {},
+      ghExecutable: "false",
+    });
+    new SettingsController({ database, systemRoot: root, statePath, environment: {}, credential: credential() });
+    const settingsPath = join(root, "settings.json");
+    const document = JSON.parse(readFileSync(settingsPath, "utf8")) as Record<string, any>;
+    document.repositories = {};
+    writeFileSync(settingsPath, JSON.stringify(document), "utf8");
+
+    new SettingsController({ database, systemRoot: root, statePath, environment: {}, credential: credential() });
+    const persisted = JSON.parse(readFileSync(settingsPath, "utf8")) as Record<string, any>;
+    expect(persisted.repositories.vllm).toMatchObject({
+      automaticSync: false,
+      syncFrequencyMinutes: 60,
+      syncLookbackDays: 30,
+      worktrees: { configuredSlots: 1, idleCleanupTtlHours: 24 },
+    });
+  });
+
+  it("persists a canonical V2 document and drops legacy opaque fields", async () => {
     const { root, statePath, database } = fixture();
     const settingsPath = join(root, "settings.json");
     writeFileSync(
@@ -118,11 +181,13 @@ describe("SettingsController", () => {
     });
 
     const persisted = JSON.parse(readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
-    expect(persisted.unrelated).toEqual({ keep: true });
+    expect(persisted.version).toBe(2);
+    expect(persisted.unrelated).toBeUndefined();
     expect(persisted.agent).toMatchObject({ retentionMinutes: 0 });
     expect(persisted.repositories).toMatchObject({
       vllm: { automaticSync: true, syncFrequencyMinutes: 30, syncLookbackDays: 30 },
     });
+    expect(settingsDocumentV2Schema.safeParse(persisted).success).toBe(true);
   });
 
   it("fills retention defaults when upgrading a legacy repository and merges partial updates", async () => {
@@ -177,6 +242,359 @@ describe("SettingsController", () => {
         },
       },
     });
+  });
+
+  it("migrates V1 aliases with canonical precedence and discards runtime projections", () => {
+    const { root, statePath, database } = fixture();
+    writeFileSync(
+      join(root, "settings.json"),
+      JSON.stringify({
+        version: 1,
+        repositories: {
+          vllm: {
+            automaticSync: true,
+            syncFrequencyMinutes: 15,
+            syncLookbackDays: 7,
+            nextSyncAt: "2026-09-11T01:00:00.000Z",
+            lastSyncAt: "2026-09-10T01:00:00.000Z",
+            lastError: "old runtime error",
+            worktrees: {
+              configuredSlots: 2,
+              idleCleanupTtlHours: 48,
+              physicalSlots: 9,
+              active: 8,
+              errors: [{ slotPath: "slot", message: "old" }],
+            },
+          },
+        },
+        checkpoint: {
+          sourceRef: "canonical-source",
+          branch: "legacy-source",
+          checkpointIntervalMinutes: 15,
+          intervalMinutes: 3,
+          pushIntervalMinutes: 45,
+          nextRunAt: "2026-09-11T01:00:00.000Z",
+          lastSuccessAt: "2026-09-10T01:00:00.000Z",
+          lastError: "old checkpoint error",
+        },
+        codeBackup: {
+          repositoryPath: "/old/code",
+          automaticCheckpoint: true,
+          checkpointIntervalMinutes: 20,
+          automaticPush: true,
+          pushIntervalMinutes: 40,
+          sourceRef: "main",
+          remote: "origin",
+          remoteBranch: "code-backup",
+          nextCheckpointAt: "2026-09-11T01:00:00.000Z",
+          lastError: "old code error",
+        },
+        agentArchive: {
+          archiveRepositoryPath: "/old/archive",
+          enabled: true,
+          exportIntervalMinutes: 25,
+          automaticPush: true,
+          pushIntervalMinutes: 50,
+          sourceRef: "main",
+          remote: "origin",
+          remoteBranch: "archive-backup",
+          nextExportAt: "2026-09-11T01:00:00.000Z",
+          lastError: "old archive error",
+        },
+        agent: {
+          defaultProvider: "provider",
+          defaultModel: "model",
+          defaultReasoning: "high",
+          retentionMinutes: 9,
+          status: "offline",
+          capabilities: { providers: [] },
+        },
+        providers: { deepseek: { configured: true } },
+      }),
+      "utf8",
+    );
+
+    const controller = new SettingsController({
+      database,
+      systemRoot: root,
+      statePath,
+      environment: {},
+      credential: new GitHubCredentialService({
+        filePath: join(statePath, "github-credential.json"),
+        environment: {},
+        ghExecutable: "false",
+      }),
+    });
+    const persisted = JSON.parse(readFileSync(join(root, "settings.json"), "utf8")) as Record<string, any>;
+
+    expect(persisted.version).toBe(2);
+    expect(persisted.knowledgeBackup).toMatchObject({
+      sourceRef: "canonical-source",
+      checkpointIntervalMinutes: 15,
+      pushIntervalMinutes: 45,
+    });
+    expect(persisted.knowledgeBackup).not.toHaveProperty("branch");
+    expect(persisted.knowledgeBackup).not.toHaveProperty("intervalMinutes");
+    expect(persisted.repositories.vllm).not.toHaveProperty("nextSyncAt");
+    expect(persisted.repositories.vllm).not.toHaveProperty("lastSyncAt");
+    expect(persisted.repositories.vllm).not.toHaveProperty("lastError");
+    expect(persisted.repositories.vllm.worktrees).toEqual({
+      configuredSlots: 2,
+      idleCleanupTtlHours: 48,
+    });
+    expect(persisted.codeBackup).not.toHaveProperty("repositoryPath");
+    expect(persisted.codeBackup).not.toHaveProperty("nextCheckpointAt");
+    expect(persisted.agentArchive.archiveRepositoryPath).toBe("/old/archive");
+    expect(persisted.agentArchive).not.toHaveProperty("nextExportAt");
+    expect(persisted.agent).not.toHaveProperty("status");
+    expect(persisted.agent).not.toHaveProperty("capabilities");
+    expect(persisted).not.toHaveProperty("providers");
+    expect(settingsDocumentV2Schema.parse(persisted)).toEqual(persisted);
+    expect(controller.agentArchiveSettingsSync().archiveRepositoryPath).toBe("/old/archive");
+  });
+
+  it("rejects invalid V2 input without overwriting the original file", () => {
+    const { root, statePath, database } = fixture();
+    const credential = () => new GitHubCredentialService({
+      filePath: join(statePath, "github-credential.json"),
+      environment: {},
+      ghExecutable: "false",
+    });
+    new SettingsController({ database, systemRoot: root, statePath, environment: {}, credential: credential() });
+    const settingsPath = join(root, "settings.json");
+    const valid = JSON.parse(readFileSync(settingsPath, "utf8")) as Record<string, any>;
+    const invalidDocuments: Array<string> = [
+      "{",
+      "null",
+      "[]",
+      JSON.stringify({ version: 0 }),
+      JSON.stringify({ version: 3 }),
+      JSON.stringify({ ...valid, unknown: true }),
+      JSON.stringify({ ...valid, agent: { ...valid.agent, retentionMinutes: "bad" } }),
+      JSON.stringify({ ...valid, agent: undefined }),
+    ];
+
+    for (const invalid of invalidDocuments) {
+      writeFileSync(settingsPath, invalid, "utf8");
+      expect(() => new SettingsController({
+        database,
+        systemRoot: root,
+        statePath,
+        environment: {},
+        credential: credential(),
+      })).toThrow();
+      expect(readFileSync(settingsPath, "utf8")).toBe(invalid);
+    }
+  });
+
+  it("does not let bridge runtime projections overwrite durable policy", async () => {
+    const { root, statePath, database } = fixture();
+    const controller = new SettingsController({
+      database,
+      systemRoot: root,
+      statePath,
+      environment: {},
+      credential: new GitHubCredentialService({
+        filePath: join(statePath, "github-credential.json"),
+        environment: {},
+        ghExecutable: "false",
+      }),
+      agent: {
+        snapshot: () => ({
+          status: "ready",
+          version: "runtime-version",
+          profile: "runtime-profile",
+          connected: true,
+          capabilities: null,
+          defaultModel: "runtime-must-not-win",
+        } as never),
+      },
+      repositorySchedules: {
+        get: () => ({
+          automaticSync: false,
+          syncFrequencyMinutes: 1,
+          nextSyncAt: "2026-09-11T02:00:00.000Z",
+        } as never),
+      },
+      worktrees: {
+        inspect: () => ({
+          configuredSlots: 8,
+          idleCleanupTtlHours: 1,
+          physicalSlots: 2,
+          active: 1,
+          idle: 1,
+          dirty: 0,
+          pendingRetirement: 0,
+        } as never),
+      },
+      checkpoint: {
+        get: () => ({
+          remote: "runtime-origin",
+          sourceRef: "runtime-ref",
+          checkpointIntervalMinutes: 1,
+          pushIntervalMinutes: 2,
+          nextRunAt: "2026-09-11T02:00:00.000Z",
+          lastSuccessAt: null,
+          lastError: null,
+        } as never),
+      },
+      codeBackup: {
+        get: () => ({
+          automaticCheckpoint: true,
+          checkpointIntervalMinutes: 1,
+          nextCheckpointAt: "2026-09-11T02:00:00.000Z",
+          lastCheckpointAt: null,
+          lastPushAt: null,
+          nextPushAt: null,
+          lastError: null,
+        } as never),
+      },
+      agentArchive: {
+        get: () => ({
+          enabled: true,
+          exportIntervalMinutes: 1,
+          nextExportAt: "2026-09-11T02:00:00.000Z",
+          lastExportAt: null,
+          lastPushAt: null,
+          nextPushAt: null,
+          lastError: null,
+        } as never),
+      },
+    });
+
+    await controller.updateRepository("vllm", {
+      automaticSync: true,
+      syncFrequencyMinutes: 45,
+    });
+    await controller.updateAgent({ defaultModel: "policy-model" });
+    await controller.updateCheckpoint({ sourceRef: "policy-ref" });
+    await controller.updateCodeBackup({ sourceRef: "policy-code" });
+    await controller.updateAgentArchive({ sourceRef: "policy-archive" });
+
+    await expect(controller.repository("vllm")).resolves.toMatchObject({
+      automaticSync: true,
+      syncFrequencyMinutes: 45,
+      nextSyncAt: "2026-09-11T02:00:00.000Z",
+      worktrees: { configuredSlots: 1, physicalSlots: 2 },
+    });
+    await expect(controller.agentSettings()).resolves.toMatchObject({
+      defaultModel: "policy-model",
+      version: "runtime-version",
+    });
+    await expect(controller.checkpointSettings()).resolves.toMatchObject({
+      sourceRef: "policy-ref",
+      remote: "origin",
+      checkpointIntervalMinutes: null,
+      nextRunAt: "2026-09-11T02:00:00.000Z",
+    });
+    await expect(controller.codeBackupSettings()).resolves.toMatchObject({
+      sourceRef: "policy-code",
+      automaticCheckpoint: false,
+      repositoryPath: root,
+      nextCheckpointAt: "2026-09-11T02:00:00.000Z",
+    });
+    await expect(controller.agentArchiveSettings()).resolves.toMatchObject({
+      sourceRef: "policy-archive",
+      enabled: false,
+      nextExportAt: "2026-09-11T02:00:00.000Z",
+    });
+  });
+
+  it("writes policy before projecting every settings update and persists backup cadence", async () => {
+    const { root, statePath, database } = fixture();
+    const settingsPath = join(root, "settings.json");
+    const observed: Array<{ scope: string; document: Record<string, any> }> = [];
+    const observe = (scope: string) => {
+      observed.push({
+        scope,
+        document: JSON.parse(readFileSync(settingsPath, "utf8")) as Record<string, any>,
+      });
+    };
+    const controller = new SettingsController({
+      database,
+      systemRoot: root,
+      statePath,
+      environment: {},
+      credential: new GitHubCredentialService({
+        filePath: join(statePath, "github-credential.json"),
+        environment: {},
+        ghExecutable: "false",
+      }),
+      repositorySchedules: {
+        update: () => {
+          observe("repository");
+          return { nextSyncAt: null };
+        },
+      },
+      agent: {
+        update: () => observe("agent"),
+      },
+      checkpoint: {
+        update: () => {
+          observe("knowledge");
+          return null;
+        },
+      },
+      codeBackup: {
+        update: () => {
+          observe("code");
+          return null;
+        },
+      },
+      agentArchive: {
+        update: () => {
+          observe("archive");
+          return null;
+        },
+      },
+    });
+
+    await controller.updateRepository("vllm", { automaticSync: true, syncFrequencyMinutes: 15 });
+    await controller.updateAgent({ retentionMinutes: 7 });
+    await controller.updateCheckpoint({ checkpointIntervalMinutes: 20, pushIntervalMinutes: 40 });
+    await controller.updateCodeBackup({ automaticCheckpoint: true, checkpointIntervalMinutes: 30, automaticPush: true, pushIntervalMinutes: 60 });
+    const archivePath = join(root, "custom-agent-archive");
+    await controller.updateAgentArchive({ archiveRepositoryPath: archivePath, enabled: true, exportIntervalMinutes: 25, automaticPush: true, pushIntervalMinutes: 50 });
+
+    expect(observed.map((item) => item.scope)).toEqual([
+      "repository",
+      "agent",
+      "knowledge",
+      "code",
+      "archive",
+    ]);
+    for (const item of observed) expect(item.document.version).toBe(2);
+    const persisted = JSON.parse(readFileSync(settingsPath, "utf8")) as Record<string, any>;
+    expect(persisted.knowledgeBackup).toMatchObject({
+      checkpointIntervalMinutes: 20,
+      pushIntervalMinutes: 40,
+    });
+    expect(persisted.codeBackup).toMatchObject({
+      automaticCheckpoint: true,
+      checkpointIntervalMinutes: 30,
+      automaticPush: true,
+      pushIntervalMinutes: 60,
+    });
+    expect(persisted.agentArchive).toMatchObject({
+      archiveRepositoryPath: archivePath,
+      enabled: true,
+      exportIntervalMinutes: 25,
+      automaticPush: true,
+      pushIntervalMinutes: 50,
+    });
+    expect(persisted.codeBackup).not.toHaveProperty("repositoryPath");
+    const restarted = new SettingsController({
+      database,
+      systemRoot: root,
+      statePath,
+      environment: {},
+      credential: new GitHubCredentialService({
+        filePath: join(statePath, "github-credential.json"),
+        environment: {},
+        ghExecutable: "false",
+      }),
+    });
+    expect(restarted.agentArchiveSettingsSync().archiveRepositoryPath).toBe(archivePath);
   });
 
   it("hydrates persisted Agent overrides over system defaults after restart", () => {

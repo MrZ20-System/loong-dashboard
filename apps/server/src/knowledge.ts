@@ -123,8 +123,6 @@ export interface KnowledgeCheckpointOptions {
   remote?: string;
   sourceRef?: string;
   remoteBranch?: string;
-  branch?: string;
-  intervalMinutes?: number | null;
   checkpointIntervalMinutes?: number | null;
   pushIntervalMinutes?: number | null;
 }
@@ -158,8 +156,6 @@ export class KnowledgeController {
     remote: string;
     sourceRef: string;
     remoteBranch: string;
-    branch: string;
-    intervalMinutes: number | null;
     checkpointIntervalMinutes: number | null;
     pushIntervalMinutes: number | null;
   };
@@ -179,11 +175,9 @@ export class KnowledgeController {
       autoCommit: options.checkpoint?.autoCommit ?? false,
       autoPush: options.checkpoint?.autoPush ?? false,
       remote: options.checkpoint?.remote ?? "origin",
-      sourceRef: options.checkpoint?.sourceRef ?? options.checkpoint?.branch ?? "main",
+      sourceRef: options.checkpoint?.sourceRef ?? "main",
       remoteBranch: options.checkpoint?.remoteBranch ?? "loongboard-knowledge-backup",
-      branch: options.checkpoint?.branch ?? "main",
-      intervalMinutes: options.checkpoint?.intervalMinutes ?? null,
-      checkpointIntervalMinutes: options.checkpoint?.checkpointIntervalMinutes ?? options.checkpoint?.intervalMinutes ?? null,
+      checkpointIntervalMinutes: options.checkpoint?.checkpointIntervalMinutes ?? null,
       pushIntervalMinutes: options.checkpoint?.pushIntervalMinutes ?? null,
     };
   }
@@ -206,12 +200,7 @@ export class KnowledgeController {
     if (settings.autoPush !== undefined) this.checkpoint.autoPush = settings.autoPush;
     if (settings.remote !== undefined) this.checkpoint.remote = settings.remote;
     if (settings.sourceRef !== undefined) this.checkpoint.sourceRef = settings.sourceRef;
-    else if (settings.branch !== undefined) this.checkpoint.sourceRef = settings.branch;
     if (settings.remoteBranch !== undefined) this.checkpoint.remoteBranch = settings.remoteBranch;
-    if (settings.branch !== undefined) this.checkpoint.branch = settings.branch;
-    if (settings.intervalMinutes !== undefined) {
-      this.checkpoint.intervalMinutes = settings.intervalMinutes;
-    }
     if (settings.checkpointIntervalMinutes !== undefined) this.checkpoint.checkpointIntervalMinutes = settings.checkpointIntervalMinutes;
     if (settings.pushIntervalMinutes !== undefined) this.checkpoint.pushIntervalMinutes = settings.pushIntervalMinutes;
   }

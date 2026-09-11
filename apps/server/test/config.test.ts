@@ -79,6 +79,46 @@ describe("system configuration", () => {
     });
   });
 
+  it("accepts only canonical Knowledge checkpoint settings", () => {
+    const input = validConfigInput();
+    const config = parseSystemConfig({
+      ...input,
+      knowledge: {
+        ...input.knowledge,
+        checkpoint: {
+          autoCommit: true,
+          autoPush: false,
+          remote: "origin",
+          sourceRef: "main",
+          remoteBranch: "loongboard-knowledge-backup",
+          checkpointIntervalMinutes: 60,
+          pushIntervalMinutes: null,
+        },
+      },
+    }, "/workspace/system.yaml");
+
+    expect(config.knowledge.checkpoint).toEqual({
+      autoCommit: true,
+      autoPush: false,
+      remote: "origin",
+      sourceRef: "main",
+      remoteBranch: "loongboard-knowledge-backup",
+      checkpointIntervalMinutes: 60,
+      pushIntervalMinutes: null,
+    });
+  });
+
+  it.each(["branch", "intervalMinutes"])("rejects the Knowledge checkpoint alias %s", (alias) => {
+    const input = validConfigInput();
+    expect(() => parseSystemConfig({
+      ...input,
+      knowledge: {
+        ...input.knowledge,
+        checkpoint: { [alias]: alias === "branch" ? "main" : 60 },
+      },
+    }, "/workspace/system.yaml")).toThrowError(/Invalid system configuration/);
+  });
+
   it("allows container runtime host and port overrides without changing data paths", () => {
     const configPath = resolve(fixtureDirectory, "valid-system.yaml");
     const config = loadSystemConfig(configPath, {

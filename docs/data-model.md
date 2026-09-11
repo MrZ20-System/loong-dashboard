@@ -17,7 +17,7 @@
 | agent_sessions / agent_messages | origin、workspace、runtime id、状态、标准化消息；Archive projection 只读取 allowlist 字段 | [agent-service](../packages/database/src/agent-service.ts)、[agent-archive-service](../packages/database/src/agent-archive-service.ts) |
 | worktree_slots | PR affinity、目标 SHA、最近使用时间；物理 slot 删除后的缓存元数据清理 | [worktree-slot-service](../packages/database/src/worktree-slot-service.ts) |
 | knowledge_documents / document_versions | 文档身份/路径/hash/默认会话、完整内容短期版本 | [knowledge-service](../packages/database/src/knowledge-service.ts) |
-| scheduled_tasks / scheduled_task_runs | cron、可为空的 Agent-only 配置、下次执行及结果；system task 只保存 canonical action，run 只通过 `agent_session_id` 关联 Agent session | [scheduler-service](../packages/database/src/scheduler-service.ts) |
+| scheduled_tasks / scheduled_task_runs | Settings policy 的可执行 projection（cron、enabled、下次执行）与 runtime history；可为空的 Agent-only 配置；system task 只保存 canonical action，run 只通过 `agent_session_id` 关联 Agent session | [scheduler-service](../packages/database/src/scheduler-service.ts) |
 
 PR/Issue 的 number 需要与 repository id 组合定位，不能当作全局 id。PR Agent 会话可同时记录 PR number 与 target SHA；具体 scope 约束由 schema 和 contracts 定义，不可误读为所有目标字段只能选一个。
 
@@ -29,7 +29,7 @@ Repository summary 的 list/get projection 同时返回本地 `pullRequestCount`
 
 Domain 的用户源文件位于 system workspace 的 `domains/<repository-key>.json`，由 [DomainFileService](../apps/server/src/domain-file.ts) 负责安全路径、机械校验、pretty format 和外部编辑吸收；`domain_rules` 与 `pull_request_domains` 只是分类查询投影。文件解析失败时源文本仍可读，最近一次有效投影继续提供分类，修复后再投影并触发重分类。文件版本的内容和 hash 保存在 `runtime.statePath/domain-file-versions/`，它是短期恢复记录，不替代 JSON 源文件或 Git。
 
-控制中心非秘密值保存在 system workspace 的 `settings.json`，更新时保留同一文件中的未知字段；GitHub token 和 Agent provider secret 位于 `runtime.statePath` 下的私有文件（0600），不进入数据库、设置响应或版本记录。
+控制中心非秘密值以严格 V2 policy 文档保存在 system workspace 的 `settings.json`；它是用户 policy authority，更新先写 JSON，再由 runtime bridge 投影 system `scheduled_tasks` 的 enabled/cron。`scheduled_task_runs` 的 next/last/error 等 runtime facts 不写回 Settings。GitHub token 和 Agent provider secret 位于 `runtime.statePath` 下的私有文件（0600），不进入数据库、设置响应或版本记录。
 
 ## 恢复与数据边界
 

@@ -212,13 +212,10 @@ export const knowledgeCheckpointSettingsSchema = z
     autoCommit: z.boolean(),
     autoPush: z.boolean(),
     remote: z.string().trim().min(1),
-    sourceRef: z.string().trim().min(1).optional(),
-    remoteBranch: z.string().trim().min(1).optional(),
-    checkpointIntervalMinutes: z.number().int().positive().nullable().optional(),
-    pushIntervalMinutes: z.number().int().positive().nullable().optional(),
-    /** Legacy alias retained for settings.json/config compatibility. */
-    branch: z.string().trim().min(1),
-    intervalMinutes: z.number().int().positive().nullable().optional(),
+    sourceRef: z.string().trim().min(1),
+    remoteBranch: z.string().trim().min(1),
+    checkpointIntervalMinutes: z.number().int().positive().nullable(),
+    pushIntervalMinutes: z.number().int().positive().nullable(),
     nextRunAt: utcDateTimeSchema.nullable().optional(),
     lastSuccessAt: utcDateTimeSchema.nullable().optional(),
     lastError: z.string().nullable().optional(),
@@ -234,8 +231,6 @@ export const knowledgeCheckpointSettingsUpdateSchema = z
     remoteBranch: z.string().trim().min(1).optional(),
     checkpointIntervalMinutes: z.number().int().positive().nullable().optional(),
     pushIntervalMinutes: z.number().int().positive().nullable().optional(),
-    branch: z.string().trim().min(1).optional(),
-    intervalMinutes: z.number().int().positive().nullable().optional(),
   })
   .strict()
   .refine((value) => Object.values(value).some((field) => field !== undefined), {
@@ -323,6 +318,107 @@ export const settingsResponseSchema = z
   })
   .strict();
 
+/**
+ * Durable Settings V2 is deliberately smaller than the HTTP projections.
+ * Runtime state belongs to scheduled_tasks, run history, and the adapters;
+ * it must never be serialized into this document.
+ */
+export const settingsDocumentRepositoryWorktreeSchema = z
+  .object({
+    configuredSlots: z.number().int().min(1).max(8),
+    idleCleanupTtlHours: z.number().int().positive().max(24 * 365),
+  })
+  .strict();
+
+export const settingsDocumentRepositorySchema = z
+  .object({
+    automaticSync: z.boolean(),
+    syncFrequencyMinutes: z.number().int().positive(),
+    syncLookbackDays: z.union([z.literal(7), z.literal(30)]),
+    retention: repositoryRetentionSettingsSchema,
+    worktrees: settingsDocumentRepositoryWorktreeSchema,
+  })
+  .strict();
+
+export const settingsDocumentGithubAccountSchema = z
+  .object({
+    login: z.string().trim().min(1),
+    name: z.string().trim().min(1).nullable(),
+  })
+  .strict();
+
+export const settingsDocumentGithubSchema = z
+  .object({
+    verifiedSource: githubCredentialSourceSchema.nullable(),
+    account: settingsDocumentGithubAccountSchema.nullable(),
+    rest: githubQuotaSchema.nullable(),
+    graphql: githubQuotaSchema.nullable(),
+    lastVerifiedAt: utcDateTimeSchema.nullable(),
+  })
+  .strict();
+
+export const settingsDocumentAgentSchema = z
+  .object({
+    defaultProvider: z.string().trim().min(1).nullable(),
+    defaultModel: z.string().trim().min(1).nullable(),
+    defaultReasoning: z.string().trim().min(1).nullable(),
+    retentionMinutes: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const settingsDocumentKnowledgeBackupSchema = z
+  .object({
+    autoCommit: z.boolean(),
+    autoPush: z.boolean(),
+    remote: z.string().trim().min(1),
+    sourceRef: z.string().trim().min(1),
+    remoteBranch: z.string().trim().min(1),
+    checkpointIntervalMinutes: z.number().int().positive().nullable(),
+    pushIntervalMinutes: z.number().int().positive().nullable(),
+  })
+  .strict();
+
+export const settingsDocumentCodeBackupSchema = z
+  .object({
+    automaticCheckpoint: z.boolean(),
+    checkpointIntervalMinutes: z.number().int().positive().nullable(),
+    automaticPush: z.boolean(),
+    pushIntervalMinutes: z.number().int().positive().nullable(),
+    sourceRef: z.string().trim().min(1),
+    remote: z.string().trim().min(1),
+    remoteBranch: z.string().trim().min(1),
+  })
+  .strict();
+
+export const settingsDocumentAgentArchiveSchema = z
+  .object({
+    archiveRepositoryPath: z.string().trim().min(1),
+    enabled: z.boolean(),
+    exportIntervalMinutes: z.number().int().positive().nullable(),
+    automaticPush: z.boolean(),
+    pushIntervalMinutes: z.number().int().positive().nullable(),
+    sourceRef: z.string().trim().min(1),
+    remote: z.string().trim().min(1),
+    remoteBranch: z.string().trim().min(1),
+  })
+  .strict();
+
+export const settingsDocumentV2Schema = z
+  .object({
+    version: z.literal(2),
+    repositories: z.record(z.string(), settingsDocumentRepositorySchema),
+    github: settingsDocumentGithubSchema,
+    agent: settingsDocumentAgentSchema,
+    knowledgeBackup: settingsDocumentKnowledgeBackupSchema,
+    codeBackup: settingsDocumentCodeBackupSchema,
+    agentArchive: settingsDocumentAgentArchiveSchema,
+  })
+  .strict();
+
+// Keep the PascalCase alias available for callers that name the persisted
+// model after the document type rather than the Zod convention used here.
+export const SettingsDocumentV2Schema = settingsDocumentV2Schema;
+
 export const savedResponseSchema = z.object({ saved: z.literal(true) }).strict();
 export const removedResponseSchema = z.object({ removed: z.literal(true) }).strict();
 
@@ -347,6 +443,19 @@ export type KnowledgeCheckpointSettings = z.infer<
 >;
 export type KnowledgeCheckpointSettingsUpdate = z.infer<
   typeof knowledgeCheckpointSettingsUpdateSchema
+>;
+export type SettingsDocumentV2 = z.infer<typeof settingsDocumentV2Schema>;
+export type SettingsDocumentRepository = z.infer<
+  typeof settingsDocumentRepositorySchema
+>;
+export type SettingsDocumentKnowledgeBackup = z.infer<
+  typeof settingsDocumentKnowledgeBackupSchema
+>;
+export type SettingsDocumentCodeBackup = z.infer<
+  typeof settingsDocumentCodeBackupSchema
+>;
+export type SettingsDocumentAgentArchive = z.infer<
+  typeof settingsDocumentAgentArchiveSchema
 >;
 export type CodeBackupSettings = z.infer<typeof codeBackupSettingsSchema>;
 export type CodeBackupSettingsUpdate = z.infer<typeof codeBackupSettingsUpdateSchema>;

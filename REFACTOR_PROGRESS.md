@@ -1,7 +1,7 @@
 # LoongBoard Pre-Freeze Refactor Progress
 
 - Baseline SHA: `57d1cedafab9a1510d6616619cc33859f56d125d`
-- Current phase: Phase 2 — settings canonicalization
+- Current phase: Phase 3 — scheduler and system-action decoupling
 
 ## Frozen product semantics
 
@@ -26,15 +26,17 @@
 - Confirmed existing scheduler persistence tests cover a fresh Agent Session per occurrence, no task session reuse, and no Agent workspace claim for system tasks.
 - Phase 1: rebuilt Scheduler task/run, Agent session, and Worktree slot persistence into one canonical schema; removed runtime/API compatibility projections and legacy metadata cursor/date/sync paths.
 - Phase 1 review fixes: each scheduled run exposes its own Agent link; repository-scoped system actions require a valid repository; orphan legacy run pointers safely become NULL; system task Agent-only fields are NULL.
+- Phase 2: introduced a strict Settings V2 document and explicit missing/V1 migration, made Settings the sole operational-policy authority, and kept scheduler/run state as runtime-only projections.
+- Phase 2 review fixes: preserved the Agent archive repository path as durable policy, rejected Agent-to-system task conversion through the generic scheduler endpoint, and aligned strict-V2 operational documentation.
 
 ## Pending changes
 
-- Phase 2: migrate settings documents to strict V2 and make settings policy the only policy authority.
 - Phases 3–13: execute the supplied canonicalization plan in dependency order.
 
 ## Migrations added
 
 - `014_phase1_schema_canonicalization`: removes Scheduler conversation pointers, canonicalizes actions, makes `origin_kind` the Agent discriminator, removes Worktree busy ownership residue, and preserves valid child references.
+- Settings document migration: missing/V1 input is converted once to a complete strict V2 document and atomically written; invalid V2 input is rejected without overwrite.
 
 ## Legacy items removed
 
@@ -45,6 +47,9 @@
 - `worktree_slots.busy_session_id` runtime/schema use.
 - Generic list cursor sort variants and legacy metadata `date` query.
 - Test-only `startRepositorySync`; production Coordinator transitions are now the only path.
+- Knowledge Settings aliases `branch` and `intervalMinutes` outside the V1 migration boundary.
+- Runtime facts such as next/last/error timestamps from durable `settings.json` policy.
+- Generic scheduled-task mutation of system tasks, including Agent-to-system kind conversion.
 
 ## Tests run
 
@@ -58,6 +63,10 @@
 - Phase 1 Server scheduler/settings/sync/title: 5 files, 32 tests passed.
 - Phase 1 Web schedules/metadata/App: 4 files, 40 tests passed.
 - Contracts, Database, Server, and Web typechecks passed; `git diff --check` passed.
+- Phase 2 Contracts Settings: 1 file, 3 tests passed.
+- Phase 2 Server Settings/config/Knowledge/schedule projection/scheduler persistence/archive: 7 files, 50 tests passed.
+- Phase 2 Web Settings payload: 1 file, 1 test passed.
+- Contracts, Server, and Web typechecks passed; `git diff --check` passed.
 
 ## Known failures
 

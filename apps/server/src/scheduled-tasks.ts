@@ -112,13 +112,20 @@ export function registerScheduledTaskRoutes(
   app.put("/api/scheduled-tasks/:id", async (request, reply) => {
     const { id } = parseRequest(scheduledTaskParamsSchema, request.params);
     const body = parseRequest(scheduledTaskUpdateSchema, request.body) as ScheduledTaskUpdate;
-    const nextKind = body.kind ?? requireScheduledTask(database, id).kind;
+    const existing = requireScheduledTask(database, id);
+    if (existing.kind === "system") {
+      throw new InvalidRequestError(
+        "System scheduled tasks are managed by Settings",
+      );
+    }
+    const nextKind = body.kind ?? existing.kind;
     if (nextKind === "system") {
-      requireSupportedSystemAction(body.action ?? requireScheduledTask(database, id).action ?? undefined);
+      throw new InvalidRequestError(
+        "System scheduled tasks are managed by Settings",
+      );
     } else if (body.action !== undefined) {
       throw new InvalidRequestError("Agent tasks cannot define a system action");
     }
-    const existing = requireScheduledTask(database, id);
     const input = taskInput(body as ScheduledTaskCreate, defaults, existing);
     requireRepositoryForSystemAction(input.action, input.repositoryId);
     const nextRun =
