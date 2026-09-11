@@ -1,7 +1,7 @@
 # LoongBoard Pre-Freeze Refactor Progress
 
 - Baseline SHA: `57d1cedafab9a1510d6616619cc33859f56d125d`
-- Current phase: Paused after Phase 7
+- Current phase: Phase 9
 
 ## Frozen product semantics
 
@@ -34,10 +34,11 @@
 - Phase 5: made `buildProductionApp` the complete production HTTP factory with required product capabilities; the Server package index exposes only this production entry, while optional fallback behavior remains inside the focused-test-only `buildTestApp`, imported directly from `src/app` by same-repository tests. Removed the old `buildApp` entry point. Made the product `SyncCoordinator` history and fetch operations required, removed route-level undefined defenses, and supplied complete test fakes. Kept `app.ts` as the Fastify composition boundary while moving repositories, sync, metadata, and auth routes into `apps/server/src/routes/`; HTTP paths and schemas are unchanged.
 - Phase 6: removed the Drizzle adapter, schema, and dependency; made migrations plus typed SQLite services the sole database source boundary; removed the two legacy purge aliases and high-confidence dead/internal public APIs; and retained raw SQLite migration assertions for canonical tables and foreign-key verification.
 - Phase 7: split the GitHub integration by responsibility while preserving the package facade and observable behavior. `provider.ts` is now a 335-line composition facade over `github-client.ts`, `pull-requests.ts`, `issues.ts`, and the expanded `files.ts`; token resolution, HTTP/GraphQL handling, PR/Issue paging and history semantics, file batching/REST fallback, quota projection, public exports, and error contracts remain unchanged. Updated the package and architecture/current-state documentation, and replaced the last Server raw scheduled-task test queries with the typed database service so the architecture guard remains canonical.
+- Phase 8: kept `RepositorySyncCoordinator` as the sole queue/admission/priority/limiter/continuation/recovery owner while moving forward, history, and fetch-PR page execution into three narrow runners. Kept `AgentChatController` as the compatible route and caller facade while moving durable session/workspace/runtime lifecycle, turn execution/persistence, and SSE/interaction fan-out into dedicated services. Provisional native titles now retry after every successful turn with per-session single-flight and a 2-second cooldown; empty/error/unavailable results may retry, while generated/manual ownership remains final and title failures never affect turn success.
 
 ## Pending changes
 
-- Phases 8–13 remain.
+- Phases 9–13 remain.
 
 ## Migrations added
 
@@ -85,6 +86,7 @@
 - Phase 5 lightweight validation: Server typecheck; 12 health/auth/sync-history/issue-detail tests; 2 runtime construction/projection tests; 2 backend-critical regression tests; zero residual matches for old `buildApp`, old types, `SyncCoordinator` casts, and the five formerly optional methods; `git diff --check` passed. Full `pnpm check`, real UI, Docker, and live provider/DSH paths were not claimed.
 - Phase 6 lightweight validation: Database 9 files, 58 tests passed (including 15 migration tests); Database typecheck; Server typecheck; `git diff --check` passed. Root `pnpm check` and real runtime validation were not run.
 - Phase 7 lightweight validation: GitHub 4 files, 38 tests passed; GitHub typecheck and production build passed; production-condition package import smoke passed; Server scheduled-task test 3 tests passed; architecture guard and `git diff --check` passed. A separate Luna Max strict review found no P0/P1/P2 issue. Root `pnpm check`, live GitHub credentials/API behavior, and real UI were not run.
+- Phase 8 lightweight validation: 6 focused Server files, 44 tests passed for forward/history/fetch coordination, Agent lifecycle, title retry, interactions, and workspace ownership; Server typecheck, root typecheck, architecture guard, and `git diff --check` passed. A separate full Server run also passed 29 files/146 tests, and the strict cross-review found no P0/P1/P2 issue. Production build, live GitHub/DSH, and browser smoke were not run.
 
 ## Known failures
 

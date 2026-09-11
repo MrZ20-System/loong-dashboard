@@ -1,27 +1,17 @@
 import {
-  completeSyncRunStream,
-  completeSyncStream,
   createSyncRun,
   beginQueuedForwardSync,
-  failSyncRunStream,
-  failSyncStream,
   getRepository,
   getRepositoryHistoryState,
   getRepositorySyncState,
   getRepositorySyncStatus,
   getSyncRun,
   listRepositories,
-  listCurrentPullRequestEnrichmentStates,
   interruptSyncRun,
   markSyncRunStarted,
-  recordSyncRunPage,
-  recordSyncRunTarget,
   SyncAlreadyRunningError,
   updateRepositoryHistoryState,
-  upsertIssuePage,
-  upsertPullRequestPage,
   type DatabaseClient,
-  type EntityKind,
   type PullRequestEnrichmentTarget,
   type RepositoryHistoryState,
   type RepositoryRecord,
@@ -33,21 +23,25 @@ import {
 import type {
   GitHubMetadataProvider,
   GitHubRateLimit,
-  HistorySyncInput,
-  IssuePage,
-  IssueSyncInput,
-  PullRequestFetchInput,
-  PullRequestMetadata,
-  PullRequestPage,
-  PullRequestSyncInput,
 } from "@loongboard/github";
 
 import type { PullRequestFileEnricher } from "./enrichment-service.js";
+import {
+  ForwardSyncRunner,
+  type ForwardSyncJob,
+} from "./forward-sync-runner.js";
+import {
+  HistorySyncRunner,
+  type HistorySyncJob,
+} from "./history-sync-runner.js";
+import {
+  FetchPullRequestRunner,
+  type FetchPullRequestJob,
+} from "./fetch-pr-runner.js";
 
 const DEFAULT_MAX_CONCURRENT_REPOSITORIES = 2;
 const DEFAULT_CALENDAR_TIME_ZONE = "UTC";
 const DEFAULT_HISTORY_PAGE_BUDGET = 20;
-const HISTORY_RATE_LIMIT_FLOOR = 200;
 /**
  * Keep the next bounded history batch asynchronous.  A small delay prevents
  * a provider that returns very small pages from turning continuation into a
@@ -118,39 +112,8 @@ export interface SyncCoordinator {
   close(): Promise<void>;
 }
 
-interface BaseJob {
-  readonly run: SyncRun;
-  readonly repository: RepositoryRecord;
-}
-
-interface ForwardJob extends BaseJob {
-  readonly kind: "forward";
-  readonly pullRequestState: RepositorySyncState;
-  readonly issueState: RepositorySyncState;
-  readonly lookbackDays: number | undefined;
-  readonly targetNumbers: Map<number, PullRequestEnrichmentTarget>;
-}
-
-interface HistoryJob extends BaseJob {
-  readonly kind: "history";
-  readonly targetDate: string | null;
-  readonly pullRequestState: RepositoryHistoryState;
-  readonly issueState: RepositoryHistoryState;
-  readonly pullRequestOldestObserved: { value: string | null };
-  readonly issueOldestObserved: { value: string | null };
-  readonly pageBudget: number;
-  readonly pullRequestNeedsWork: boolean;
-  readonly issueNeedsWork: boolean;
-}
-
-interface FetchJob extends BaseJob {
-  readonly kind: "fetch_pr";
-  readonly number: number;
-  readonly targetNumbers: Map<number, PullRequestEnrichmentTarget>;
-}
-
-type RepositorySyncJob = ForwardJob | HistoryJob | FetchJob;
-type ForegroundJob = ForwardJob | FetchJob;
+type RepositorySyncJob = ForwardSyncJob | HistorySyncJob | FetchPullRequestJob;
+type ForegroundJob = ForwardSyncJob | FetchPullRequestJob;
 
 class RepositoryConcurrencyLimiter {
   private active = 0;
@@ -248,6 +211,9 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
   private readonly now: () => Date;
   private readonly logger: SyncCoordinatorLogger;
   private readonly enricher: PullRequestFileEnricher | undefined;
+  private readonly forwardRunner: ForwardSyncRunner;
+  private readonly historyRunner: HistorySyncRunner;
+  private readonly fetchPullRequestRunner: FetchPullRequestRunner;
   private readonly pending = new Set<Promise<void>>();
   private readonly activeRepositories = new Set<string>();
   /** One admitted or globally-waiting job per repository. */
@@ -255,7 +221,7 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
   /** Foreground work is durable but remains outside repository running state until admitted. */
   private readonly foregroundQueues = new Map<string, ForegroundJob[]>();
   /** At most one continuation may wait behind the foreground FIFO. */
-  private readonly pendingHistoryJobs = new Map<string, HistoryJob>();
+  private readonly pendingHistoryJobs = new Map<string, HistorySyncJob>();
   private readonly activeMetadataMaintenance = new Set<string>();
   private readonly historyContinuationTimers = new Map<string, {
     timer: ReturnType<typeof setTimeout>;
@@ -292,6 +258,32 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
     this.now = options.now ?? (() => new Date());
     this.logger = options.logger ?? console;
     this.enricher = options.enricher;
+    const enrichPullRequestFiles = (
+      repository: RepositoryRecord,
+      rateLimit: GitHubRateLimit | undefined,
+      targets: readonly PullRequestEnrichmentTarget[],
+    ): Promise<void> => this.enrichPullRequestFiles(repository, rateLimit, targets);
+    this.forwardRunner = new ForwardSyncRunner({
+      database: this.database,
+      provider: this.provider,
+      logger: this.logger,
+      timestamp: () => this.timestamp(),
+      enrichPullRequestFiles,
+    });
+    this.historyRunner = new HistorySyncRunner({
+      database: this.database,
+      provider: this.provider,
+      logger: this.logger,
+      timestamp: () => this.timestamp(),
+      calendarDay: (value) => this.calendarDay(value),
+    });
+    this.fetchPullRequestRunner = new FetchPullRequestRunner({
+      database: this.database,
+      provider: this.provider,
+      logger: this.logger,
+      timestamp: () => this.timestamp(),
+      enrichPullRequestFiles,
+    });
   }
 
   get activeRepositoryCount(): number {
@@ -418,7 +410,7 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
         resumeAfter: null,
       });
     }
-    const job: HistoryJob = {
+    const job: HistorySyncJob = {
       run,
       repository,
       kind: "history",
@@ -792,369 +784,11 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
 
   private async execute(job: RepositorySyncJob): Promise<void> {
     if (job.kind === "forward") {
-      await Promise.all([this.consumeForwardPullRequests(job), this.consumeForwardIssues(job)]);
+      await this.forwardRunner.run(job);
     } else if (job.kind === "history") {
-      await Promise.all([this.consumeHistoryPullRequests(job), this.consumeHistoryIssues(job)]);
+      await this.historyRunner.run(job);
     } else {
-      await this.consumeFetchPullRequest(job);
-    }
-  }
-
-  private async consumeForwardPullRequests(job: ForwardJob): Promise<void> {
-    try {
-      let latestRateLimit: GitHubRateLimit | undefined;
-      const input: PullRequestSyncInput = {
-        repository: toRepositoryRef(job.repository),
-        mode: syncMode(job.pullRequestState),
-        watermarkUpdatedAt: job.pullRequestState.watermarkUpdatedAt,
-        syncStartedAt: job.run.startedAt,
-        ...(job.lookbackDays === undefined ? {} : { lookbackDays: job.lookbackDays }),
-      };
-      for await (const page of this.provider.fetchPullRequestUpdates(input)) {
-        const written = this.persistForwardPullRequestPage(job, page);
-        recordSyncRunPage(this.database, job.run.syncRunId, {
-          entityKind: "pull_request",
-          itemsSeen: page.items.length,
-          itemsWritten: written,
-          rateLimitRemaining: page.rateLimit.remaining,
-        });
-        latestRateLimit = page.rateLimit;
-      }
-      const state = this.completeMetadataStream(job, "pull_request", latestRateLimit);
-      await this.enrichPullRequestFiles(job.repository, latestRateLimit, [...job.targetNumbers.values()]);
-      completeSyncRunStream(this.database, job.run.syncRunId, "pull_request", {
-        finishedAt: this.timestamp(),
-        rateLimitRemaining: latestRateLimit?.remaining,
-        watermarkAfter: state.watermarkUpdatedAt,
-      });
-    } catch (error: unknown) {
-      this.failForwardStream(job, "pull_request", error);
-    }
-  }
-
-  private async consumeForwardIssues(job: ForwardJob): Promise<void> {
-    try {
-      let latestRateLimit: GitHubRateLimit | undefined;
-      const input: IssueSyncInput = {
-        repository: toRepositoryRef(job.repository),
-        mode: syncMode(job.issueState),
-        watermarkUpdatedAt: job.issueState.watermarkUpdatedAt,
-        syncStartedAt: job.run.startedAt,
-        ...(job.lookbackDays === undefined ? {} : { lookbackDays: job.lookbackDays }),
-      };
-      for await (const page of this.provider.fetchIssueUpdates(input)) {
-        const written = upsertIssuePage(this.database, job.repository.id, page.items);
-        recordSyncRunPage(this.database, job.run.syncRunId, {
-          entityKind: "issue",
-          itemsSeen: page.items.length,
-          itemsWritten: written,
-          rateLimitRemaining: page.rateLimit.remaining,
-        });
-        latestRateLimit = page.rateLimit;
-      }
-      const state = this.completeMetadataStream(job, "issue", latestRateLimit);
-      completeSyncRunStream(this.database, job.run.syncRunId, "issue", {
-        finishedAt: this.timestamp(),
-        rateLimitRemaining: latestRateLimit?.remaining,
-        watermarkAfter: state.watermarkUpdatedAt,
-      });
-    } catch (error: unknown) {
-      this.failForwardStream(job, "issue", error);
-    }
-  }
-
-  private persistForwardPullRequestPage(job: ForwardJob, page: PullRequestPage): number {
-    const before = this.readCurrentPullRequestHeads(job.repository.id, page.items);
-    const written = upsertPullRequestPage(this.database, job.repository.id, page.items);
-    for (const item of page.items) {
-      const previous = before.get(item.number);
-      const reason = previous === undefined
-        ? "new"
-        : previous.headSha !== item.headSha
-          ? "head_changed"
-          : previous.enriched ? null : "retry";
-      if (reason !== null) {
-        const target = { number: item.number, nodeId: item.nodeId, headSha: item.headSha };
-        job.targetNumbers.set(item.number, target);
-        recordSyncRunTarget(this.database, job.run.syncRunId, {
-          repositoryId: job.repository.id,
-          prNumber: item.number,
-          headSha: item.headSha,
-          reason,
-        });
-      }
-    }
-    return written;
-  }
-
-  private async consumeHistoryPullRequests(job: HistoryJob): Promise<void> {
-    try {
-      if (!job.pullRequestNeedsWork) {
-        completeSyncRunStream(this.database, job.run.syncRunId, "pull_request", {
-          finishedAt: this.timestamp(),
-          watermarkAfter: null,
-        });
-        return;
-      }
-      if (this.provider.fetchPullRequestHistory === undefined) {
-        throw new Error("GitHub provider does not support durable pull request history pagination");
-      }
-      let latestRateLimit: GitHubRateLimit | undefined;
-      const input: HistorySyncInput = {
-        repository: toRepositoryRef(job.repository),
-        cursor: job.pullRequestState.cursor,
-        recoveryAnchorUpdatedAt: job.pullRequestState.recoveryAnchorUpdatedAt,
-        syncStartedAt: this.timestamp(),
-      };
-      let pagesFetched = 0;
-      let targetReached = false;
-      let hasMore = false;
-      let rateFloorReached = false;
-      for await (const page of this.provider.fetchPullRequestHistory(input)) {
-        pagesFetched += 1;
-        hasMore = page.pageInfo.hasNextPage;
-        const written = await this.persistHistoryPullRequestPage(job, page);
-        recordSyncRunPage(this.database, job.run.syncRunId, {
-          entityKind: "pull_request",
-          itemsSeen: page.items.length,
-          itemsWritten: written,
-          rateLimitRemaining: page.rateLimit.remaining,
-        });
-        latestRateLimit = page.rateLimit;
-        this.persistHistoryProgress(job, "pull_request", page);
-        targetReached = this.reachedHistoryTarget(job, job.pullRequestOldestObserved.value);
-        rateFloorReached = page.rateLimit.remaining < HISTORY_RATE_LIMIT_FLOOR;
-        if (targetReached || pagesFetched >= job.pageBudget || rateFloorReached) break;
-      }
-      await this.finishHistoryStream(
-        job,
-        "pull_request",
-        latestRateLimit,
-        targetReached || (!hasMore && !rateFloorReached),
-      );
-    } catch (error: unknown) {
-      this.failHistoryStream(job, "pull_request", error);
-    }
-  }
-
-  private async consumeHistoryIssues(job: HistoryJob): Promise<void> {
-    try {
-      if (!job.issueNeedsWork) {
-        completeSyncRunStream(this.database, job.run.syncRunId, "issue", {
-          finishedAt: this.timestamp(),
-          watermarkAfter: null,
-        });
-        return;
-      }
-      if (this.provider.fetchIssueHistory === undefined) {
-        throw new Error("GitHub provider does not support durable issue history pagination");
-      }
-      let latestRateLimit: GitHubRateLimit | undefined;
-      const input: HistorySyncInput = {
-        repository: toRepositoryRef(job.repository),
-        cursor: job.issueState.cursor,
-        recoveryAnchorUpdatedAt: job.issueState.recoveryAnchorUpdatedAt,
-        syncStartedAt: this.timestamp(),
-      };
-      let pagesFetched = 0;
-      let targetReached = false;
-      let hasMore = false;
-      let rateFloorReached = false;
-      for await (const page of this.provider.fetchIssueHistory(input)) {
-        pagesFetched += 1;
-        hasMore = page.pageInfo.hasNextPage;
-        const written = upsertIssuePage(this.database, job.repository.id, page.items);
-        recordSyncRunPage(this.database, job.run.syncRunId, {
-          entityKind: "issue",
-          itemsSeen: page.items.length,
-          itemsWritten: written,
-          rateLimitRemaining: page.rateLimit.remaining,
-        });
-        latestRateLimit = page.rateLimit;
-        this.persistHistoryProgress(job, "issue", page);
-        targetReached = this.reachedHistoryTarget(job, job.issueOldestObserved.value);
-        rateFloorReached = page.rateLimit.remaining < HISTORY_RATE_LIMIT_FLOOR;
-        if (targetReached || pagesFetched >= job.pageBudget || rateFloorReached) break;
-      }
-      await this.finishHistoryStream(
-        job,
-        "issue",
-        latestRateLimit,
-        targetReached || (!hasMore && !rateFloorReached),
-      );
-    } catch (error: unknown) {
-      this.failHistoryStream(job, "issue", error);
-    }
-  }
-
-  private persistHistoryPullRequestPage(
-    job: HistoryJob,
-    page: PullRequestPage,
-  ): number {
-    // History only expands current metadata coverage.  It intentionally does
-    // not create enrichment targets or call lifecycle/timeline APIs.
-    return upsertPullRequestPage(this.database, job.repository.id, page.items);
-  }
-
-  private persistHistoryProgress(
-    job: HistoryJob,
-    entityKind: EntityKind,
-    page: PullRequestPage | IssuePage,
-  ): void {
-    const oldest = page.items.at(-1);
-    const oldestDay = oldest === undefined ? null : this.calendarDay(oldest.updatedAt);
-    const state = entityKind === "pull_request" ? job.pullRequestState : job.issueState;
-    const oldestHolder = entityKind === "pull_request"
-      ? job.pullRequestOldestObserved
-      : job.issueOldestObserved;
-    if (oldestDay !== null && (oldestHolder.value === null || oldestDay < oldestHolder.value)) {
-      oldestHolder.value = oldestDay;
-    }
-    const nextCursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
-    updateRepositoryHistoryState(this.database, job.repository.id, entityKind, {
-      cursor: nextCursor,
-      recoveryAnchorUpdatedAt: oldest?.updatedAt ?? state.recoveryAnchorUpdatedAt,
-      lastRunId: job.run.syncRunId,
-      lastError: null,
-    });
-  }
-
-  private async finishHistoryStream(
-    job: HistoryJob,
-    entityKind: EntityKind,
-    rateLimit: GitHubRateLimit | undefined,
-    completed: boolean,
-  ): Promise<void> {
-    const state = getRepositoryHistoryState(this.database, job.repository.id, entityKind);
-    const oldest = entityKind === "pull_request"
-      ? job.pullRequestOldestObserved.value
-      : job.issueOldestObserved.value;
-    const paused = state.status === "paused";
-    const rateLimitPaused =
-      !completed &&
-      !paused &&
-      state.enabled &&
-      state.cursor !== null &&
-      rateLimit !== undefined &&
-      rateLimit.remaining < HISTORY_RATE_LIMIT_FLOOR &&
-      Number.isFinite(Date.parse(rateLimit.resetAt));
-    const canContinue =
-      !completed &&
-      !paused &&
-      state.enabled &&
-      state.cursor !== null &&
-      !rateLimitPaused;
-    if (state.cursor === null || completed) {
-      const boundary = oldest ?? this.calendarDay(this.timestamp());
-      const target = job.targetDate ?? boundary;
-      updateRepositoryHistoryState(this.database, job.repository.id, entityKind, {
-        oldestCoveredDay: target,
-        status: paused ? "paused" : completed || target <= boundary ? "completed" : "idle",
-        resumeAfter: null,
-      });
-    } else {
-      updateRepositoryHistoryState(this.database, job.repository.id, entityKind, {
-        // A low-watermark page is a durable pause, not a provider error.  No
-        // continuation is admitted until the provider's reset timestamp.
-        status: canContinue ? "running" : paused ? "paused" : "idle",
-        resumeAfter: rateLimitPaused ? rateLimit!.resetAt : null,
-      });
-    }
-    completeSyncRunStream(this.database, job.run.syncRunId, entityKind, {
-      finishedAt: this.timestamp(),
-      rateLimitRemaining: rateLimit?.remaining,
-      watermarkAfter: null,
-      status: completed ? "completed" : "partial",
-    });
-  }
-
-  private async consumeFetchPullRequest(job: FetchJob): Promise<void> {
-    try {
-      if (this.provider.fetchPullRequest === undefined) {
-        throw new Error("GitHub provider does not support single pull request fetch");
-      }
-      const item = await this.provider.fetchPullRequest({
-        repository: toRepositoryRef(job.repository),
-        number: job.number,
-      } satisfies PullRequestFetchInput);
-      const written = upsertPullRequestPage(this.database, job.repository.id, [item]);
-      const target = { number: item.number, nodeId: item.nodeId, headSha: item.headSha };
-      job.targetNumbers.set(item.number, target);
-      recordSyncRunTarget(this.database, job.run.syncRunId, {
-        repositoryId: job.repository.id,
-        prNumber: item.number,
-        headSha: item.headSha,
-        reason: "fetch_pr",
-      });
-      recordSyncRunPage(this.database, job.run.syncRunId, {
-        entityKind: "pull_request",
-        itemsSeen: 1,
-        itemsWritten: written,
-      });
-      await this.enrichPullRequestFiles(job.repository, undefined, [target]);
-      completeSyncRunStream(this.database, job.run.syncRunId, "pull_request", {
-        finishedAt: this.timestamp(),
-        watermarkAfter: null,
-      });
-    } catch (error: unknown) {
-      try {
-        failSyncRunStream(this.database, job.run.syncRunId, "pull_request", error, this.timestamp());
-      } catch (failure: unknown) {
-        this.logError("Unable to record fetch PR failure", failure, {
-          repositoryId: job.repository.id,
-          number: String(job.number),
-        });
-      }
-    }
-  }
-
-  private completeMetadataStream(job: ForwardJob, entityKind: EntityKind, rateLimit: GitHubRateLimit | undefined): RepositorySyncState {
-    return completeSyncStream(this.database, {
-      repositoryId: job.repository.id,
-      entityKind,
-      completedAt: this.timestamp(),
-      rateLimitRemaining: rateLimit?.remaining,
-      rateLimitResetAt: rateLimit?.resetAt,
-    });
-  }
-
-  private failForwardStream(job: ForwardJob, entityKind: EntityKind, error: unknown): void {
-    try {
-      failSyncStream(this.database, {
-        repositoryId: job.repository.id,
-        entityKind,
-        error,
-        failedAt: this.timestamp(),
-      });
-    } catch (failure: unknown) {
-      this.logError("Unable to record metadata sync failure", failure, {
-        repositoryId: job.repository.id,
-        entityKind,
-      });
-    }
-    try {
-      failSyncRunStream(this.database, job.run.syncRunId, entityKind, error, this.timestamp());
-    } catch (failure: unknown) {
-      this.logError("Unable to record metadata sync run failure", failure, {
-        repositoryId: job.repository.id,
-        entityKind,
-      });
-    }
-  }
-
-  private failHistoryStream(job: HistoryJob, entityKind: EntityKind, error: unknown): void {
-    try {
-      updateRepositoryHistoryState(this.database, job.repository.id, entityKind, {
-        status: "failed",
-        lastError: error instanceof Error ? error.message : String(error),
-        lastRunId: job.run.syncRunId,
-      });
-      failSyncRunStream(this.database, job.run.syncRunId, entityKind, error, this.timestamp());
-    } catch (failure: unknown) {
-      this.logError("Unable to record history sync failure", failure, {
-        repositoryId: job.repository.id,
-        entityKind,
-      });
+      await this.fetchPullRequestRunner.run(job);
     }
   }
 
@@ -1171,24 +805,6 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
         repositoryId: repository.id,
       });
     }
-  }
-
-  private readCurrentPullRequestHeads(repositoryId: string, items: readonly PullRequestMetadata[]): Map<number, { headSha: string; enriched: boolean }> {
-    if (items.length === 0) return new Map();
-    return new Map(
-      listCurrentPullRequestEnrichmentStates(
-        this.database,
-        repositoryId,
-        items.map((item) => item.number),
-      ).map((state) => [state.number, {
-        headSha: state.headSha,
-        enriched: state.enriched,
-      }]),
-    );
-  }
-
-  private reachedHistoryTarget(job: HistoryJob, oldestDay: string | null): boolean {
-    return job.targetDate !== null && oldestDay !== null && oldestDay <= job.targetDate;
   }
 
   private hasHistoryContinuationIntent(repositoryId: string): boolean {
@@ -1298,19 +914,11 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
       runId: job.run.syncRunId,
     });
     if (job.kind === "forward") {
-      this.failForwardStream(job, "pull_request", error);
-      this.failForwardStream(job, "issue", error);
+      this.forwardRunner.recordUnexpectedFailure(job, error);
     } else if (job.kind === "history") {
-      this.failHistoryStream(job, "pull_request", error);
-      this.failHistoryStream(job, "issue", error);
+      this.historyRunner.recordUnexpectedFailure(job, error);
     } else {
-      try {
-        failSyncRunStream(this.database, job.run.syncRunId, "pull_request", error, this.timestamp());
-      } catch (failure: unknown) {
-        this.logError("Unable to record unexpected fetch PR failure", failure, {
-          repositoryId: job.repository.id,
-        });
-      }
+      this.fetchPullRequestRunner.recordUnexpectedFailure(job, error);
     }
   }
 
@@ -1346,12 +954,4 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
     }
     return value;
   }
-}
-
-function syncMode(state: RepositorySyncState): "bootstrap" | "incremental" {
-  return state.watermarkUpdatedAt === null ? "bootstrap" : "incremental";
-}
-
-function toRepositoryRef(repository: RepositoryRecord): { owner: string; name: string } {
-  return { owner: repository.githubOwner, name: repository.githubName };
 }

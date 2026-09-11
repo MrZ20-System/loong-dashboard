@@ -15,8 +15,13 @@ import {
 } from "@loongboard/database";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { AgentChatController } from "../src/agent-chat.js";
+import {
+  AGENT_TITLE_RETRY_COOLDOWN_MS,
+  AgentChatController,
+} from "../src/agent-chat.js";
 import { WorkspaceRunCoordinator } from "../src/workspace-run-coordinator.js";
+
+type TitleResponse = "success" | "null" | "blank" | "failure";
 
 class TitleRuntime implements AgentRuntime {
   getTitleCalls = 0;
@@ -26,6 +31,8 @@ class TitleRuntime implements AgentRuntime {
   constructor(
     private readonly outcome: "success" | "empty" | "failure",
     private readonly renameFails = false,
+    private readonly titleResponses: readonly TitleResponse[] = ["success"],
+    private readonly runtimeSessionIdAvailableAfterRun = 1,
   ) {}
 
   async *run(
@@ -47,12 +54,18 @@ class TitleRuntime implements AgentRuntime {
     yield { type: "status", status: "idle" };
   }
 
-  runtimeSessionId(): string {
-    return "opaque-native-session";
+  runtimeSessionId(): string | null {
+    return this.runCount >= this.runtimeSessionIdAvailableAfterRun
+      ? "opaque-native-session"
+      : null;
   }
 
-  async getTitle(): Promise<{ title: string }> {
+  async getTitle(): Promise<{ title: string } | null> {
     this.getTitleCalls += 1;
+    const response = this.titleResponses[Math.min(this.getTitleCalls - 1, this.titleResponses.length - 1)] ?? "success";
+    if (response === "failure") throw new Error("native title unavailable");
+    if (response === "null") return null;
+    if (response === "blank") return { title: "   " };
     return { title: "Native conversation title" };
   }
 
@@ -64,6 +77,34 @@ class TitleRuntime implements AgentRuntime {
 
   async stop(): Promise<void> {}
   async close(): Promise<void> {}
+}
+
+class DelayedTitleRuntime extends TitleRuntime {
+  readonly titleStarted: Promise<void>;
+  private titleStartedResolve: (() => void) | undefined;
+  private readonly titleRelease: Promise<void>;
+  private titleReleaseResolve: (() => void) | undefined;
+
+  constructor() {
+    super("success");
+    this.titleStarted = new Promise<void>((resolve) => {
+      this.titleStartedResolve = resolve;
+    });
+    this.titleRelease = new Promise<void>((resolve) => {
+      this.titleReleaseResolve = resolve;
+    });
+  }
+
+  override async getTitle(): Promise<{ title: string }> {
+    this.getTitleCalls += 1;
+    this.titleStartedResolve?.();
+    await this.titleRelease;
+    return { title: "Delayed native title" };
+  }
+
+  releaseTitle(): void {
+    this.titleReleaseResolve?.();
+  }
 }
 
 const databases: DatabaseClient[] = [];
@@ -81,12 +122,23 @@ afterEach(() => {
 function fixture(
   outcome: "success" | "empty" | "failure" = "success",
   renameFails = false,
+  options: {
+    now?: () => Date;
+    runtime?: TitleRuntime;
+    titleResponses?: readonly TitleResponse[];
+    runtimeSessionIdAvailableAfterRun?: number;
+  } = {},
 ): { controller: AgentChatController; database: DatabaseClient; runtime: TitleRuntime } {
   const directory = mkdtempSync(join(tmpdir(), "loongboard-agent-titles-"));
   directories.push(directory);
   const database = openDatabase(join(directory, "state.sqlite3"));
   databases.push(database);
-  const runtime = new TitleRuntime(outcome, renameFails);
+  const runtime = options.runtime ?? new TitleRuntime(
+    outcome,
+    renameFails,
+    options.titleResponses,
+    options.runtimeSessionIdAvailableAfterRun,
+  );
   const controller = new AgentChatController({
     database,
     workspaceRuns: new WorkspaceRunCoordinator(),
@@ -100,6 +152,7 @@ function fixture(
       idleProcessMinutes: 120,
     },
     runtimeFactory: () => runtime,
+    ...(options.now === undefined ? {} : { now: options.now }),
   });
   return { controller, database, runtime };
 }
@@ -146,12 +199,14 @@ describe("AgentChatController conversation titles", () => {
     await controller.close();
   });
 
-  it("does not discover an empty or failed turn title", async () => {
+  it("attempts a title after a successful no-text turn but not after a failed turn", async () => {
     const empty = fixture("empty");
     const emptySession = await empty.controller.ensureSession({ scope: { kind: "general", route: "empty" } });
     await empty.controller.acceptMessage(emptySession.session.id, "empty result");
     await waitForTurn(empty.controller, emptySession.session.id);
-    expect(empty.runtime.getTitleCalls).toBe(0);
+    await waitForTitle(empty.runtime);
+    expect(empty.runtime.getTitleCalls).toBe(1);
+    expect(requireAgentSession(empty.database, emptySession.session.id).titleSource).toBe("generated");
     await empty.controller.close();
 
     const failed = fixture("failure");
@@ -161,6 +216,119 @@ describe("AgentChatController conversation titles", () => {
     expect(failed.runtime.getTitleCalls).toBe(0);
     expect(requireAgentSession(failed.database, failedSession.session.id).status).toBe("error");
     await failed.controller.close();
+  });
+
+  it("retries rejected, null, and blank native titles after the cooldown", async () => {
+    let nowMs = Date.parse("2026-09-12T00:00:00.000Z");
+    const { controller, database, runtime } = fixture("success", false, {
+      now: () => new Date(nowMs),
+      titleResponses: ["failure", "null", "blank", "success"],
+    });
+    const created = await controller.ensureSession({ scope: { kind: "general", route: "retry" } });
+
+    const run = async (prompt: string) => {
+      await controller.acceptMessage(created.session.id, prompt);
+      await waitForTurn(controller, created.session.id);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    };
+
+    await run("first");
+    expect(runtime.getTitleCalls).toBe(1);
+    expect(requireAgentSession(database, created.session.id).titleSource).toBe("provisional");
+
+    await run("cooldown");
+    expect(runtime.getTitleCalls).toBe(1);
+
+    nowMs += AGENT_TITLE_RETRY_COOLDOWN_MS;
+    await run("null");
+    expect(runtime.getTitleCalls).toBe(2);
+    expect(requireAgentSession(database, created.session.id).titleSource).toBe("provisional");
+
+    nowMs += AGENT_TITLE_RETRY_COOLDOWN_MS;
+    await run("blank");
+    expect(runtime.getTitleCalls).toBe(3);
+    expect(requireAgentSession(database, created.session.id).titleSource).toBe("provisional");
+
+    nowMs += AGENT_TITLE_RETRY_COOLDOWN_MS;
+    await run("success");
+    expect(runtime.getTitleCalls).toBe(4);
+    expect(requireAgentSession(database, created.session.id)).toMatchObject({
+      title: "Native conversation title",
+      titleSource: "generated",
+    });
+
+    await run("generated title is permanent");
+    expect(runtime.getTitleCalls).toBe(4);
+    await controller.close();
+  });
+
+  it("does not permanently disable title discovery when the first runtime id is unavailable", async () => {
+    let nowMs = Date.parse("2026-09-12T00:00:00.000Z");
+    const { controller, database, runtime } = fixture("success", false, {
+      now: () => new Date(nowMs),
+      runtimeSessionIdAvailableAfterRun: 2,
+    });
+    const created = await controller.ensureSession({ scope: { kind: "general", route: "runtime-id-retry" } });
+
+    await controller.acceptMessage(created.session.id, "first");
+    await waitForTurn(controller, created.session.id);
+    expect(runtime.getTitleCalls).toBe(0);
+    expect(requireAgentSession(database, created.session.id).titleSource).toBe("provisional");
+
+    nowMs += AGENT_TITLE_RETRY_COOLDOWN_MS;
+    await controller.acceptMessage(created.session.id, "second");
+    await waitForTurn(controller, created.session.id);
+    await waitForTitle(runtime);
+    expect(runtime.getTitleCalls).toBe(1);
+    expect(requireAgentSession(database, created.session.id).titleSource).toBe("generated");
+    await controller.close();
+  });
+
+  it("keeps a manual rename when a delayed native title lookup resolves later", async () => {
+    const runtime = new DelayedTitleRuntime();
+    const { controller, database } = fixture("success", false, { runtime });
+    const created = await controller.ensureSession({ scope: { kind: "general", route: "delayed-manual" } });
+
+    await controller.acceptMessage(created.session.id, "first user message");
+    await waitForTurn(controller, created.session.id);
+    await runtime.titleStarted;
+
+    const renamed = await controller.updateSession(created.session.id, { title: "Manual while waiting" });
+    expect(renamed.session.titleSource).toBe("manual");
+    runtime.releaseTitle();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(runtime.getTitleCalls).toBe(1);
+    expect(requireAgentSession(database, created.session.id)).toMatchObject({
+      title: "Manual while waiting",
+      titleSource: "manual",
+    });
+    await controller.close();
+  });
+
+  it("does not let a delayed title lookup resurrect a deleted session or affect close", async () => {
+    const deletedRuntime = new DelayedTitleRuntime();
+    const deleted = fixture("success", false, { runtime: deletedRuntime });
+    const deletedSession = await deleted.controller.ensureSession({ scope: { kind: "general", route: "delayed-delete" } });
+    await deleted.controller.acceptMessage(deletedSession.session.id, "delete after title starts");
+    await waitForTurn(deleted.controller, deletedSession.session.id);
+    await deletedRuntime.titleStarted;
+    await deleted.controller.deleteSession(deletedSession.session.id);
+    deletedRuntime.releaseTitle();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(() => requireAgentSession(deleted.database, deletedSession.session.id)).toThrow();
+    await deleted.controller.close();
+
+    const closeRuntime = new DelayedTitleRuntime();
+    const closing = fixture("success", false, { runtime: closeRuntime });
+    const closingSession = await closing.controller.ensureSession({ scope: { kind: "general", route: "delayed-close" } });
+    await closing.controller.acceptMessage(closingSession.session.id, "close after title starts");
+    await waitForTurn(closing.controller, closingSession.session.id);
+    await closeRuntime.titleStarted;
+    await closing.controller.close();
+    closeRuntime.releaseTitle();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(requireAgentSession(closing.database, closingSession.session.id).titleSource).toBe("provisional");
   });
 
   it("keeps a local manual rename successful when the runtime rename fails", async () => {
