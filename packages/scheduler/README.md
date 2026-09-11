@@ -1,6 +1,6 @@
 # @loongboard/scheduler
 
-Cron 计算。parseCron、validateCron、nextOccurrence；timer、执行协调和持久化在 Server/database。
+Cron 计算。validateCron、nextOccurrence；timer、执行协调和持久化在 Server/database。
 
 - [实现说明](../../docs/scheduler.md)
 - [源码入口](src/index.ts)

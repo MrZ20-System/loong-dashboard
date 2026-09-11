@@ -34,12 +34,12 @@ flowchart LR
 | packages/agent-runtime | 产品运行时接口及会话 runtime host | [index.ts](../packages/agent-runtime/src/index.ts) |
 | packages/agent-runtime-dsh | 固定 DSH SDK、子进程、事件转换 | [index.ts](../packages/agent-runtime-dsh/src/index.ts) |
 | packages/knowledge | Markdown 扫描、身份、原子文件写入 | [index.ts](../packages/knowledge/src/index.ts) |
-| packages/scheduler | 纯 cron 解析与下一次执行时间计算 | [cron.ts](../packages/scheduler/src/cron.ts) |
+| packages/scheduler | 五字段 cron 校验与下一次执行时间计算包装层 | [cron.ts](../packages/scheduler/src/cron.ts) |
 | scripts / tests/regression | 架构门禁、测试运行器、关键回归 | [测试说明](testing.md) |
 
 ## 启动与关闭
 
-[start.ts](../apps/server/src/start.ts) 调用 `createServerRuntime` 再监听端口。运行时先加载和校验配置，打开数据库并迁移，投影配置中的仓库，恢复中断的 Agent 与元数据同步状态，然后组装同步、分类、Agent、Knowledge、Settings、Scheduler 和 HTTP 路由。Knowledge/Domain watcher 与调度 timer 随运行时启动；导入 app factory 本身不监听端口。
+[start.ts](../apps/server/src/start.ts) 调用 `createServerRuntime` 再监听端口。运行时先加载和校验配置，打开数据库并迁移，投影配置中的仓库，恢复中断的 Agent 与元数据同步状态，然后组装同步、分类、Agent、Knowledge、Settings、Scheduler 和 HTTP 路由。Settings policy 会在 `scheduler.start` 前经 [system-schedules.ts](../apps/server/src/system-schedules.ts) 投影到稳定的 system task；Settings 更新也经过同一 projector 刷新任务。Knowledge/Domain watcher 与调度 timer 随运行时启动；导入 app factory 本身不监听端口。
 
 生产流程先由根脚本执行 `pnpm build`，再由 `pnpm start` 使用 `node --conditions=production apps/server/dist/start.js` 启动。workspace package 的 `production` export 指向各自 `dist/index.js`，开发和测试仍通过 `types`/`import` 使用 `src`。编译后的 start 入口按自身位置解析 `apps/web/dist`，因此不依赖当前工作目录。只有 production start 传入 static root 时，Fastify 才注册静态文件和 React deep-link fallback；`/api/*` 未匹配路由保持 JSON 404。
 
@@ -49,7 +49,7 @@ flowchart LR
 
 SIGINT/SIGTERM 经 [lifecycle.ts](../apps/server/src/lifecycle.ts) 触发幂等关闭；app 的关闭钩子按顺序等待同步、重分类、Agent、Knowledge、Scheduler，最后关闭 SQLite。增加后台服务时必须同时接入退出清理。
 
-Scheduler 是现有唯一的定时入口。它为持久任务维护 timer map；metadata maintenance 使用现有 `repository.metadata-maintenance` system action（默认每天 03:00，按配置时区）。该 action 每天执行固定的 runtime sync-run history purge；只有 Repository retention 的 automatic archive 开关打开时才追加 metadata archive/prune，不会添加第二个 timer、后台 cron 或独立调度框架。Settings V2 是 system schedule policy authority；runtime 启动和 Settings 更新都会把 policy 投影到稳定的 `scheduled_tasks` 行，Scheduler 只执行 projection 并记录 runtime facts。
+Scheduler 是现有唯一的定时入口。`SchedulerEngine` 为持久任务维护 timer map，并把九个 canonical system action 委派给 [system-actions.ts](../apps/server/src/system-actions.ts) 的统一 registry；`runtime.ts` 不再拥有这些 action 的实现。Settings V2 是 system schedule policy authority；runtime 启动和 Settings 更新都会经 [system-schedules.ts](../apps/server/src/system-schedules.ts) 把 policy 投影到稳定的 `scheduled_tasks` 行，Scheduler 只执行 projection 并记录 runtime facts。metadata maintenance 使用现有 `repository.metadata-maintenance` system action（默认每天 03:00，按配置时区）。该 action 每天执行固定的 runtime sync-run history purge；只有 Repository retention 的 automatic archive 开关打开时才追加 metadata archive/prune，不会添加第二个 timer、后台 cron 或独立调度框架。
 
 ## 必须保持的边界
 

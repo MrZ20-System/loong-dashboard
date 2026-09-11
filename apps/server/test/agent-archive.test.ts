@@ -14,7 +14,8 @@ import type { GitHubMetadataProvider } from "@loongboard/github";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { AgentArchiveExporter } from "../src/agent-archive.js";
-import { createServerRuntime, validateAgentArchivePath, type ServerRuntime } from "../src/runtime.js";
+import { createServerRuntime, type ServerRuntime } from "../src/runtime.js";
+import { validateAgentArchivePath } from "../src/system-actions.js";
 import { parseSystemConfig } from "../src/config.js";
 
 const databases: DatabaseClient[] = [];

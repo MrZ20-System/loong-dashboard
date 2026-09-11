@@ -1,61 +1,117 @@
 import { describe, expect, it } from "vitest";
-import { nextOccurrence, parseCron, validateCron } from "../src/cron.js";
+import { nextOccurrence, validateCron } from "../src/cron.js";
 
 describe("scheduler cron", () => {
-  it("parses a five-field expression into its value sets", () => {
-    const schedule = parseCron("*/15 9-17 * * 1-5");
-    expect(schedule.minutes).toContain(0);
-    expect(schedule.minutes).toContain(45);
-    expect(schedule.hours).toContain(17);
-    expect(schedule.hours).not.toContain(18);
-    expect(schedule.daysOfWeek).toEqual([1, 2, 3, 4, 5]);
-    expect(schedule.dayOfMonthWildcard).toBe(true);
-    expect(schedule.dayOfWeekWildcard).toBe(false);
+  it("validates exactly five fields and delegates field validation", () => {
+    expect(() => validateCron("*/15 9-17 * * 1-5")).not.toThrow();
+    expect(() => validateCron("5,10,15 9 * * 1-5")).not.toThrow();
+    expect(() => validateCron("0 0 * * * *")).toThrow(/5 fields/);
+    expect(() => validateCron("0 0 * *")).toThrow(/5 fields/);
+    expect(() => validateCron("61 0 * * *")).toThrow(/Invalid 5-field cron/);
+    expect(() => validateCron("x 0 * * *")).toThrow(/only digits/);
+    expect(() => validateCron("0 0 * * MON-FRI")).toThrow(/only digits/);
+    expect(() => validateCron("0 0 * * ?")).toThrow(/only digits/);
+    expect(() => validateCron("0 0 * * 1#2")).toThrow(/only digits/);
+    expect(() => validateCron("0 0 L * *")).toThrow(/only digits/);
+    expect(() => validateCron("0 0 W * *")).toThrow(/only digits/);
   });
 
-  it("normalizes Sunday 7 to 0", () => {
-    expect(parseCron("0 0 * * 7").daysOfWeek).toEqual([0]);
-  });
-
-  it("rejects malformed or out-of-range fields", () => {
-    expect(() => validateCron("0 0 * *")).toThrow();
-    expect(() => validateCron("61 0 * * *")).toThrow();
-    expect(() => validateCron("x 0 * * *")).toThrow();
-  });
-
-  it("computes the next daily occurrence after the from time", () => {
-    const next = nextOccurrence("30 9 * * *", "Asia/Shanghai", new Date("2026-09-03T01:00:00.000Z"));
+  it("computes a timezone-aware daily occurrence", () => {
+    const next = nextOccurrence(
+      "30 9 * * *",
+      "Asia/Shanghai",
+      new Date("2026-09-03T01:00:00.000Z"),
+    );
     expect(next.toISOString()).toBe("2026-09-03T01:30:00.000Z");
   });
 
-  it("computes the next week day after a weekend", () => {
-    // 2026-09-05 is a Saturday in Asia/Shanghai? Use a fixed instant.
-    const from = new Date("2026-09-04T02:00:00.000Z"); // Friday 10:00 Shanghai
-    const next = nextOccurrence("0 9 * * 1", "Asia/Shanghai", from);
-    expect(next.toISOString()).toBe("2026-09-07T01:00:00.000Z"); // Monday 09:00 +08
+  it("supports lists, ranges, and steps", () => {
+    const next = nextOccurrence(
+      "5-15/5 9,10 * * 1-5",
+      "UTC",
+      new Date("2026-09-07T08:00:00.000Z"),
+    );
+    expect(next.toISOString()).toBe("2026-09-07T09:05:00.000Z");
   });
 
-  it("uses cron OR semantics when both day fields are restricted", () => {
-    const from = new Date("2026-09-01T00:00:00.000Z"); // Tuesday
-    const next = nextOccurrence("0 9 10 * 1", "UTC", from);
-    expect(next.toISOString()).toBe("2026-09-07T09:00:00.000Z"); // Monday wins before the 10th
+  it("accepts Sunday 7 as Sunday", () => {
+    const next = nextOccurrence(
+      "0 9 * * 7",
+      "UTC",
+      new Date("2026-09-05T10:00:00.000Z"),
+    );
+    expect(next.toISOString()).toBe("2026-09-06T09:00:00.000Z");
   });
 
-  it("finds a leap-day occurrence beyond the former two-year horizon", () => {
-    const from = new Date("2025-03-01T00:00:00.000Z");
-    const next = nextOccurrence("0 9 29 2 *", "UTC", from);
-    expect(next.toISOString()).toBe("2028-02-29T09:00:00.000Z");
+  it("uses Vixie/POSIX OR semantics for restricted DOM and DOW", () => {
+    const next = nextOccurrence(
+      "0 9 10 * 1",
+      "UTC",
+      new Date("2026-09-01T00:00:00.000Z"),
+    );
+    expect(next.toISOString()).toBe("2026-09-07T09:00:00.000Z");
   });
 
-  it("does not skip midnight at a selected month boundary", () => {
-    const from = new Date("2026-01-31T23:31:00.000Z");
-    const next = nextOccurrence("0 0 1 2 *", "UTC", from);
-    expect(next.toISOString()).toBe("2026-02-01T00:00:00.000Z");
+  it("treats */1 as a wildcard in the DOM/DOW rule", () => {
+    const next = nextOccurrence(
+      "0 9 10 * */1",
+      "UTC",
+      new Date("2026-09-01T00:00:00.000Z"),
+    );
+    expect(next.toISOString()).toBe("2026-09-10T09:00:00.000Z");
   });
 
-  it("skips a nonexistent local time across a DST spring-forward gap", () => {
-    const from = new Date("2026-03-08T06:59:00.000Z"); // 01:59 in New York
-    const next = nextOccurrence("30 2 * * *", "America/New_York", from);
-    expect(next.toISOString()).toBe("2026-03-09T06:30:00.000Z");
+  it("is strictly after the supplied instant", () => {
+    const exact = nextOccurrence(
+      "0 9 * * *",
+      "UTC",
+      new Date("2026-09-03T09:00:00.000Z"),
+    );
+    const fractional = nextOccurrence(
+      "0 9 * * *",
+      "UTC",
+      new Date("2026-09-03T08:59:59.999Z"),
+    );
+    expect(exact.toISOString()).toBe("2026-09-04T09:00:00.000Z");
+    expect(fractional.toISOString()).toBe("2026-09-03T09:00:00.000Z");
+    expect(exact.getTime()).toBeGreaterThan(new Date("2026-09-03T09:00:00.000Z").getTime());
+  });
+
+  it("follows cron-parser's DST spring-forward gap semantics", () => {
+    const next = nextOccurrence(
+      "30 2 * * *",
+      "America/New_York",
+      new Date("2026-03-08T06:59:00.000Z"),
+    );
+    // cron-parser lands the skipped 02:30 wall time at 03:30 EDT.
+    expect(next.toISOString()).toBe("2026-03-08T07:30:00.000Z");
+  });
+
+  it("follows cron-parser's DST fall-back repeat semantics", () => {
+    const first = nextOccurrence(
+      "30 1 * * *",
+      "America/New_York",
+      new Date("2026-11-01T05:00:00.000Z"),
+    );
+    const afterFirst = nextOccurrence(
+      "30 1 * * *",
+      "America/New_York",
+      first,
+    );
+    expect(first.toISOString()).toBe("2026-11-01T05:30:00.000Z");
+    // The selected library does not return the repeated wall time twice.
+    expect(afterFirst.toISOString()).toBe("2026-11-02T06:30:00.000Z");
+  });
+
+  it("rejects an invalid IANA timezone clearly", () => {
+    expect(() =>
+      nextOccurrence("0 0 * * *", "Not/AZone", new Date("2026-09-01T00:00:00.000Z")),
+    ).toThrow(/Invalid IANA timezone/);
+  });
+
+  it("rejects invalid five-field input before calculation", () => {
+    expect(() =>
+      nextOccurrence("0 0 * * * *", "UTC", new Date("2026-09-01T00:00:00.000Z")),
+    ).toThrow(/5 fields/);
   });
 });

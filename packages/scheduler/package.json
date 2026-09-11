@@ -17,7 +17,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@loongboard/contracts": "workspace:*"
+    "@loongboard/contracts": "workspace:*",
+    "cron-parser": "5.10.0"
   },
   "devDependencies": {
     "@types/node": "24.3.0",
