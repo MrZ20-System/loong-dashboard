@@ -19,6 +19,7 @@ import { removeDailyProjectionsMigration } from "../src/migrations/010-remove-da
 import { historyRateLimitRecoveryMigration } from "../src/migrations/011-history-rate-limit-recovery.js";
 import { metadataRetentionMigration } from "../src/migrations/012-metadata-retention.js";
 import { agentSessionTitleSourceMigration } from "../src/migrations/013-agent-session-title-source.js";
+import { phase1SchemaCanonicalizationMigration } from "../src/migrations/014-phase1-schema-canonicalization.js";
 
 const CORE_TABLES = [
   "agent_messages",
@@ -139,6 +140,18 @@ function createVersion013Database(databasePath: string): Database.Database {
   return database;
 }
 
+function createVersion014Database(databasePath: string): Database.Database {
+  const database = createVersion013Database(databasePath);
+  const record = database.prepare(
+    "INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)",
+  );
+  database.transaction(() => {
+    phase1SchemaCanonicalizationMigration.migrate(database);
+    record.run(phase1SchemaCanonicalizationMigration.id, "2026-09-01T00:00:00.000Z");
+  })();
+  return database;
+}
+
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true });
@@ -178,6 +191,7 @@ describe("database migrations", () => {
         { id: "012_metadata_retention" },
         { id: "013_agent_session_title_source" },
         { id: "014_phase1_schema_canonicalization" },
+        { id: "015_retention_kind_canonicalization" },
       ]);
     } finally {
       database.close();
@@ -213,6 +227,7 @@ describe("database migrations", () => {
         expect.objectContaining({ id: "012_metadata_retention" }),
         expect.objectContaining({ id: "013_agent_session_title_source" }),
         expect.objectContaining({ id: "014_phase1_schema_canonicalization" }),
+        expect.objectContaining({ id: "015_retention_kind_canonicalization" }),
       ]);
       expect(
         database
@@ -344,6 +359,139 @@ describe("database migrations", () => {
         { name: "state", descending: 0 },
         { name: "updated_at", descending: 0 },
       ]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("canonicalizes legacy maintenance kinds without losing durable rows", () => {
+    const database = createVersion014Database(createDatabasePath());
+
+    try {
+      database.exec(`
+        INSERT INTO repositories (
+          id, key, display_name, github_owner, github_name, local_path,
+          remote_name, default_branch, worktree_slots, enabled, created_at,
+          updated_at
+        ) VALUES (
+          'repo-retention-migration', 'repo-retention-migration',
+          'Retention migration', 'example', 'retention-migration',
+          '/workspace/retention-migration', 'origin', 'main', 1, 1,
+          '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z'
+        );
+        INSERT INTO repository_maintenance_runs (
+          id, repository_id, kind, trigger, status, cutoff, selector_json,
+          requested_at, started_at, finished_at, pr_count, issue_count,
+          files_deleted, comments_deleted, error
+        ) VALUES
+          (
+            'legacy-prune', 'repo-retention-migration', 'prune', 'manual',
+            'completed', '2026-08-01T00:00:00.000Z',
+            '{"prune":true,"includeClosedPrs":true}',
+            '2026-09-02T00:00:00.000Z', '2026-09-02T00:01:00.000Z',
+            '2026-09-02T00:02:00.000Z', 4, 2, 3, 1, NULL
+          ),
+          (
+            'legacy-optimize', 'repo-retention-migration', 'optimize',
+            'automatic', 'completed', NULL, '{"operation":"optimize"}',
+            '2026-09-03T00:00:00.000Z', '2026-09-03T00:01:00.000Z',
+            '2026-09-03T00:02:00.000Z', 7, 8, 9, 10, 'legacy error'
+          );
+      `);
+
+      runMigrations(database);
+
+      expect(database.prepare(
+        `SELECT id, repository_id, kind, trigger, status, cutoff,
+                selector_json, requested_at, started_at, finished_at,
+                pr_count, issue_count, files_deleted, comments_deleted, error
+         FROM repository_maintenance_runs ORDER BY id`,
+      ).all()).toEqual([
+        {
+          id: "legacy-optimize",
+          repository_id: "repo-retention-migration",
+          kind: "archive",
+          trigger: "automatic",
+          status: "interrupted",
+          cutoff: null,
+          selector_json: JSON.stringify({
+            operation: "optimize",
+            legacyMaintenanceMigration: {
+              fromKind: "optimize",
+              note: "Legacy optimize maintenance runs had no canonical product operation; the row was retained as an interrupted archive run during migration.",
+            },
+          }),
+          requested_at: "2026-09-03T00:00:00.000Z",
+          started_at: "2026-09-03T00:01:00.000Z",
+          finished_at: "2026-09-03T00:02:00.000Z",
+          pr_count: 7,
+          issue_count: 8,
+          files_deleted: 9,
+          comments_deleted: 10,
+          error: "legacy error\nLegacy optimize maintenance runs had no canonical product operation; the row was retained as an interrupted archive run during migration.",
+        },
+        {
+          id: "legacy-prune",
+          repository_id: "repo-retention-migration",
+          kind: "archive",
+          trigger: "manual",
+          status: "completed",
+          cutoff: "2026-08-01T00:00:00.000Z",
+          selector_json: '{"prune":true,"includeClosedPrs":true}',
+          requested_at: "2026-09-02T00:00:00.000Z",
+          started_at: "2026-09-02T00:01:00.000Z",
+          finished_at: "2026-09-02T00:02:00.000Z",
+          pr_count: 4,
+          issue_count: 2,
+          files_deleted: 3,
+          comments_deleted: 1,
+          error: null,
+        },
+      ]);
+
+      const columns = database
+        .prepare("PRAGMA table_info(repository_maintenance_runs)")
+        .all()
+        .map((row) => (row as { name: string }).name);
+      expect(columns).toEqual([
+        "id", "repository_id", "kind", "trigger", "status", "cutoff",
+        "selector_json", "requested_at", "started_at", "finished_at",
+        "pr_count", "issue_count", "files_deleted", "comments_deleted", "error",
+      ]);
+      expect(database.prepare(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'repository_maintenance_runs'",
+      ).pluck().get()).toEqual(
+        expect.stringContaining("kind IN ('archive', 'purge_runtime_history')"),
+      );
+      expect(readIndexColumns(database, "repository_maintenance_runs_repository_requested_idx")).toEqual([
+        { name: "repository_id", descending: 0 },
+        { name: "requested_at", descending: 1 },
+      ]);
+      expect(database.prepare(
+        "PRAGMA foreign_key_list(repository_maintenance_runs)",
+      ).all()).toEqual([
+        expect.objectContaining({
+          table: "repositories",
+          from: "repository_id",
+          to: "id",
+          on_delete: "CASCADE",
+        }),
+      ]);
+      expect(database.pragma("foreign_key_check")).toEqual([]);
+
+      const insert = database.prepare(
+        `INSERT INTO repository_maintenance_runs
+           (id, repository_id, kind, trigger, status, requested_at)
+         VALUES (?, ?, ?, 'manual', 'queued', ?)`,
+      );
+      expect(() => insert.run(
+        "invalid-prune", "repo-retention-migration", "prune",
+        "2026-09-04T00:00:00.000Z",
+      )).toThrow();
+      expect(() => insert.run(
+        "invalid-optimize", "repo-retention-migration", "optimize",
+        "2026-09-04T00:00:00.000Z",
+      )).toThrow();
     } finally {
       database.close();
     }

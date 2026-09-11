@@ -1,7 +1,7 @@
 # LoongBoard Pre-Freeze Refactor Progress
 
 - Baseline SHA: `57d1cedafab9a1510d6616619cc33859f56d125d`
-- Current phase: Phase 12
+- Current phase: Phase 13
 
 ## Frozen product semantics
 
@@ -38,14 +38,16 @@
 - Phase 9: made archive and payload-pruned state independent in PR/Issue details; PR Fetch clears the prune marker only after changed-file payload restoration, while pruned Issue GET stays local until the explicit refresh endpoint is used. Activity links now open `archive=all`; Web business clients emit one global auth-required event on a matching 401 so `AuthGate` immediately re-locks. Metadata maintenance replaced its event-loop busy poll with a close-interruptible 150 ms delay while preserving batch-boundary admission.
 - Phase 10: split the Settings control center into repository, GitHub, Agent, backup, and archive sections; split the monolithic Web stylesheet into ordered base, shell, metadata, settings, Agent, knowledge, and responsive modules; and reduced list URL canonicalization to formal illegal-value cleanup plus model-specific pagination. Issues retain cursor pagination, while PR and Merged retain page/limit navigation. Cross-review caught and restored the Repository Activity desktop style block before acceptance.
 - Phase 11: split the mixed Database metadata suite into repository, sync, pull-request, pull-request-files, issue, domain, and activity service tests; expanded the real 013-to-014 migration fixture to prove durable canonical state and removed legacy columns; and reduced `App.test.tsx` to AuthGate, Shell, Router, primary navigation, and NotFound. Forward-sync invalidation, repository context, metadata feed accessibility, and sidebar behavior now live at their nearest Web component boundaries. The Server and regression suites were audited without adding fixture-heavy duplicates; their existing orchestration and three cross-module regression contracts remain focused.
+- Phase 12: removed the repository-local pnpm store override and inactive release-age exclusion tree; tightened workspace dependency and Git/gh/SQL/DSH architecture boundaries; replaced obsolete plan/stage comments with current invariants; removed unused compatibility aliases and duplicate Agent wire projections; made `scope`/`workspacePath` the canonical Agent API fields; and reduced maintenance kinds to `archive` plus `purge_runtime_history`. Migration 015 preserves old maintenance rows while rebuilding the canonical constraint, foreign key, and index.
 
 ## Pending changes
 
-- Phases 12–13 remain.
+- Phase 13 documentation canonicalization and final validation remain.
 
 ## Migrations added
 
 - `014_phase1_schema_canonicalization`: removes Scheduler conversation pointers, canonicalizes actions, makes `origin_kind` the Agent discriminator, removes Worktree busy ownership residue, and preserves valid child references.
+- `015_retention_kind_canonicalization`: maps old prune rows to archive, preserves old optimize rows as interrupted archive history with an explicit migration note, and rebuilds the maintenance kind constraint, foreign key, and repository/requested-time index.
 - Settings document migration: missing/V1 input is converted once to a complete strict V2 document and atomically written; invalid V2 input is rejected without overwrite.
 
 ## Legacy items removed
@@ -61,6 +63,10 @@
 - Runtime facts such as next/last/error timestamps from durable `settings.json` policy.
 - Generic scheduled-task mutation of system tasks, including Agent-to-system kind conversion.
 - Legacy scheduler system-action switch, inline system-task definitions/projector, and custom cron parser.
+- Repository-local pnpm store path and inactive transitive release-age exclusion list.
+- Duplicate Agent `origin`/`workspace` wire projections, origin preprocess, and unused exported aliases; public Agent sessions now use only `scope` and `workspacePath`.
+- Unused responsive diff width parameters/constants, Worktree reconciler alias, Git checkpoint branch shorthand, and optional SyncRun kind/trigger compatibility.
+- Maintenance run kinds `prune` and `optimize`; payload pruning remains an archive selector, not a separate operation.
 
 ## Tests run
 
@@ -93,6 +99,7 @@
 - Phase 9 lightweight validation: Database retention/metadata 2 files/22 tests, Server issue/sync/maintenance 4 files/31 tests, and Web auth/clients/PR/Issue/Activity 8 files/37 tests passed. Database, Server, and Web typechecks plus the architecture guard and `git diff --check` passed; strict cross-review found no P0/P1/P2 issue. Full root checks, live GitHub, and browser smoke remain for final validation.
 - Phase 10 lightweight validation: Web behavior 9 files/63 tests passed; Web typecheck and production build passed. After restoring the Activity style block, 4 focused files/10 tests and `git diff --check` passed. Independent Settings, CSS, and URL cross-reviews found no remaining P0/P1/P2 issue. Full root checks and real browser smoke remain for final validation.
 - Phase 11 package validation: Database 15 files/62 tests and typecheck passed; Web 38 files/166 tests and typecheck passed; Server audit run 29 files/152 tests and typecheck passed. Five focused Web boundary files/33 tests passed under independent review. The three-test regression suite was audited but not rerun because it was unchanged; it remains deferred to final `check:full`. `git diff --check` passed, and final cross-review found no remaining P0/P1/P2 issue.
+- Phase 12 lightweight validation: architecture fixtures 23 tests, architecture guard, DSH pin guard, and project pnpm config sanity passed. Contracts Agent/retention 2 files/7 tests and typecheck passed; Database migration/retention 2 files/20 tests and typecheck passed. Delegated focused Agent/sync/diff/Git/GitHub checks and their package typechecks passed; two independent Luna Max cross-reviews found no remaining P1/P2 issue in the retention migration or architecture/config cleanup. `git diff --check` passed.
 
 ## Known failures
 

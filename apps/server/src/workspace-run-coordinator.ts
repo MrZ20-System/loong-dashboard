@@ -1,11 +1,10 @@
 import { resolve } from "node:path";
 
 /**
- * In-process serialization of agent turns per workspace path (plan P0:
- * "统一 workspace ownership"). Manual chats and scheduled runs share one
- * instance from the server runtime so a path can never be modified by two
- * agent turns at the same time. This is intentionally not a queue, database
- * lease, or distributed lock.
+ * In-process serialization of agent turns per workspace path. Manual chats
+ * and scheduled runs share one instance from the server runtime so a path can
+ * never be modified by two agent turns at the same time. This is intentionally
+ * not a queue, database lease, or distributed lock.
  */
 export class WorkspaceRunCoordinator {
   private readonly active = new Set<string>();

@@ -73,10 +73,10 @@ function requirePullRequest(
 }
 
 /**
- * PR detail and the local Git diff workspace (plan 11, 17.2, 18.2).
- * Complete source comes from the local repository; GitHub patches are never
- * used. prepare performs at most one fetch per missing object set, and the
- * file/local-command endpoints are read-only.
+ * PR detail and the local Git diff workspace. Complete source comes from the
+ * local repository; GitHub patches are never used. prepare performs at most
+ * one fetch per missing object set, and the file/local-command endpoints are
+ * read-only.
  */
 export function registerDiffRoutes(
   app: FastifyInstance,
@@ -188,9 +188,9 @@ export function registerDiffRoutes(
       );
       const detail = requirePullRequest(database, id, number);
       const repository = requireRepositoryLocal(database, id);
-      // The command is composed for the client to copy (plan 11.5); LoongBoard
-      // never executes it. Kept as separate tokens so the source string does
-      // not read like an inline git invocation.
+      // The command is composed for the client to copy; LoongBoard never
+      // executes it. Kept as separate tokens so the source string does not
+      // read like an inline git invocation.
       const command = [
         "git",
         "fetch",

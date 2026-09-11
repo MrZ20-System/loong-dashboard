@@ -206,6 +206,3 @@ export class WorktreeJanitor {
     };
   }
 }
-
-/** Backward/semantic alias for callers that refer to the service as a reconciler. */
-export const WorktreeReconciler = WorktreeJanitor;

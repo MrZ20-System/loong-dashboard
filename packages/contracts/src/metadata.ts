@@ -180,7 +180,7 @@ export const issuesQuerySchema = z
     path: ["to"],
   });
 
-/** Full stored PR row used by the detail page (plan 17.2, 18.2). */
+/** Full stored PR row used by the detail page. */
 export const pullRequestDetailSchema = pullRequestListItemSchema.extend({
   createdAt: utcDateTimeSchema,
   closedAt: utcDateTimeSchema.nullable(),
@@ -202,7 +202,7 @@ export const activityDaysQuerySchema = z
     path: ["to"],
   });
 
-/** Numeric path params shared by issue routes (plan 17.4, 18.3). */
+/** Numeric path params shared by issue routes. */
 export const issueParamsSchema = z
   .object({
     repositoryId: repositoryIdSchema,
@@ -213,7 +213,7 @@ export const issueParamsSchema = z
   })
   .strict();
 
-/** Full stored Issue row used by the issue detail page (plan 1.3, 18.3). */
+/** Full stored Issue row used by the issue detail page. */
 export const issueDetailSchema = issueListItemSchema.extend({
   createdAt: utcDateTimeSchema,
   closedAt: utcDateTimeSchema.nullable(),

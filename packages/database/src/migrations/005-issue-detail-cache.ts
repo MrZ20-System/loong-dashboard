@@ -3,7 +3,7 @@ import type Database from "better-sqlite3";
 import type { Migration } from "../migration-runner.js";
 
 /**
- * Lazy Issue detail cache (plan 7.9). `issues.detail_synced_updated_at`
+ * Lazy Issue detail cache. `issues.detail_synced_updated_at`
  * records the `updated_at` value whose body/comments are stored locally;
  * `issue_comments` is replaced transactionally whenever that marker is
  * stale, and cascades when the owning Issue row disappears.

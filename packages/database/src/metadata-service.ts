@@ -170,7 +170,7 @@ export function upsertIssuePage(
 
 /**
  * Replace the cached Issue body/comments and refresh the summary row in one
- * transaction (plan 7.9). The fetched `updatedAt` doubles as the cache
+ * transaction. The fetched `updatedAt` doubles as the cache
  * marker so a later list update with a newer timestamp forces one fetch.
  */
 export function replaceIssueDetailCache(
@@ -494,7 +494,7 @@ export function listPullRequests(
   const domainIds = options.domainIds?.filter((id) => id.length > 0) ?? [];
   if (domainIds.length > 0) {
     // ANY-match semantics: the pull request carries at least one selected
-    // domain rule (plan 10.3). The rule ids are validated at the HTTP edge.
+    // domain rule. The rule ids are validated at the HTTP edge.
     const placeholders = domainIds.map(() => "?").join(", ");
     clauses.push(
       `EXISTS (
@@ -726,7 +726,7 @@ export function listIssues(
   };
 }
 
-/** Stored full Issue row for the detail page (plan 1.3, 18.3). */
+/** Stored full Issue row for the detail page. */
 export function getIssueDetail(
   database: DatabaseClient,
   repositoryId: string,

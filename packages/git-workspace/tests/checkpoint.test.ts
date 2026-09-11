@@ -64,7 +64,8 @@ describe("runCheckpoint", () => {
       message: "chore(knowledge): checkpoint t3",
       push: true,
       remote: "origin", // no remote is configured in the fixture repo
-      branch: "main",
+      sourceRef: "main",
+      remoteBranch: "loongboard-backup",
     });
     expect(result.committed).toBe(true);
     expect(result.pushed).toBe(false);

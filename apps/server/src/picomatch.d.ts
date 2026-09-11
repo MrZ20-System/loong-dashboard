@@ -1,6 +1,6 @@
 /**
  * picomatch@4 ships no type declarations. This ambient module covers only
- * the API surface LoongBoard consumes (plan 10: `picomatch(patterns,
+ * the API surface LoongBoard consumes: `picomatch(patterns,
  * { dot: true })` returning a matcher). Declared with `export default`
  * because Node's CJS interop exposes `module.exports` as the default.
  */

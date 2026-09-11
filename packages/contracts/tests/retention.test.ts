@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   archiveFilterSchema,
   archivePreviewRequestSchema,
+  maintenanceRunKindSchema,
   repositoryRetentionSettingsSchema,
   repositorySettingsSchema,
   repositorySettingsUpdateSchema,
@@ -53,5 +54,12 @@ describe("retention contracts", () => {
       includeClosedPrs: true,
       includeClosedIssues: true,
     });
+  });
+
+  it("keeps maintenance operations limited to canonical archive and history purge", () => {
+    expect(maintenanceRunKindSchema.parse("archive")).toBe("archive");
+    expect(maintenanceRunKindSchema.parse("purge_runtime_history")).toBe("purge_runtime_history");
+    expect(maintenanceRunKindSchema.safeParse("prune").success).toBe(false);
+    expect(maintenanceRunKindSchema.safeParse("optimize").success).toBe(false);
   });
 });

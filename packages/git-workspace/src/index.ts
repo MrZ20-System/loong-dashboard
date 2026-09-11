@@ -48,7 +48,6 @@ export {
 } from "./worktree-pool.js";
 export {
   WorktreeJanitor,
-  WorktreeReconciler,
   type WorktreeCleanupOptions,
   type WorktreeMaintenanceInput,
   type WorktreeMaintenanceResult,

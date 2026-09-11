@@ -19,10 +19,10 @@ import { MarkdownView } from "./markdown";
 type Mode = "preview" | "edit" | "history";
 
 /**
- * Knowledge page (plan 15, 18.3): file tree on the left, document center with
+ * Knowledge page: file tree on the left, document center with
  * Preview/Edit/History, and the default document chat on the right. Markdown
  * files are the source of truth; editing uses a plain source editor, and the
- * first save of a front-matter-less file adopts it (plan 15.2).
+ * first save of a front-matter-less file adopts it.
  */
 export function KnowledgePage() {
   const navigate = useNavigate();

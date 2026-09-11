@@ -12,7 +12,7 @@ function monacoTheme(theme: AppTheme): string {
 }
 
 /**
- * Monaco-based Markdown source editor for Knowledge documents (plan 15.3:
+ * Monaco-based Markdown source editor for Knowledge documents:
  * "编辑：Monaco Editor"). Loaded lazily so jsdom tests and first paint never
  * execute the worker setup; see diff-viewer for the shared module notes.
  */

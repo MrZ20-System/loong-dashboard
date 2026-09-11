@@ -5,7 +5,7 @@ import picomatch from "picomatch";
 import type { DomainRuleRecord } from "@loongboard/database";
 
 /**
- * Deterministic domain classification (plan 10).
+ * Deterministic domain classification from changed file paths.
  *
  * A rule attaches to a pull request when at least one current-head file
  * path matches ANY include pattern AND matches NO exclude pattern
@@ -29,7 +29,7 @@ function sha256(content: string): string {
 /**
  * Hash of the classification-relevant rule state. Only enabled rules and
  * only their id/include/exclude fields participate, so renames, recolors,
- * and reordering never invalidate stored classifications (plan 10.2).
+ * and reordering never invalidate stored classifications.
  */
 export function computeRuleSetHash(
   rules: readonly DomainRuleRecord[],
@@ -51,7 +51,7 @@ export function computeFileSetHash(paths: readonly string[]): string {
   return sha256(normalized.join("\n"));
 }
 
-/** Per-PR classification key stored on every domain row (plan 10.2). */
+/** Per-PR classification key stored on every domain row. */
 export function computeClassificationKey(
   ruleSetHash: string,
   fileSetHash: string,

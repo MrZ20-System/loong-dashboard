@@ -5,7 +5,7 @@ import mermaid from "mermaid";
 
 /**
  * Markdown renderer for chat messages, issue bodies, and Knowledge previews
- * (plan 17/18). Built on react-markdown + remark-gfm instead of the previous
+ * Built on react-markdown + remark-gfm instead of the previous
  * hand-written regular-expression parser. Raw HTML stays escaped, links and
  * images are restricted to safe sources, and ` ```mermaid ` fences render
  * through mermaid.

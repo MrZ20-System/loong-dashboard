@@ -3,7 +3,7 @@ import type Database from "better-sqlite3";
 import type { Migration } from "../migration-runner.js";
 
 /**
- * Indexes used by the Stage 1 metadata list queries.
+ * Indexes used by the metadata list queries.
  *
  * Migration 001 is intentionally immutable.  The original PR status index
  * remains available for existing databases; this migration adds the complete

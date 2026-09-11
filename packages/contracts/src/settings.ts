@@ -417,10 +417,6 @@ export const settingsDocumentV2Schema = z
   })
   .strict();
 
-// Keep the PascalCase alias available for callers that name the persisted
-// model after the document type rather than the Zod convention used here.
-export const SettingsDocumentV2Schema = settingsDocumentV2Schema;
-
 export const savedResponseSchema = z.object({ saved: z.literal(true) }).strict();
 export const removedResponseSchema = z.object({ removed: z.literal(true) }).strict();
 

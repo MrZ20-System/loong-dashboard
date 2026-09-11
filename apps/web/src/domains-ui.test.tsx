@@ -47,7 +47,7 @@ function renderApp(path: string) {
   return render(<MemoryRouter initialEntries={[path]}><App /></MemoryRouter>);
 }
 
-describe("Stage 2 domain UI", () => {
+describe("domain classification UI", () => {
   afterEach(() => {
     cleanup();
     appQueryClient.clear();

@@ -4,7 +4,7 @@ import type { editor } from "monaco-editor";
 import { AppThemeContext, type AppTheme } from "./knowledge-editor";
 
 /**
- * One shared Monaco diff editor for both view modes (plan 11.3). Changes
+ * One shared Monaco diff editor for both view modes. Changes
  * mode enables `hideUnchangedRegions`; Full File mode disables it. The
  * editor and worker load lazily after mount so the component never blocks
  * first paint and stays a no-op under jsdom tests. Changes mode renders
@@ -43,15 +43,8 @@ export interface DiffViewerProps {
 
 const DEFAULT_FONT_SIZE = 13;
 
-/**
- * Kept for compatibility with callers that used the former responsive floor.
- * Split no longer falls back to inline at any pane width.
- */
-export const SIDE_BY_SIDE_MIN_WIDTH = 860;
-
 export function shouldRenderSideBySide(
   fullFile: boolean,
-  _width: number,
   viewMode: DiffViewerMode = "split",
 ): boolean {
   return !fullFile && viewMode === "split";
@@ -159,7 +152,6 @@ export function DiffViewer(props: DiffViewerProps) {
       await registerBasicLanguages();
       if (disposed || hostRef.current === null) return;
       registerDiffThemes(monaco.editor);
-      const hostWidth = hostRef.current.clientWidth;
       const created = monaco.editor.createDiffEditor(hostRef.current, {
         readOnly: true,
         domReadOnly: true,
@@ -169,7 +161,6 @@ export function DiffViewer(props: DiffViewerProps) {
         scrollBeyondLastLine: false,
         renderSideBySide: shouldRenderSideBySide(
           fullFileRef.current,
-          hostWidth,
           viewModeRef.current,
         ),
         // Split must remain side-by-side even when the center pane is narrow.
@@ -229,7 +220,7 @@ export function DiffViewer(props: DiffViewerProps) {
         original: monaco.editor.createModel("", "plaintext"),
         modified: monaco.editor.createModel("", "plaintext"),
       });
-      applyContent(created, monaco.editor, latestPropsRef.current, hostWidth);
+      applyContent(created, monaco.editor, latestPropsRef.current);
       if (autoHeightRef.current) {
         scheduleAutoHeight(created, hostRef.current);
       }
@@ -288,7 +279,6 @@ export function DiffViewer(props: DiffViewerProps) {
       editorInstance.updateOptions({
         renderSideBySide: shouldRenderSideBySide(
           latestPropsRef.current.fullFile,
-          width,
           latestPropsRef.current.viewMode ?? "split",
         ),
         ...(latestPropsRef.current.autoHeight === true
@@ -329,7 +319,6 @@ export function DiffViewer(props: DiffViewerProps) {
         current,
         monaco.editor,
         latestPropsRef.current,
-        hostRef.current?.clientWidth ?? 0,
       );
       if (latestPropsRef.current.autoHeight === true) {
         scheduleAutoHeight(current, hostRef.current);
@@ -454,7 +443,6 @@ function applyContent(
   editorInstance: editor.IStandaloneDiffEditor,
   editorApi: typeof import("monaco-editor").editor,
   props: DiffViewerProps,
-  hostWidth: number,
 ): void {
   const language = languageForPath(props.path);
   const model = editorInstance.getModel();
@@ -467,7 +455,6 @@ function applyContent(
     fontSize: props.fontSize ?? DEFAULT_FONT_SIZE,
     renderSideBySide: shouldRenderSideBySide(
       props.fullFile,
-      hostWidth,
       props.viewMode ?? "split",
     ),
     hideUnchangedRegions: {

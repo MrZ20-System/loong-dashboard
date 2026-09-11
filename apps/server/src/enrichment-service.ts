@@ -22,7 +22,7 @@ import {
 /**
  * Metadata wins over enrichment: when the metadata stream reports fewer
  * remaining rate-limit points than this floor, file enrichment is skipped
- * for the round (stage-2 frozen decision D5).
+ * for the round. Metadata freshness takes priority over enrichment work.
  */
 const RATE_LIMIT_ENRICHMENT_FLOOR = 200;
 
@@ -49,7 +49,7 @@ export interface PullRequestEnrichmentServiceOptions {
 
 /**
  * Changed-file path enrichment after a successful PR metadata stream
- * (plan 9.6/9.9). Failures are logged and swallowed by the caller; PRs that
+ * after a successful PR metadata stream. Failures are logged and swallowed by the caller; PRs that
  * were not enriched simply surface again on the next sync round.
  */
 export class PullRequestEnrichmentService implements PullRequestFileEnricher {

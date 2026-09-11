@@ -107,9 +107,7 @@ export const runtimeHistoryPurgePreviewResponseSchema = z
 
 export const maintenanceRunKindSchema = z.enum([
   "archive",
-  "prune",
   "purge_runtime_history",
-  "optimize",
 ]);
 
 export const maintenanceRunTriggerSchema = z.enum(["manual", "automatic"]);

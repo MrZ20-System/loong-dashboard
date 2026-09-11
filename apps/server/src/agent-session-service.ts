@@ -147,17 +147,15 @@ export class AgentSessionService {
   }
 
   async ensureSession(body: AgentSessionCreate): Promise<AgentSessionView> {
-    const scope = body.origin ?? body.scope;
-    const normalizedBody: AgentSessionCreate = { ...body, scope };
-    const existing = findAgentSession(this.database, scope);
+    const existing = findAgentSession(this.database, body.scope);
     if (existing !== null) {
       touchAgentSession(this.database, existing.id);
       return this.viewFor(existing);
     }
-    const key = sessionScopeKey(scope);
+    const key = sessionScopeKey(body.scope);
     const inFlight = this.sessionCreates.get(key);
     if (inFlight !== undefined) return inFlight;
-    const creation = this.createSession(normalizedBody);
+    const creation = this.createSession(body);
     this.sessionCreates.set(key, creation);
     try {
       return await creation;
@@ -221,7 +219,7 @@ export class AgentSessionService {
 
   listSessions(query: AgentSessionsQuery): AgentSessionSummary[] {
     return listAgentSessions(this.database, {
-      originKind: query.originKind,
+      scopeKind: query.scopeKind,
       repositoryId: query.repositoryId,
       prNumber: query.prNumber,
       issueNumber: query.issueNumber,

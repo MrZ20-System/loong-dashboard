@@ -129,7 +129,7 @@ describe("architecture boundary fixtures", () => {
     ]);
   });
 
-  it("rejects Git execution outside the Git workspace or Knowledge Git service", () => {
+  it("rejects Git execution outside the Git workspace", () => {
     const root = makeFixture(
       "packages/server/src/worktree.ts",
       'import { execa } from "execa";\nexport const run = () => execa("git", ["status"]);\n',
@@ -143,6 +143,118 @@ describe("architecture boundary fixtures", () => {
         rule: "git-execution",
         description: expect.stringContaining("packages/git-workspace"),
         repair: expect.stringContaining("Move git execution"),
+      }),
+    ]);
+  });
+
+  it("rejects execaCommand Git execution outside the Git workspace", () => {
+    const root = makeFixture(
+      "apps/server/src/worktree.ts",
+      'import { execaCommand } from "execa";\nexport const run = () => execaCommand("git status");\n',
+    );
+
+    const violations = checkArchitecture(root, { rules: new Set(["git-execution"]) });
+
+    expect(violations).toEqual([
+      expect.objectContaining({
+        file: "apps/server/src/worktree.ts",
+        rule: "git-execution",
+      }),
+    ]);
+  });
+
+  it("rejects Knowledge Git execution even when the file name looks like a service", () => {
+    const root = makeFixture(
+      "packages/knowledge/src/git-service.ts",
+      'import { execa } from "execa";\nexport const checkpoint = () => execa("git", ["status"]);\n',
+    );
+
+    const violations = checkArchitecture(root, { rules: new Set(["git-execution"]) });
+
+    expect(violations).toEqual([
+      expect.objectContaining({
+        file: "packages/knowledge/src/git-service.ts",
+        rule: "git-execution",
+        description: expect.stringContaining("only in packages/git-workspace"),
+      }),
+    ]);
+  });
+
+  it("does not mistake command-copy strings or HTTP DELETE for Git execution", () => {
+    const root = makeFixture(
+      "apps/web/src/help.ts",
+      [
+        'const command = "git status";',
+        'const request = fetch("/api/items", { method: "DELETE" });',
+        "",
+      ].join("\n"),
+    );
+
+    expect(
+      checkArchitecture(root, { rules: new Set(["git-execution"]) }),
+    ).toEqual([]);
+  });
+
+  it("rejects synchronous Git process execution outside the Git workspace", () => {
+    const root = makeFixture(
+      "apps/server/src/worktree.ts",
+      [
+        'import { execSync, spawnSync } from "node:child_process";',
+        'export const status = () => execSync("git status");',
+        'export const probe = () => spawnSync("git", ["status"]);',
+        "",
+      ].join("\n"),
+    );
+
+    const violations = checkArchitecture(root, { rules: new Set(["git-execution"]) });
+
+    expect(violations).toEqual([
+      expect.objectContaining({
+        file: "apps/server/src/worktree.ts",
+        rule: "git-execution",
+      }),
+    ]);
+  });
+
+  it("rejects shell-template Git execution outside the Git workspace", () => {
+    const root = makeFixture(
+      "apps/server/src/worktree.ts",
+      'export const run = (ref) => exec(`git show ${ref}`);\n',
+    );
+
+    const violations = checkArchitecture(root, { rules: new Set(["git-execution"]) });
+
+    expect(violations).toEqual([
+      expect.objectContaining({
+        file: "apps/server/src/worktree.ts",
+        rule: "git-execution",
+      }),
+    ]);
+  });
+
+  it("allows only the explicitly approved Git fixture tests", () => {
+    const root = makeFixture(
+      "apps/server/test/worktree-capacity.test.ts",
+      'import { execFileSync } from "node:child_process";\nexport const seed = () => execFileSync("git", ["init"]);\n',
+    );
+
+    expect(
+      checkArchitecture(root, { rules: new Set(["git-execution"]) }),
+    ).toEqual([]);
+  });
+
+  it("rejects direct Git execution from an unapproved test source", () => {
+    const root = makeFixture(
+      "apps/server/test/unapproved.test.ts",
+      'import { execa } from "execa";\nexport const run = () => execa("git", ["status"]);\n',
+    );
+
+    const violations = checkArchitecture(root, { rules: new Set(["git-execution"]) });
+
+    expect(violations).toEqual([
+      expect.objectContaining({
+        file: "apps/server/test/unapproved.test.ts",
+        rule: "git-execution",
       }),
     ]);
   });
@@ -198,6 +310,180 @@ describe("architecture boundary fixtures", () => {
     ]);
   });
 
+  it("rejects Server dependencies on Web and unapproved workspace packages", () => {
+    const root = makeFixture(
+      "apps/server/package.json",
+      JSON.stringify({
+        name: "@loongboard/server",
+        dependencies: {
+          "@loongboard/web": "workspace:*",
+          "@loongboard/unknown": "workspace:*",
+        },
+      }),
+    );
+    addFixtureFile(
+      root,
+      "apps/web/package.json",
+      JSON.stringify({ name: "@loongboard/web" }),
+    );
+    addFixtureFile(
+      root,
+      "packages/unknown/package.json",
+      JSON.stringify({ name: "@loongboard/unknown" }),
+    );
+
+    const violations = checkArchitecture(root, {
+      rules: new Set(["workspace-dependency-direction"]),
+    });
+
+    expect(violations).toHaveLength(2);
+    expect(violations.map((item) => item.description)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("@loongboard/server -> @loongboard/web"),
+        expect.stringContaining("@loongboard/server -> @loongboard/unknown"),
+      ]),
+    );
+  });
+
+  it("allows the exact current Server workspace dependency set", () => {
+    const root = makeFixture(
+      "apps/server/package.json",
+      JSON.stringify({
+        name: "@loongboard/server",
+        dependencies: {
+          "@loongboard/agent-runtime": "workspace:*",
+          "@loongboard/agent-runtime-dsh": "workspace:*",
+          "@loongboard/contracts": "workspace:*",
+          "@loongboard/database": "workspace:*",
+          "@loongboard/git-workspace": "workspace:*",
+          "@loongboard/github": "workspace:*",
+          "@loongboard/knowledge": "workspace:*",
+          "@loongboard/scheduler": "workspace:*",
+        },
+      }),
+    );
+    for (const name of [
+      "agent-runtime",
+      "agent-runtime-dsh",
+      "contracts",
+      "database",
+      "git-workspace",
+      "github",
+      "knowledge",
+      "scheduler",
+    ]) {
+      addFixtureFile(
+        root,
+        `packages/${name}/package.json`,
+        JSON.stringify({ name: `@loongboard/${name}` }),
+      );
+    }
+
+    expect(
+      checkArchitecture(root, { rules: new Set(["workspace-dependency-direction"]) }),
+    ).toEqual([]);
+  });
+
+  it("rejects Scheduler dependencies beyond Contracts", () => {
+    const root = makeFixture(
+      "packages/scheduler/package.json",
+      JSON.stringify({
+        name: "@loongboard/scheduler",
+        dependencies: {
+          "@loongboard/contracts": "workspace:*",
+          "@loongboard/database": "workspace:*",
+        },
+      }),
+    );
+    addFixtureFile(
+      root,
+      "packages/contracts/package.json",
+      JSON.stringify({ name: "@loongboard/contracts" }),
+    );
+    addFixtureFile(
+      root,
+      "packages/database/package.json",
+      JSON.stringify({ name: "@loongboard/database" }),
+    );
+
+    const violations = checkArchitecture(root, {
+      rules: new Set(["workspace-dependency-direction"]),
+    });
+
+    expect(violations).toEqual([
+      expect.objectContaining({
+        file: "packages/scheduler/package.json",
+        description: expect.stringContaining(
+          "@loongboard/scheduler -> @loongboard/database",
+        ),
+      }),
+    ]);
+  });
+
+  it("rejects Agent Runtime DSH dependencies beyond Agent Runtime", () => {
+    const root = makeFixture(
+      "packages/agent-runtime-dsh/package.json",
+      JSON.stringify({
+        name: "@loongboard/agent-runtime-dsh",
+        dependencies: {
+          "@loongboard/agent-runtime": "workspace:*",
+          "@loongboard/contracts": "workspace:*",
+        },
+      }),
+    );
+    addFixtureFile(
+      root,
+      "packages/agent-runtime/package.json",
+      JSON.stringify({ name: "@loongboard/agent-runtime" }),
+    );
+    addFixtureFile(
+      root,
+      "packages/contracts/package.json",
+      JSON.stringify({ name: "@loongboard/contracts" }),
+    );
+
+    const violations = checkArchitecture(root, {
+      rules: new Set(["workspace-dependency-direction"]),
+    });
+
+    expect(violations).toEqual([
+      expect.objectContaining({
+        file: "packages/agent-runtime-dsh/package.json",
+        description: expect.stringContaining(
+          "@loongboard/agent-runtime-dsh -> @loongboard/contracts",
+        ),
+      }),
+    ]);
+  });
+
+  it("rejects GitHub dependencies beyond its current empty workspace set", () => {
+    const root = makeFixture(
+      "packages/github/package.json",
+      JSON.stringify({
+        name: "@loongboard/github",
+        dependencies: { "@loongboard/contracts": "workspace:*" },
+      }),
+    );
+    addFixtureFile(
+      root,
+      "packages/contracts/package.json",
+      JSON.stringify({ name: "@loongboard/contracts" }),
+    );
+
+    const violations = checkArchitecture(root, {
+      rules: new Set(["workspace-dependency-direction"]),
+    });
+
+    expect(violations).toEqual([
+      expect.objectContaining({
+        file: "packages/github/package.json",
+        description: expect.stringContaining(
+          "@loongboard/github -> @loongboard/contracts",
+        ),
+      }),
+    ]);
+  });
+
   it("rejects circular workspace package dependencies", () => {
     const root = makeFixture(
       "packages/alpha/package.json",
@@ -231,7 +517,7 @@ describe("architecture boundary fixtures", () => {
     ]);
   });
 
-  it("allows the DSH, database, GitHub, Git workspace, Knowledge Git, and acyclic fixtures", () => {
+  it("allows the DSH, database, GitHub, Git workspace, and acyclic fixtures", () => {
     const root = makeFixture(
       "packages/agent-runtime-dsh/src/client.ts",
       'import { DeepSeekHarness } from "@deepseek-ai/dsh";\n',
@@ -253,17 +539,13 @@ describe("architecture boundary fixtures", () => {
     );
     addFixtureFile(
       root,
-      "packages/knowledge/src/git-service.ts",
-      'export const checkpoint = () => execa("git", ["commit"]);\n',
-    );
-    addFixtureFile(
-      root,
       "packages/agent-runtime-dsh/package.json",
       JSON.stringify({
         name: "@loongboard/agent-runtime-dsh",
         dependencies: {
           "@deepseek-ai/dsh": "0.1.2-alpha.5",
           "@deepseek-ai/dsh-sdk-client": "0.1.2-alpha.5",
+          "@loongboard/agent-runtime": "workspace:*",
         },
       }),
     );

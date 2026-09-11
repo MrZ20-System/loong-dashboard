@@ -25,9 +25,7 @@ const MAX_ARCHIVE_BATCH_SIZE = 500;
 
 const MAINTENANCE_KINDS = [
   "archive",
-  "prune",
   "purge_runtime_history",
-  "optimize",
 ] as const satisfies readonly MaintenanceRunKind[];
 const MAINTENANCE_TRIGGERS = ["manual", "automatic"] as const satisfies readonly MaintenanceRunTrigger[];
 const MAINTENANCE_STATUSES = [

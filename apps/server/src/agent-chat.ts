@@ -103,8 +103,8 @@ function defaultRuntimeFactory(
 }
 
 /**
- * Compatibility facade for the Agent HTTP routes and existing scheduler,
- * Knowledge, and runtime-settings callers. All substantive work lives in the
+ * Public Agent orchestration facade for HTTP routes, scheduler, Knowledge,
+ * and runtime-settings callers. Substantive work lives in the focused
  * session, turn, and event services below this boundary.
  */
 export class AgentChatController {

@@ -402,30 +402,12 @@ describe("ContinuousChanges", () => {
     }
   });
 
-  it("maps split/unified to DiffViewer mode options regardless of width", () => {
-    expect(resolveChangesDiffOptions("unified", 2400)).toEqual({
+  it("maps each view mode directly to DiffViewer options", () => {
+    expect(resolveChangesDiffOptions("unified")).toEqual({
       fullFile: false,
       renderSideBySide: false,
     });
-    expect(resolveChangesDiffOptions("unified", 665)).toEqual({
-      fullFile: false,
-      renderSideBySide: false,
-    });
-    expect(
-      resolveChangesDiffOptions("split", 860),
-    ).toEqual({
-      fullFile: false,
-      renderSideBySide: true,
-    });
-    expect(
-      resolveChangesDiffOptions("split", 665),
-    ).toEqual({
-      fullFile: false,
-      renderSideBySide: true,
-    });
-    expect(
-      resolveChangesDiffOptions("split", 0),
-    ).toEqual({
+    expect(resolveChangesDiffOptions("split")).toEqual({
       fullFile: false,
       renderSideBySide: true,
     });

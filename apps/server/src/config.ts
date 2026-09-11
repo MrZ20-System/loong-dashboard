@@ -40,7 +40,7 @@ const baseSystemConfigSchema = z
             message: "knowledge.inbox must be relative to knowledge.path",
           }),
         historyLimit: z.number().int().positive(),
-        // Knowledge-only Git checkpoint entry (plan 15.6); source
+        // This checkpoint applies only to the Knowledge repository; source
         // repositories never get an entry and default to off.
         checkpoint: z
           .object({

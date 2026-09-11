@@ -56,6 +56,8 @@ function view(workspaceRevision: string | null): AgentSessionResponse {
       reasoningEffort: "high",
       status: "idle",
       dshSessionId: null,
+      title: null,
+      titleSource: "provisional",
       createdAt: "2026-09-03T00:00:00.000Z",
       lastUsedAt: "2026-09-03T00:00:00.000Z",
     },

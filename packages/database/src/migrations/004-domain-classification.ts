@@ -3,11 +3,11 @@ import type Database from "better-sqlite3";
 import type { Migration } from "../migration-runner.js";
 
 /**
- * Stage 2: changed-file storage and deterministic domain classification.
+ * Changed-file storage and deterministic domain classification.
  * The `pull_request_files`, `domain_rules`, and `pull_request_domains` tables
- * and their indexes were already created by 001 with the Stage 0 frozen
- * shapes; the only additive schema change is `pull_requests.files_truncated`
- * (plan 9.6), set when GitHub reports more than 3000 files for one PR head.
+ * and their indexes were already created by 001; the only additive schema
+ * change is `pull_requests.files_truncated`, set when GitHub reports more
+ * than 3000 files for one PR head.
  */
 export const domainClassificationMigration: Migration = {
   id: "004_domain_classification",

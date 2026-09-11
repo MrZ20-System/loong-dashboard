@@ -116,8 +116,8 @@ function calendarDay(value: string, timeZone: string): string {
     const day = parts.find((part) => part.type === "day")?.value;
     if (year && month && day) return `${year}-${month}-${day}`;
   } catch {
-    // Invalid time zones are rejected by the server contract; keep rendering
-    // the item without a divider if a legacy response slips through.
+    // If the browser cannot construct the formatter, keep rendering the item
+    // without a divider.
   }
   return value.slice(0, 10);
 }

@@ -3,7 +3,7 @@ import { z } from "zod";
 import { utcDateTimeSchema } from "./validation.js";
 
 /**
- * Knowledge repository contracts (plan 15, 17.6). Markdown files are the
+ * Knowledge repository contracts. Markdown files are the
  * source of truth; these schemas describe what the HTTP boundary exchanges.
  */
 

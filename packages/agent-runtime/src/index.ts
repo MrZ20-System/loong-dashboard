@@ -31,13 +31,13 @@ export interface AgentSessionSpec {
   model: string;
   reasoningEffort?: string;
   maxTokens?: number;
-  /** Per-session isolated harness home (plan 13.2). */
+  /** Per-session isolated harness home. */
   dshHomePath: string;
   /** Reuse an existing runtime session id so context survives restarts. */
   runtimeSessionId?: string;
 }
 
-/** The runtime provider contract (plan 13.1) with an added close(). */
+/** The runtime provider contract, including explicit close(). */
 export interface AgentRuntime {
   run(
     spec: AgentSessionSpec,
@@ -51,7 +51,7 @@ export interface AgentRuntime {
   /**
    * Optional opaque runtime-side session id for `sessionId`, available after
    * the first successful run. Persisting it lets a later run resume model
-   * context after the process was shut down for idleness (plan 13.3.10).
+   * context after the process was shut down for idleness.
    */
   runtimeSessionId?(sessionId: string): string | null;
   /** Read a title already accepted by the runtime, when supported. */
@@ -71,7 +71,7 @@ export interface AgentRuntimeHealth {
 /**
  * Vendor-neutral supervisor: keeps one runtime per session, tracks running
  * state, stops sessions on demand, and closes idle runtimes after
- * `idleCloseMs` of no activity (plan 19.4 default 120 minutes). Runtime
+ * `idleCloseMs` of no activity (the default is 120 minutes). Runtime
  * instances are created lazily by the injected factory, so the core has no
  * DSH knowledge.
  */
@@ -184,7 +184,7 @@ export class AgentRuntimeHost {
     this.armIdle(sessionId);
   }
 
-  /** Stop the session's process now (cancel semantics, plan 13.4). */
+  /** Stop the session's process now with cancel semantics. */
   async stop(sessionId: string): Promise<void> {
     this.active.delete(sessionId);
     this.clearIdle(sessionId);

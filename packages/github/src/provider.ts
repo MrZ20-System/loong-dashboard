@@ -220,7 +220,7 @@ export interface GitHubMetadataProvider {
 export interface GhGitHubMetadataProviderOptions {
   /**
    * gh executable. Used only to resolve `gh auth token` when no other token
-   * source is available; kept under the original name for compatibility.
+   * source is available.
    */
   readonly ghExecutable?: string;
   /** Injectable token source used verbatim by this provider. */
@@ -236,7 +236,7 @@ export interface GhGitHubMetadataProviderOptions {
   readonly environment?: NodeJS.ProcessEnv;
 }
 
-/** Signature compatible with Node's global fetch. */
+/** Matches Node's global fetch signature. */
 export type GitHubFetch = typeof fetch;
 /** Token resolution seam; the returned token is cached in memory only. */
 export type GitHubTokenResolver = () => string | null | Promise<string | null>;

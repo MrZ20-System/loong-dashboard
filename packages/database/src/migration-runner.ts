@@ -14,6 +14,7 @@ import { historyRateLimitRecoveryMigration } from "./migrations/011-history-rate
 import { metadataRetentionMigration } from "./migrations/012-metadata-retention.js";
 import { agentSessionTitleSourceMigration } from "./migrations/013-agent-session-title-source.js";
 import { phase1SchemaCanonicalizationMigration } from "./migrations/014-phase1-schema-canonicalization.js";
+import { retentionKindCanonicalizationMigration } from "./migrations/015-retention-kind-canonicalization.js";
 import {
   recoverInterruptedSyncRuns,
   recoverInterruptedSyncStates,
@@ -39,6 +40,7 @@ const migrations: readonly Migration[] = [
   metadataRetentionMigration,
   agentSessionTitleSourceMigration,
   phase1SchemaCanonicalizationMigration,
+  retentionKindCanonicalizationMigration,
 ];
 
 function orderedMigrations(items: readonly Migration[]): readonly Migration[] {

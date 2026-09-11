@@ -94,7 +94,7 @@ export function runtimeDatabasePath(config: SystemConfig): string {
 }
 
 /**
- * Compose the complete Stage 1 process without listening on a socket.
+ * Compose the complete server process without listening on a socket.
  * Configuration is loaded first, then the runtime directory/database is
  * prepared, and only then are typed application dependencies constructed.
  */
@@ -123,7 +123,7 @@ export function createServerRuntime(
     recoverInterruptedSyncStates(database);
     // Startup recovery: mark sessions a previous process left running as
     // interrupted so their worktree slots are recyclable and knowledge
-    // agent-version aggregation is not held open forever (plan 12.2/16.2).
+    // agent-version aggregation is not held open forever.
     recoverInterruptedAgentSessions(database);
 
     const credential = new GitHubCredentialService({

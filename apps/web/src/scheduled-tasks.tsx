@@ -17,7 +17,7 @@ function systemTaskHref(action: string | null | undefined): string {
 }
 
 /**
- * Scheduled tasks page (plan 16, 17.7, 18). One form per task lets the user
+ * Scheduled tasks page. One form per task lets the user
  * define the cron expression and prompt that is sent verbatim to a fresh
  * Agent Session on the task's workspace.
  */

@@ -12,7 +12,7 @@ import type { DatabaseClient } from "./types.js";
 
 export interface AgentSessionRecord {
   id: string;
-  originKind: AgentScope["kind"];
+  scopeKind: AgentScope["kind"];
   repositoryId: string | null;
   prNumber: number | null;
   issueNumber: number | null;
@@ -100,11 +100,6 @@ function mapSession(row: Record<string, unknown>): AgentSessionSummaryWithTitleS
     reasoningEffort: row.reasoning_effort as string,
     status: row.status as AgentSessionSummary["status"],
     dshSessionId: (row.dsh_session_id as string | null) ?? null,
-    origin: scope,
-    workspace: {
-      path: row.workspace_path as string,
-      kind: workspaceKind(kind),
-    },
     title: (row.title as string | null) ?? null,
     titleSource: row.title_source as AgentSessionTitleSource,
     createdAt: row.created_at as string,
@@ -192,14 +187,14 @@ export function createAgentSession(
       dsh_home_path, workspace_path, provider, model, reasoning_effort, status,
       created_at, last_used_at
     ) VALUES (
-      @id, @originKind, @repositoryId, @prNumber, @issueNumber, @targetSha,
+      @id, @scopeKind, @repositoryId, @prNumber, @issueNumber, @targetSha,
       @knowledgeDocumentId, @domainId, @originRoute, @title, @titleSource, NULL, @dshHomePath,
       @workspacePath, @provider, @model, @reasoningEffort, 'idle', @createdAt,
       @lastUsedAt
     )`,
   ).run({
     id: input.id,
-    originKind: scope.kind,
+    scopeKind: scope.kind,
     repositoryId: scope.repositoryId ?? null,
     prNumber: scope.prNumber ?? null,
     issueNumber: scope.issueNumber ?? null,
@@ -308,7 +303,7 @@ export function touchAgentSession(database: DatabaseClient, sessionId: string): 
 }
 
 export interface AgentSessionListFilter {
-  originKind?: AgentScope["kind"];
+  scopeKind?: AgentScope["kind"];
   repositoryId?: string;
   prNumber?: number;
   issueNumber?: number;
@@ -330,8 +325,8 @@ export function listAgentSessions(
     clauses.push(`${column} = ?`);
     parameters.push(value);
   };
-  if (filter.originKind !== undefined) {
-    add("origin_kind", filter.originKind);
+  if (filter.scopeKind !== undefined) {
+    add("origin_kind", filter.scopeKind);
   }
   add("repository_id", filter.repositoryId);
   add("pr_number", filter.prNumber);
@@ -404,19 +399,8 @@ export function listRunningKnowledgeSessionIds(database: DatabaseClient): string
   return rows.map((row) => row.id);
 }
 
-function workspaceKind(
-  kind: AgentScope["kind"],
-): "repository" | "pr-worktree" | "knowledge" | "custom" {
-  if (kind === "pr") return "pr-worktree";
-  if (kind === "knowledge") return "knowledge";
-  if (kind === "issue" || kind === "repository" || kind === "domain") {
-    return "repository";
-  }
-  return "custom";
-}
-
 /**
- * Startup recovery (plan 12.2/13 lifecycle): sessions a previous process left
+ * Startup recovery: sessions a previous process left
  * `running` would otherwise keep their worktree slot busy forever and hold
  * knowledge agent-version aggregation open. Mark them interrupted so the next
  * turn starts fresh; messages already persisted stay untouched.

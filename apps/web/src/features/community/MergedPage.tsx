@@ -27,7 +27,8 @@ function mergedCalendarDay(value: string, timeZone: string): string {
     const day = parts.find((part) => part.type === "day")?.value;
     if (year && month && day) return `${year}-${month}-${day}`;
   } catch {
-    // The server validates calendarTimeZone; keep a deterministic fallback for old responses.
+    // If the browser cannot construct the formatter, use the timestamp's
+    // calendar date so the row remains renderable.
   }
   return value.slice(0, 10);
 }

@@ -42,9 +42,9 @@ function emptyLive(): LiveTurn {
 }
 
 /**
- * Reusable right-rail Agent chat (plan 18.2/18.3/14): scope -> default
+ * Reusable right-rail Agent chat: scope -> default
  * session, persisted transcript, live streaming over SSE, cancel, and the PR
- * worktree revision banner (plan 12.5).
+ * worktree revision banner.
  */
 export function AgentChatPanel({
   scope,
@@ -131,7 +131,7 @@ export function AgentChatPanel({
       scope.prNumber !== undefined,
     queryFn: () =>
       listAgentSessions({
-        originKind: "pr",
+        scopeKind: "pr",
         repositoryId: scope.kind === "pr" ? scope.repositoryId : undefined,
         prNumber: scope.kind === "pr" ? scope.prNumber : undefined,
       }),

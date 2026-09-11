@@ -98,7 +98,7 @@ export class KnowledgeDocumentConflictError extends Error {
   }
 }
 
-/** Image MIME types served for Markdown references (plan 17.6, image assets). */
+/** Image MIME types served for Markdown references. */
 const KNOWLEDGE_ASSET_MIME_TYPES: Record<string, string> = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
@@ -130,16 +130,16 @@ export interface KnowledgeCheckpointOptions {
 export interface KnowledgeControllerOptions {
   database: DatabaseClient;
   knowledgePath: string;
-  /** Versions kept per document (plan 15.4). */
+  /** Number of historical versions kept per document. */
   historyLimit?: number;
-  /** Chat controller used for the default document chat (plan 15.5). */
+  /** Chat controller used for the default document chat. */
   chats: AgentChatController;
-  /** Knowledge-only Git checkpoint (plan 15.6); off unless configured. */
+  /** Knowledge-only Git checkpoint; off unless configured. */
   checkpoint?: KnowledgeCheckpointOptions;
 }
 
 /**
- * Knowledge repository controller (plan 15, 17.6). Markdown files on disk are
+ * Knowledge repository controller. Markdown files on disk are
  * the source of truth; SQLite only indexes documents and their short-term
  * history. Writes are atomic temp+rename. Versions cover manual saves,
  * external edits (debounced recursive watcher), restores, and one aggregated
@@ -258,7 +258,7 @@ export class KnowledgeController {
   }
 
   /**
-   * Serve a Markdown-referenced image from the knowledge root (plan 17.6).
+   * Serve a Markdown-referenced image from the knowledge root.
    * The repository-relative path must stay inside the root after symlink
    * resolution and name a regular file with a supported image extension.
    */
@@ -398,7 +398,7 @@ export class KnowledgeController {
     return this.toDocument(row.path, documentIdValue, content, row.defaultSessionId);
   }
 
-  /** Ensure the default chat session of a document exists (plan 15.5). */
+  /** Ensure the default chat session of a document exists. */
   async defaultChat(documentIdValue: string): Promise<AgentSessionResponse> {
     this.requireIndexed(documentIdValue);
     const row = this.requireIndexed(documentIdValue);
@@ -475,7 +475,7 @@ export class KnowledgeController {
 
   /**
    * Index Markdown found before/outside LoongBoard and create versions for
-   * changes that arrived outside LoongBoard (plan 15.4). While a knowledge
+   * changes that arrived outside LoongBoard. While a knowledge
    * agent session runs, changes per document are aggregated and flushed as
    * one `agent` version when the agent becomes idle.
    */

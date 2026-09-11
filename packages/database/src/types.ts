@@ -97,9 +97,9 @@ export interface SyncRun {
   repositoryId: string;
   syncRunId: string;
   startedAt: string;
-  /** Run metadata is optional on the legacy low-level start return. */
-  kind?: SyncRunKind;
-  trigger?: SyncRunTrigger;
+  kind: SyncRunKind;
+  trigger: SyncRunTrigger;
+  /** Completion is attached after the queued run is admitted by the coordinator. */
   completion?: Promise<SyncRunRecord>;
 }
 
@@ -247,7 +247,7 @@ export interface PullRequestListOptions extends ListQueryOptions {
   sort?: PullRequestListSort | null;
   /** Case-insensitive contiguous title/author or PR-number search. */
   search?: string | null;
-  /** Match pull requests carrying ANY of these domain rules (plan 10.3). */
+  /** Match pull requests carrying ANY of these domain rules. */
   domainIds?: readonly string[] | null;
   /** Retention projection to read; current is the safe default. */
   archive?: ArchiveFilter | null;
@@ -310,9 +310,7 @@ export type ArchiveFilter = "current" | "archived" | "all";
 export type ArchiveScope = "merged_prs" | "closed_prs" | "closed_issues";
 export type MaintenanceRunKind =
   | "archive"
-  | "prune"
-  | "purge_runtime_history"
-  | "optimize";
+  | "purge_runtime_history";
 export type MaintenanceRunTrigger = "manual" | "automatic";
 export type MaintenanceRunStatus =
   | "queued"

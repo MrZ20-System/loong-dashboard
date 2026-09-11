@@ -4,16 +4,11 @@ import { repositoryIdSchema, utcDateTimeSchema } from "./validation.js";
 import { fullShaSchema } from "./diff.js";
 
 /**
- * Agent chat contracts (plan 13.1, 17.5). The session and message rows are
+ * Agent chat contracts. The session and message rows are
  * normalized LoongBoard data; DSH persistence is never parsed here.
  */
 
-/**
- * A conversation origin is where a user opened the conversation.  It is kept
- * separate from the workspace binding used to run a turn.  The alias
- * `scope` remains in the wire contract for existing callers and persisted
- * sessions.
- */
+/** Scope that identifies the resource a session belongs to. */
 export const agentScopeKindSchema = z.enum([
   "pr",
   "issue",
@@ -23,9 +18,7 @@ export const agentScopeKindSchema = z.enum([
   "domain",
 ]);
 
-export const agentOriginKindSchema = agentScopeKindSchema;
-
-export const agentOriginSchema = z
+export const agentScopeSchema = z
   .object({
     kind: agentScopeKindSchema,
     repositoryId: repositoryIdSchema.optional(),
@@ -62,18 +55,6 @@ export const agentOriginSchema = z
       (scope.repositoryId !== undefined && scope.domainId !== undefined),
     { message: "domain scope requires repositoryId and domainId" },
   );
-
-/** Backwards-compatible name for the origin object used by current callers. */
-export const agentScopeSchema = agentOriginSchema;
-
-export const agentWorkspaceBindingSchema = z
-  .object({
-    path: z.string().min(1),
-    kind: z
-      .enum(["repository", "pr-worktree", "knowledge", "custom"])
-      .optional(),
-  })
-  .strict();
 
 /**
  * Runtime capability data is discovered from the connected runtime.  Model
@@ -117,16 +98,17 @@ export const agentRuntimeCapabilitiesSchema = z
     /** Aggregate convenience values; model.reasoningEfforts is authoritative. */
     reasoning: z.array(z.string().trim().min(1)),
     commands: z.array(agentRuntimeCommandCapabilitySchema),
-    /** Optional provider directory; absent keeps compatibility with older runtimes. */
+    /** Provider directory is absent when runtime discovery cannot provide it. */
     providers: z.array(agentRuntimeProviderCapabilitySchema).optional(),
     features: z.array(z.string().trim().min(1)),
     discovery: z.enum(["runtime", "unavailable"]),
+    /** Adapters may omit a discovery timestamp when the runtime cannot report one. */
     discoveredAt: utcDateTimeSchema.nullable().optional(),
     error: z.string().optional(),
   })
   .strict();
 
-/** Ownership of a session title. Older responses may omit this field. */
+/** Ownership of the persisted session title. */
 export const agentSessionTitleSourceSchema = z.enum([
   "provisional",
   "generated",
@@ -155,13 +137,8 @@ export const agentSessionSummarySchema = z
     reasoningEffort: z.string().min(1),
     status: z.enum(["idle", "running", "interrupted", "error"]),
     dshSessionId: z.string().nullable(),
-    /** Conversation origin; optional so older API/database rows remain readable. */
-    origin: agentOriginSchema.optional(),
-    /** Explicit workspace binding; `workspacePath` remains the compatibility field. */
-    workspace: agentWorkspaceBindingSchema.optional(),
-    title: z.string().trim().min(1).nullable().optional(),
-    /** Optional on the wire so older clients can still read session summaries. */
-    titleSource: agentSessionTitleSourceSchema.optional(),
+    title: z.string().trim().min(1).nullable(),
+    titleSource: agentSessionTitleSourceSchema,
     createdAt: utcDateTimeSchema,
     lastUsedAt: utcDateTimeSchema,
   })
@@ -194,30 +171,15 @@ export const agentMessagesResponseSchema = z
   })
   .strict();
 
-const agentSessionCreateBodySchema = z
+export const agentSessionCreateSchema = z
   .object({
-    /** `scope` is retained for clients using the original API shape. */
     scope: agentScopeSchema,
-    origin: agentOriginSchema.optional(),
-    workspace: agentWorkspaceBindingSchema.optional(),
     title: agentTitleSchema.optional(),
     provider: z.string().trim().min(1).optional(),
     model: z.string().trim().min(1).optional(),
     reasoningEffort: z.string().trim().min(1).optional(),
   })
   .strict();
-
-/** Accept the new `origin` name while keeping typed/HTTP compatibility with `scope`. */
-export const agentSessionCreateSchema = z.preprocess((input) => {
-  if (input === null || typeof input !== "object" || Array.isArray(input)) {
-    return input;
-  }
-  const value = input as Record<string, unknown>;
-  if (value.scope === undefined && value.origin !== undefined) {
-    return { ...value, scope: value.origin };
-  }
-  return value;
-}, agentSessionCreateBodySchema);
 
 export const agentMessageCreateSchema = z
   .object({
@@ -250,12 +212,12 @@ export const agentParamsSchema = z.object({
 });
 
 /**
- * Session list filter (plan 12.4 old-chat discovery). Every field is optional;
+ * Session list filter for persisted session discovery. Every field is optional;
  * Fastify query values arrive as strings and are coerced here once.
  */
 export const agentSessionsQuerySchema = z
   .object({
-    originKind: agentOriginKindSchema.optional(),
+    scopeKind: agentScopeKindSchema.optional(),
     repositoryId: z.string().trim().min(1).optional(),
     prNumber: z.preprocess(
       (value) => (value === undefined ? undefined : Number(value)),
@@ -321,7 +283,7 @@ export const agentInteractionResponseSchema = z
   .object({ value: z.string().trim().min(1).max(200) })
   .strict();
 
-/** One streamed runtime event (plan 13.1), JSON-serializable for SSE. */
+/** One streamed runtime event, JSON-serializable for SSE. */
 export const agentRuntimeEventSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("status"), status: z.enum(["starting", "running", "idle", "stopped"]) }).strict(),
   z.object({ type: z.literal("assistant.delta"), text: z.string() }).strict(),
@@ -358,9 +320,6 @@ export const agentSessionDeleteResponseSchema = z
   .strict();
 
 export type AgentScope = z.infer<typeof agentScopeSchema>;
-export type AgentOrigin = z.infer<typeof agentOriginSchema>;
-export type AgentOriginKind = z.infer<typeof agentOriginKindSchema>;
-export type AgentWorkspaceBinding = z.infer<typeof agentWorkspaceBindingSchema>;
 export type AgentRuntimeModelCapability = z.infer<
   typeof agentRuntimeModelCapabilitySchema
 >;

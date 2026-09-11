@@ -149,7 +149,7 @@ export interface LocalGitWorkspaceOptions {
 
 /**
  * Local Git adapter for the PR diff workspace. Fetches are serialized per
- * repository (plan 11.1); read-only commands may run concurrently.
+ * repository; read-only commands may run concurrently.
  */
 export class LocalGitWorkspace {
   private readonly fetchQueues = new Map<string, Promise<unknown>>();
@@ -169,7 +169,7 @@ export class LocalGitWorkspace {
   }
 
   /**
-   * Guarantees the PR head commit and the base ref exist locally (plan 11.1).
+   * Guarantees the PR head commit and the base ref exist locally.
    * When either is missing, one fetch adds both refs; concurrent prepare
    * calls for the same repository run their fetches serially, and repeated
    * probes inside the queue prevent duplicate fetches.
@@ -227,7 +227,7 @@ export class LocalGitWorkspace {
     return { headSha: input.headSha, mergeBase, fetched };
   }
 
-  /** Changed files between merge base and head (plan 11.2). */
+  /** Changed files between merge base and head. */
   async listChangedFiles(input: {
     repositoryPath: string;
     mergeBase: string;
@@ -264,7 +264,7 @@ export class LocalGitWorkspace {
   }
 
   /**
-   * Full file list at one ref (plan 11.x full-file mode). The ref comes from
+   * Full file list at one ref. The ref comes from
    * a validated PR head or merge-base SHA; only the parsed NUL-separated
    * paths cross the adapter boundary, never raw command output.
    */
@@ -282,7 +282,7 @@ export class LocalGitWorkspace {
     return tokens.filter((token) => token.length > 0);
   }
 
-  /** Full file content at one revision (plan 11.2). */
+  /** Full file content at one revision. */
   async readFile(input: ReadFileInput): Promise<FileContent> {
     assertSafeGitPath(input.path);
     const bytes = await runGitBuffer(

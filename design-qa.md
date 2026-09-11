@@ -8,13 +8,13 @@
 ## Visual sources
 
 - GitHub live reference: `https://github.com/vllm-project/vllm/pull/53906/files`.
-- GitHub capture: `/Users/lonng/system/loong-dashboard/design-qa/github-changes-reference-current.png`.
-- User Changes reference: `/var/folders/_x/r1dvxp_10bgdvbg2m73qt1hm0000gn/T/codex-clipboard-9dc86c49-a13f-4186-99f1-06caf536d6eb.png`.
-- User Full File reference: `/var/folders/_x/r1dvxp_10bgdvbg2m73qt1hm0000gn/T/codex-clipboard-c70ceea0-852f-4b49-bf41-e72ce10327be.png`.
-- User VS Code file-state reference: `/var/folders/_x/r1dvxp_10bgdvbg2m73qt1hm0000gn/T/codex-clipboard-e73fd185-65da-4c8d-8e09-f85cc5c0d6d5.png`.
-- Final implementation capture: `/Users/lonng/system/loong-dashboard/design-qa/changes-final-live.png`.
-- Narrow Split regression capture: `/Users/lonng/system/loong-dashboard/design-qa/split-narrow-fixed-1353x987.jpg`.
-- Same-input visual comparison: `/Users/lonng/system/loong-dashboard/design-qa/github-vs-loongboard-changes.png`.
+- GitHub capture: `design-qa/github-changes-reference-current.png`.
+- User Changes reference: local temporary clipboard capture (not committed).
+- User Full File reference: local temporary clipboard capture (not committed).
+- User VS Code file-state reference: local temporary clipboard capture (not committed).
+- Final implementation capture: `design-qa/changes-final-live.png`.
+- Narrow Split regression capture: `design-qa/split-narrow-fixed-1353x987.jpg`.
+- Same-input visual comparison: `design-qa/github-vs-loongboard-changes.png`.
 
 The same-input comparison was reviewed at full resolution. It confirms the requested left file index, sticky per-file header, copy action beside the path, dominant code canvas, compact controls, and GitHub-like file card hierarchy. The implementation is denser because it preserves LoongBoard's full-height engineering workbench and uses the requested split view in the captured state.
 
@@ -62,9 +62,9 @@ The same-input comparison was reviewed at full resolution. It confirms the reque
 
 ### Visual evidence
 
-- Source visual truth: `/var/folders/_x/r1dvxp_10bgdvbg2m73qt1hm0000gn/T/codex-clipboard-8d6b847e-a8dd-4404-810c-fba1be8c71cf.png` (`1932 x 404`, desktop, light theme).
-- Browser implementation: `/Users/lonng/system/loong-dashboard/design-qa/issue-header-final.png` (`1353 x 987`, CSS viewport `1353 x 987`, device scale factor `1`, vLLM Issue `#54521`, light theme).
-- Focused same-input comparison: `/Users/lonng/system/loong-dashboard/design-qa/issue-header-reference-vs-final.png`. The reference was normalized to `1088 x 228`; the implementation header was cropped to `1088 x 210`. A focused comparison was required because the source contains only the header while the implementation capture includes the full application shell.
+- Source visual truth: local temporary clipboard capture (not committed) (`1932 x 404`, desktop, light theme).
+- Browser implementation: `design-qa/issue-header-final.png` (`1353 x 987`, CSS viewport `1353 x 987`, device scale factor `1`, vLLM Issue `#54521`, light theme).
+- Focused same-input comparison: `design-qa/issue-header-reference-vs-final.png`. The reference was normalized to `1088 x 228`; the implementation header was cropped to `1088 x 210`. A focused comparison was required because the source contains only the header while the implementation capture includes the full application shell.
 
 ### Findings and comparison history
 

@@ -28,7 +28,7 @@ export interface AllocateSlotInput {
   readonly slotCount: number;
   readonly prNumber: number;
   readonly targetSha: string;
-  /** Slots occupied by live sessions; never recycled (plan 12.2). */
+  /** Slots occupied by live sessions; never recycled. */
   readonly busySlotPaths: readonly string[];
   /**
    * Slot metadata from SQLite worktree_slots. It is the selection source for
@@ -62,7 +62,7 @@ function slotName(index: number): string {
 }
 
 /**
- * Disposable detached-worktree pool (plan 12). Allocation follows the frozen
+ * Disposable detached-worktree pool. Allocation follows the safe
  * order: reuse the same PR's exact-target non-busy slot, switch the same PR's
  * old target when clean/nonbusy, create the next free slot, then recycle the
  * least-recently-used clean non-busy slot from worktree_slots.last_used_at.
@@ -94,10 +94,10 @@ export class WorktreePool {
       return clean;
     };
 
-    // Repair slots whose worktree registration is broken (plan 12: an
-    // initialization failure is repaired by deleting and re-adding the
-    // worktree). A leftover directory from an interrupted `worktree add`
-    // otherwise occupies its slot forever.
+    // Repair slots whose worktree registration is broken: an initialization
+    // failure is repaired by deleting and re-adding the worktree. A leftover
+    // directory from an interrupted `worktree add` otherwise occupies its
+    // slot forever.
     await Promise.all(
       existing
         .filter((slot) => !busy.has(slot.path))
@@ -188,7 +188,7 @@ export class WorktreePool {
       return { slotName: name, slotPath, created: true };
     }
 
-    // 4. Legacy unbound physical slots (worktree dirs with no DB row yet) are
+    // 4. Unbound physical slots (worktree dirs with no DB row yet) are
     //    free when clean; recycle them before bound LRU candidates.
     for (const slot of existing) {
       if (busy.has(slot.path)) continue;
@@ -230,7 +230,7 @@ export class WorktreePool {
   }
 
   /**
-   * True when `git status --porcelain` succeeds with empty output (plan 12.2
+   * True when `git status --porcelain` succeeds with empty output (safety
    * protection). A git status failure throws instead of being treated as
    * clean, so allocation fails before any destructive reset/clean recycle.
    */
@@ -253,7 +253,7 @@ export class WorktreePool {
 
   /**
    * Unregister a broken slot worktree and remove its leftover directory so
-   * the slot can be re-created by the next allocation (plan 12 repair).
+   * the slot can be re-created by the next allocation.
    */
   private async removeBrokenSlot(mainRepositoryPath: string, slotPath: string): Promise<void> {
     try {

@@ -24,7 +24,7 @@ export interface StoredPullRequestFiles {
 /**
  * Replace the file set recorded for one PR head. Rows belonging to stale
  * heads of the same PR are removed so classification only ever sees the
- * current head. The truncation flag (plan 9.6) is stored on the PR row.
+ * current head. The truncation flag is stored on the PR row.
  */
 export function replacePullRequestFiles(
   database: DatabaseClient,
@@ -131,7 +131,7 @@ export function listCurrentPullRequestEnrichmentStates(
 
 /**
  * A PR needs enrichment while no file rows exist for its current head SHA
- * (new PRs, head changes, and previously failed enrichments — plan 9.6).
+ * (new PRs, head changes, and previously failed enrichments).
  */
 export function listPullRequestsNeedingFileEnrichment(
   database: DatabaseClient,
@@ -226,7 +226,7 @@ export function listPullRequestFileSets(
 
 /**
  * Write the full domain set for one PR. When the stored classification key
- * already equals the computed key, the rows are left untouched (plan 10.2).
+ * already equals the computed key, the rows are left untouched.
  * Returns whether rows were (re)written.
  */
 export function replacePullRequestDomains(

@@ -13,18 +13,18 @@ import type {
 } from "./provider.js";
 
 /**
- * Stage 2 changed-file path enrichment helpers (plan 9.6).
+ * Changed-file path enrichment helpers.
  *
  * Pure batching helpers remain available independently. The concrete
  * `PullRequestFilesProvider` below owns the GitHub GraphQL batch and REST
  * fallback boundary while keeping the provider facade free of file logic.
  */
 
-/** GraphQL `nodes(ids:)` batch size for file enrichment (plan 9.6). */
+/** GraphQL `nodes(ids:)` batch size for file enrichment. */
 export const FILES_BATCH_SIZE = 20;
 /** GraphQL `files(first:)` and REST `per_page` page size. */
 export const FILES_PAGE_SIZE = 100;
-/** GitHub REST caps one PR at 3000 files; V1 stops there (plan 9.6). */
+/** GitHub REST caps one PR at 3000 files; enrichment stops there. */
 export const MAX_FILES_PER_PULL_REQUEST = 3_000;
 /** File enrichment is a medium-cost task: at most 2 batches concurrently. */
 export const MAX_CONCURRENT_FILE_BATCHES = 2;

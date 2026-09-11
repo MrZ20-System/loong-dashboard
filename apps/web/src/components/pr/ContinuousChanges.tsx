@@ -19,13 +19,7 @@ export const DEFAULT_EXPANDED_CHANGE_LINE_LIMIT = 400;
  */
 export type ChangesViewMode = "unified" | "split";
 
-/**
- * Kept for compatibility with callers that used the former responsive floor.
- * Split no longer falls back to inline at any pane width.
- */
-export const CHANGES_SPLIT_MIN_WIDTH = 860;
-
-/** DiffViewer-compatible mode options for one Changes card. */
+/** DiffViewer mode options for one Changes card. */
 export interface ChangesDiffOptions {
   readonly fullFile: false;
   readonly renderSideBySide: boolean;
@@ -33,14 +27,9 @@ export interface ChangesDiffOptions {
 
 /**
  * Maps the typed view mode to DiffViewer options. Split always requests
- * side-by-side; Unified always requests inline. The width argument remains in
- * the compatibility signature for existing callers but no longer changes the
- * selected layout.
+ * side-by-side; Unified always requests inline.
  */
-export function resolveChangesDiffOptions(
-  viewMode: ChangesViewMode,
-  _width: number,
-): ChangesDiffOptions {
+export function resolveChangesDiffOptions(viewMode: ChangesViewMode): ChangesDiffOptions {
   return {
     fullFile: false,
     renderSideBySide: viewMode === "split",

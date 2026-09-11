@@ -188,6 +188,8 @@ function mockApi(options: { prepare?: Promise<unknown>; detail?: unknown } = {})
         reasoningEffort: "high",
         status: "idle",
         dshSessionId: null,
+        title: null,
+        titleSource: "provisional",
         createdAt: "2026-09-03T00:00:00.000Z",
         lastUsedAt: "2026-09-03T00:00:00.000Z",
       },

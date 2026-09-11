@@ -35,10 +35,9 @@ const RULES = {
       "Move gh execution into packages/github/** and expose a provider method to the caller.",
   },
   "git-execution": {
-    description:
-      "Git execution is allowed only in packages/git-workspace/** or a Knowledge Git service",
+    description: "Git execution is allowed only in packages/git-workspace/**",
     repair:
-      "Move git execution into packages/git-workspace/** or a file-scoped Knowledge Git service.",
+      "Move git execution into packages/git-workspace/** and expose a typed package API.",
   },
   "circular-dependencies": {
     description: "Workspace packages must not have circular runtime dependencies",
@@ -55,22 +54,33 @@ const RULES = {
 const WORKSPACE_PACKAGE_RULES = {
   "@loongboard/contracts": new Set(),
   "@loongboard/web": new Set(["@loongboard/contracts"]),
-  "@loongboard/server": null,
-  "@loongboard/agent-runtime": new Set(["@loongboard/contracts"]),
-  "@loongboard/agent-runtime-dsh": new Set([
+  "@loongboard/server": new Set([
     "@loongboard/agent-runtime",
-    "@loongboard/contracts",
-  ]),
-  "@loongboard/database": new Set(["@loongboard/contracts"]),
-  "@loongboard/github": new Set(["@loongboard/contracts"]),
-  "@loongboard/git-workspace": new Set(["@loongboard/contracts"]),
-  "@loongboard/knowledge": new Set(["@loongboard/contracts"]),
-  "@loongboard/scheduler": new Set([
-    "@loongboard/agent-runtime",
+    "@loongboard/agent-runtime-dsh",
     "@loongboard/contracts",
     "@loongboard/database",
+    "@loongboard/git-workspace",
+    "@loongboard/github",
+    "@loongboard/knowledge",
+    "@loongboard/scheduler",
   ]),
+  "@loongboard/agent-runtime": new Set(["@loongboard/contracts"]),
+  "@loongboard/agent-runtime-dsh": new Set(["@loongboard/agent-runtime"]),
+  "@loongboard/database": new Set(["@loongboard/contracts"]),
+  "@loongboard/github": new Set(),
+  "@loongboard/git-workspace": new Set(["@loongboard/contracts"]),
+  "@loongboard/knowledge": new Set(["@loongboard/contracts"]),
+  "@loongboard/scheduler": new Set(["@loongboard/contracts"]),
 };
+
+// These tests bootstrap disposable repositories before exercising the typed
+// Git workspace API. Keep the exception file-scoped so a new test cannot
+// silently bypass the Git boundary.
+const GIT_FIXTURE_SOURCES = new Set([
+  "apps/server/test/worktree-affinity.test.ts",
+  "apps/server/test/worktree-capacity.test.ts",
+  "apps/server/test/workspace-ownership.test.ts",
+]);
 
 function relativePath(root, filePath) {
   return path.relative(root, filePath).split(path.sep).join("/");
@@ -152,7 +162,7 @@ function hasRawSql(source) {
 
 function hasGhExecution(source) {
   return (
-    /(?:spawn|exec|execFile|execa|command)\s*\(\s*["'`]gh(?:\.exe)?(?:["'`]|\s)/i.test(
+    /(?:spawn|exec|execFile|execa|execaCommand|command)\s*\(\s*["'`]gh(?:\.exe)?(?:["'`]|\s)/i.test(
       source,
     ) ||
     /["'`]gh\s+(?:api|auth|issue|pr|repo|run|search)\b/i.test(source)
@@ -160,22 +170,15 @@ function hasGhExecution(source) {
 }
 
 function hasGitExecution(source) {
-  return (
-    /(?:spawn|exec|execFile|execa|command)\s*\(\s*["'`]git(?:\.exe)?(?:["'`]|\s)/i.test(
-      source,
-    ) ||
-    /["'`]git\s+(?:add|branch|checkout|clone|commit|diff|fetch|log|pull|push|show|status|switch|worktree)\b/i.test(
-      source,
-    )
+  // Require a process/command invocation so help text and test assertions
+  // containing strings such as "git status" are not treated as execution.
+  return /(?:spawn|spawnSync|exec|execSync|execFile|execFileSync|execa|execaCommand|command)\s*\(\s*["'`]git(?:\.exe)?(?:["'`]|\s)/i.test(
+    source,
   );
 }
 
 function isGitExecutionAllowed(relative) {
-  if (isUnder(relative, "packages/git-workspace")) {
-    return true;
-  }
-
-  return isUnder(relative, "packages/knowledge") && /(?:^|\/)git(?:[-/]|$)/i.test(relative);
+  return isUnder(relative, "packages/git-workspace") || GIT_FIXTURE_SOURCES.has(relative);
 }
 
 function findBoundaryViolations(root, rules) {
@@ -284,9 +287,7 @@ function findManifestViolations(root) {
     const workspaceDependencies = [...declaredDependencies(manifest)].filter((name) =>
       workspaceNames.has(name),
     );
-    const disallowed = ownerRules === null
-      ? workspaceDependencies.filter((name) => name === "@loongboard/web")
-      : workspaceDependencies.filter((name) => !ownerRules.has(name));
+    const disallowed = workspaceDependencies.filter((name) => !ownerRules.has(name));
     for (const dependency of disallowed) {
       const item = violation(relative, "workspace-dependency-direction");
       item.description = `${item.description}: ${manifest.name} -> ${dependency}`;

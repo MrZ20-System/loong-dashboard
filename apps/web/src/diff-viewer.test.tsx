@@ -377,17 +377,12 @@ describe("DiffViewer Monaco lazy-load race", () => {
     );
   });
 
-  it("maps Changes layout mode directly regardless of pane width", async () => {
+  it("maps Changes layout mode directly", async () => {
     const mod = await loadDiffViewer(() => ({ editor: makeEditorMocks() }));
-    expect(mod.shouldRenderSideBySide(false, 860, "split")).toBe(true);
-    expect(mod.shouldRenderSideBySide(false, 859, "split")).toBe(true);
-    expect(mod.shouldRenderSideBySide(false, 665, "split")).toBe(true);
-    expect(mod.shouldRenderSideBySide(false, 0, "split")).toBe(true);
-    expect(mod.shouldRenderSideBySide(false, 2400, "unified")).toBe(false);
-    expect(mod.shouldRenderSideBySide(false, 665, "unified")).toBe(false);
-    expect(mod.shouldRenderSideBySide(false, 860)).toBe(true);
+    expect(mod.shouldRenderSideBySide(false, "split")).toBe(true);
+    expect(mod.shouldRenderSideBySide(false, "unified")).toBe(false);
+    expect(mod.shouldRenderSideBySide(false)).toBe(true);
     // Full File ignores the mode override and always stays inline.
-    expect(mod.shouldRenderSideBySide(true, 2400, "split")).toBe(false);
-    expect(mod.shouldRenderSideBySide(true, 665, "split")).toBe(false);
+    expect(mod.shouldRenderSideBySide(true, "split")).toBe(false);
   });
 });

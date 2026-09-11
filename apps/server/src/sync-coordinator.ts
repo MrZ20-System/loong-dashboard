@@ -575,21 +575,6 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
   private attachCompletion(run: SyncRun): SyncRun {
     const pending = deferred<SyncRunRecord>();
     this.completions.set(run.syncRunId, pending);
-    const durable = getSyncRun(this.database, run.syncRunId);
-    if (run.kind === undefined) {
-      Object.defineProperty(run, "kind", {
-        configurable: false,
-        enumerable: false,
-        value: durable.kind,
-      });
-    }
-    if (run.trigger === undefined) {
-      Object.defineProperty(run, "trigger", {
-        configurable: false,
-        enumerable: false,
-        value: durable.trigger,
-      });
-    }
     Object.defineProperty(run, "completion", {
       configurable: false,
       enumerable: false,

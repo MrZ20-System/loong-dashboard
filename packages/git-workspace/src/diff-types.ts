@@ -28,7 +28,7 @@ export interface ListFilesAtRefInput {
   readonly ref: string;
 }
 
-/** Result of `git show <ref>:<path>` with the two V1 degradation branches. */
+/** Result of `git show <ref>:<path>` with the two safe degradation branches. */
 export interface FileContent {
   readonly path: string;
   readonly ref: string;

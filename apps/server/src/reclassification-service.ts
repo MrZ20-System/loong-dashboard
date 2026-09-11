@@ -44,8 +44,8 @@ interface RepositoryRunState {
 }
 
 /**
- * One serial in-process background reclassification task per repository
- * (plan 10.3). Rule mutations only flip local rows — this service never
+ * One serial in-process background reclassification task per repository.
+ * Rule mutations only flip local rows — this service never
  * calls GitHub. A mutation arriving mid-run schedules exactly one follow-up
  * run via a dirty flag, so bursts of edits collapse into one recompute.
  */

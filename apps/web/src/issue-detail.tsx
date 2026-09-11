@@ -6,10 +6,10 @@ import { MarkdownView } from "./markdown";
 import { restoreIssueMetadata } from "./retention-client";
 
 /**
- * Issue detail page (plan 1.3, 14, 18.3, 7.9): cached markdown body and
+ * Issue detail page: cached markdown body and
  * comments fetched on demand from GitHub, with an Issue-scoped Agent chat
  * on the right whose cwd is the repository root. Nothing is auto-injected
- * into the prompt (plan 13.6); the GitHub links are provided for reference.
+ * into the prompt; the GitHub links are provided for reference.
  */
 export function IssueDetailPage() {
   const { repositoryId = "", number: rawNumber = "" } = useParams();

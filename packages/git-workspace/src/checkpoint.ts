@@ -29,11 +29,9 @@ export function isGitRepository(repositoryPath: string): boolean {
 export interface RunCheckpointInput {
   repositoryPath: string;
   message: string;
-  /** Push after a successful commit (plan 15.6 autoPush). */
+  /** Push after a successful commit when requested. */
   push?: boolean;
   remote?: string;
-  /** Legacy shorthand used as both sourceRef and remoteBranch. */
-  branch?: string;
   sourceRef?: string;
   remoteBranch?: string;
 }
@@ -132,8 +130,8 @@ export async function runCheckpoint(
       return { committed: dirty };
     }
     const remote = input.remote;
-    const sourceRef = input.sourceRef ?? input.branch;
-    const remoteBranch = input.remoteBranch ?? input.branch;
+    const sourceRef = input.sourceRef;
+    const remoteBranch = input.remoteBranch;
     if (remote === undefined || sourceRef === undefined || remoteBranch === undefined) {
       return {
         committed: dirty,

@@ -25,7 +25,7 @@ export const changedFileEntrySchema = z
   })
   .strict();
 
-/** Response of POST .../pulls/:number/prepare (plan 17.2). */
+/** Response of POST .../pulls/:number/prepare. */
 export const preparePullResponseSchema = z
   .object({
     repositoryId: repositoryIdSchema,
@@ -37,7 +37,7 @@ export const preparePullResponseSchema = z
   })
   .strict();
 
-/** Response of GET .../pulls/:number/file (plan 11.4 degradation branches). */
+/** Response of GET .../pulls/:number/file, including safe degradation branches. */
 export const fileContentResponseSchema = z
   .object({
     path: z.string().min(1),
@@ -84,7 +84,7 @@ export const repositoryTreeResponseSchema = z
   })
   .strict();
 
-/** Response of GET .../pulls/:number/local-command (plan 11.5). */
+/** Response of GET .../pulls/:number/local-command. */
 export const localCommandResponseSchema = z
   .object({
     command: z.string().min(1),

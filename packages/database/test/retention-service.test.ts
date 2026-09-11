@@ -27,6 +27,7 @@ import {
   upsertPullRequestPage,
   type ConfiguredRepository,
   type IssueMetadata,
+  type MaintenanceRunKind,
   type PullRequestMetadata,
 } from "../src/index.js";
 
@@ -500,14 +501,13 @@ describe("maintenance run typed API", () => {
         status: "running",
       })).toThrow(/Invalid maintenance run transition/);
 
-      const queued = createMaintenanceRun(database, {
-        repositoryId: "repo",
-        kind: "optimize",
-        trigger: "automatic",
-      });
-      expect(() => updateMaintenanceRun(database, queued.id, {
-        status: "completed",
-      })).toThrow(/Invalid maintenance run transition/);
+      for (const legacyKind of ["prune", "optimize"] as const) {
+        expect(() => createMaintenanceRun(database, {
+          repositoryId: "repo",
+          kind: legacyKind as unknown as MaintenanceRunKind,
+          trigger: "automatic",
+        })).toThrow(/Unknown maintenance run kind/);
+      }
     });
   });
 });

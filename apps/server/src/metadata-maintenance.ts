@@ -204,7 +204,7 @@ export class MetadataMaintenanceService {
     const cutoff = calendarDateToUtc(input.date, this.calendarTimeZone).from;
     const run = createMaintenanceRun(this.database, {
       repositoryId,
-      kind: input.prune ? "prune" : "archive",
+      kind: "archive",
       trigger,
       cutoff,
       selector: {

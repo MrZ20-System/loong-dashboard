@@ -2,7 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import { dirname, extname, join, relative, resolve, sep } from "node:path";
 
-/** One Markdown file under the knowledge root (plan 15.1/15.2). */
+/** One Markdown file under the knowledge root. */
 export interface KnowledgeFileInfo {
   /** Repository-relative POSIX path, e.g. `notes/foo.md`. */
   path: string;
@@ -29,7 +29,7 @@ export interface ParsedDocument {
   raw: string;
 }
 
-/** Directories excluded from the knowledge tree (plan 15.1). */
+/** Directories excluded from the knowledge tree. */
 const EXCLUDED_DIRECTORIES = new Set([".git", "node_modules", ".loong"]);
 
 const isMarkdown = (path: string): boolean =>
@@ -63,7 +63,7 @@ export function isWithinRoot(root: string, path: string): boolean {
 }
 
 /**
- * Recursively list Markdown files under `root` (plan 15.1). Document titles
+ * Recursively list Markdown files under `root`. Document titles
  * come from the front matter heading when present, otherwise the file name.
  */
 export function scanKnowledgeFiles(root: string): KnowledgeFileSnapshot[] {
@@ -126,8 +126,8 @@ function firstHeadingTitle(body: string): string | null {
 }
 
 /**
- * Parse the standard YAML-ish front matter used for the stable document id
- * (plan 15.2). Only `key: value` scalar lines are interpreted; everything
+ * Parse the standard YAML-ish front matter used for the stable document id.
+ * Only `key: value` scalar lines are interpreted; everything
  * else is left untouched by save operations.
  */
 export function parseMarkdown(raw: string): ParsedDocument {
@@ -245,8 +245,8 @@ export function ensureDocumentId(
 }
 
 /**
- * Write by temp file + rename so readers never observe a partial document
- * (plan 15.3). Parent directories are created when needed.
+ * Write by temp file + rename so readers never observe a partial document.
+ * Parent directories are created when needed.
  */
 export function atomicWrite(absolutePath: string, content: string): void {
   mkdirSync(dirname(absolutePath), { recursive: true });

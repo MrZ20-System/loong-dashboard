@@ -117,6 +117,39 @@ describe("MetadataMaintenanceService", () => {
     await service.close();
   });
 
+  it("keeps prune as archive-run selector behavior while pruning payloads", async () => {
+    const database = fixture();
+    upsertPullRequestPage(database, "repo", [pullRequest(1)]);
+    const service = new MetadataMaintenanceService({
+      database,
+      calendarTimeZone: "UTC",
+      now: () => new Date("2026-09-11T00:00:00.000Z"),
+    });
+
+    const started = service.start("repo", {
+      date: "2026-09-02",
+      includeMergedPrs: false,
+      includeClosedPrs: true,
+      includeClosedIssues: false,
+      prune: true,
+    });
+    expect(started.run).toMatchObject({ kind: "archive", status: "queued" });
+
+    const completed = await started.completion;
+    expect(completed).toMatchObject({
+      kind: "archive",
+      status: "completed",
+      prCount: 1,
+    });
+    expect(getPullRequestDetail(database, "repo", 1)).toMatchObject({
+      archivedAt: "2026-09-11T00:00:00.000Z",
+      detailBody: null,
+      payloadPrunedAt: "2026-09-11T00:00:00.000Z",
+    });
+    expect(completed.selector).toMatchObject({ prune: true });
+    await service.close();
+  });
+
   it("interrupts a queued run during close without leaving a pending promise", async () => {
     const database = fixture();
     const service = new MetadataMaintenanceService({

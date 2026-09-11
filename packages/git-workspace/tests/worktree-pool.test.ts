@@ -12,7 +12,7 @@ import {
 } from "../src/index.js";
 
 /**
- * Worktree allocation against a real seeded repository (plan 12). The main
+ * Worktree allocation against a real seeded repository. The main
  * checkout gains detached worktrees under disposable pool roots, while an
  * in-memory slot store mirrors the server's SQLite worktree_slots callbacks.
  */
@@ -389,7 +389,7 @@ describe("WorktreePool", () => {
     const store = createStore();
     const pool = new WorktreePool();
     // Simulate an interrupted `worktree add`: the slot directory exists but
-    // is not a registered worktree (plan 12 repair).
+    // is not a registered worktree.
     const broken = path.join(poolRoot, "slot-01");
     fs.mkdirSync(broken, { recursive: true });
     fs.writeFileSync(path.join(broken, "stale.txt"), "leftover");

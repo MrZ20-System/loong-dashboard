@@ -31,12 +31,12 @@ import { assertEmptyRequestBody, parseRequest, sendParsed } from "./route-helper
 export interface DomainRoutesDependencies {
   database: DatabaseClient;
   reclassification: DomainReclassification;
-  /** File source of truth. Omitted only for legacy/unit-test app fixtures. */
+  /** File source of truth. Focused test builders may omit this optional input. */
   domainFiles?: DomainFileService;
 }
 
 /**
- * Domain rule CRUD and the stored changed-file read model (plan 17.3, 18.1).
+ * Domain rule CRUD and the stored changed-file read model.
  * Every successful mutation triggers the local serial reclassification run;
  * the response carries its snapshot so the web can show "重新分类中"
  * without polling a second endpoint.
