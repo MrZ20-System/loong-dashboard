@@ -1,24 +1,13 @@
 import { openDatabase, type DatabaseClient } from "@loongboard/database";
-import type { SyncRun } from "@loongboard/database";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { buildApp } from "../src/app.js";
-import type { SyncCoordinator } from "../src/sync-coordinator.js";
+import { buildTestApp } from "../src/app.js";
+import { createSyncCoordinatorStub } from "./support/sync-coordinator.js";
 
-const apps: ReturnType<typeof buildApp>[] = [];
+const apps: ReturnType<typeof buildTestApp>[] = [];
 const databases: DatabaseClient[] = [];
 
-const healthDependencies: SyncCoordinator = {
-  start(repositoryId: string): SyncRun {
-    return {
-      repositoryId,
-      syncRunId: "health-test",
-      startedAt: "2026-09-03T00:00:00.000Z",
-    };
-  },
-  waitForIdle: async () => undefined,
-  close: async () => undefined,
-};
+const healthDependencies = createSyncCoordinatorStub();
 
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
@@ -31,7 +20,7 @@ describe("GET /api/health", () => {
   it("returns the exact shared health response", async () => {
     const database = openDatabase(":memory:");
     databases.push(database);
-    const app = buildApp(
+    const app = buildTestApp(
       {
         database,
         timezone: "UTC",

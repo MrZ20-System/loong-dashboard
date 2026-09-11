@@ -5,24 +5,14 @@ import { join } from "node:path";
 import { openDatabase, type DatabaseClient } from "@loongboard/database";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { buildApp } from "../src/app.js";
-import type { SyncCoordinator } from "../src/sync-coordinator.js";
+import { buildTestApp } from "../src/app.js";
+import { createSyncCoordinatorStub } from "./support/sync-coordinator.js";
 
-const apps: Array<ReturnType<typeof buildApp>> = [];
+const apps: Array<ReturnType<typeof buildTestApp>> = [];
 const databases: DatabaseClient[] = [];
 const staticRoots: string[] = [];
 
-const coordinator: SyncCoordinator = {
-  start(repositoryId: string) {
-    return {
-      repositoryId,
-      syncRunId: "production-static-test",
-      startedAt: "2026-09-11T00:00:00.000Z",
-    };
-  },
-  waitForIdle: async () => undefined,
-  close: async () => undefined,
-};
+const coordinator = createSyncCoordinatorStub();
 
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
@@ -40,7 +30,7 @@ async function setup() {
 
   const database = openDatabase(":memory:");
   databases.push(database);
-  const app = buildApp(
+  const app = buildTestApp(
     { database, timezone: "UTC", syncCoordinator: coordinator },
     { logger: false, staticRoot },
   );

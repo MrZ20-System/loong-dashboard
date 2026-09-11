@@ -6,23 +6,17 @@ import {
   openDatabase,
   reconcileRepositories,
   type DatabaseClient,
-  type SyncRun,
 } from "@loongboard/database";
 import { repositorySettingsSchema } from "@loongboard/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { buildApp } from "../src/app.js";
+import { buildTestApp } from "../src/app.js";
 import { SettingsController } from "../src/settings.js";
+import { createSyncCoordinatorStub } from "./support/sync-coordinator.js";
 
-const resources: Array<{ app: ReturnType<typeof buildApp>; database: DatabaseClient; root: string }> = [];
+const resources: Array<{ app: ReturnType<typeof buildTestApp>; database: DatabaseClient; root: string }> = [];
 
-const syncCoordinator = {
-  start(repositoryId: string): SyncRun {
-    return { repositoryId, syncRunId: "settings-test", startedAt: "2026-09-10T00:00:00.000Z" };
-  },
-  waitForIdle: async () => undefined,
-  close: async () => undefined,
-};
+const syncCoordinator = createSyncCoordinatorStub();
 
 afterEach(async () => {
   for (const resource of resources.splice(0)) {
@@ -79,7 +73,7 @@ describe("repository worktree settings routes", () => {
         }),
       },
     });
-    const app = buildApp({ database, timezone: "UTC", syncCoordinator, settings: controller }, { logger: false });
+    const app = buildTestApp({ database, timezone: "UTC", syncCoordinator, settings: controller }, { logger: false });
     resources.push({ app, database, root });
 
     const getResponse = await app.inject({ method: "GET", url: "/api/repositories/loongboard/settings" });

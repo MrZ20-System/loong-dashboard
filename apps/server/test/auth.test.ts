@@ -17,8 +17,8 @@ import {
   AuthService,
   resetAuthFile,
 } from "../src/auth.js";
-import { buildApp } from "../src/app.js";
-import type { SyncCoordinator } from "../src/sync-coordinator.js";
+import { buildTestApp } from "../src/app.js";
+import { createSyncCoordinatorStub } from "./support/sync-coordinator.js";
 
 const fixtures: Array<{ root: string; database: DatabaseClient; app: FastifyInstance }> = [];
 
@@ -30,18 +30,12 @@ afterEach(async () => {
   }
 });
 
-const syncCoordinator: SyncCoordinator = {
-  start(repositoryId) {
-    return { repositoryId, syncRunId: "test-run", startedAt: new Date().toISOString() };
-  },
-  waitForIdle: async () => undefined,
-  close: async () => undefined,
-};
+const syncCoordinator = createSyncCoordinatorStub();
 
 function fixture(): { root: string; database: DatabaseClient; app: FastifyInstance } {
   const root = mkdtempSync(join(tmpdir(), "loongboard-auth-"));
   const database = openDatabase(join(root, "state.sqlite3"));
-  const app = buildApp({
+  const app = buildTestApp({
     database,
     timezone: "UTC",
     syncCoordinator,

@@ -26,12 +26,13 @@ import type {
 } from "@loongboard/github";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { buildApp } from "../src/app.js";
+import { buildTestApp } from "../src/app.js";
 import type { SyncCoordinator } from "../src/sync-coordinator.js";
+import { createSyncCoordinatorStub } from "./support/sync-coordinator.js";
 
 const temporaryDirectories: string[] = [];
 const databases: DatabaseClient[] = [];
-const apps: Array<ReturnType<typeof buildApp>> = [];
+const apps: Array<ReturnType<typeof buildTestApp>> = [];
 
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
@@ -63,11 +64,11 @@ function repository(): ConfiguredRepository {
   };
 }
 
-function setup(): { client: DatabaseClient; app: ReturnType<typeof buildApp>; provider: IssueDetailProvider } {
+function setup(): { client: DatabaseClient; app: ReturnType<typeof buildTestApp>; provider: IssueDetailProvider } {
   const client = database();
   reconcileRepositories(client, [repository()]);
   const provider = new IssueDetailProvider();
-  const app = buildApp({
+  const app = buildTestApp({
     database: client,
     timezone: "Asia/Shanghai",
     syncCoordinator: fakeCoordinator(),
@@ -179,15 +180,7 @@ class IssueDetailProvider implements GitHubMetadataProvider {
 }
 
 function fakeCoordinator(): SyncCoordinator {
-  return {
-    start: (repositoryId) => ({
-      repositoryId,
-      syncRunId: "test-run",
-      startedAt: "2026-09-03T00:00:00.000Z",
-    }),
-    waitForIdle: async () => undefined,
-    close: async () => undefined,
-  };
+  return createSyncCoordinatorStub();
 }
 
 async function* emptyIssuePages(): AsyncGenerator<IssuePage> {}

@@ -2,7 +2,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { buildApp, KnowledgeController } from "../../apps/server/src/index.js";
+import { buildTestApp } from "../../apps/server/src/app.js";
+import { KnowledgeController } from "../../apps/server/src/index.js";
+import { createSyncCoordinatorStub } from "../../apps/server/test/support/sync-coordinator.js";
 import {
   listDocumentVersions,
   openDatabase,
@@ -73,15 +75,13 @@ describe("critical backend flows", () => {
       comments: [],
     };
     const github = provider(detail);
-    const app = buildApp({
+    const app = buildTestApp({
       database,
       timezone: "Asia/Shanghai",
       github,
-      syncCoordinator: {
+      syncCoordinator: createSyncCoordinatorStub({
         start: () => { throw new Error("not used"); },
-        waitForIdle: async () => {},
-        close: async () => {},
-      },
+      }),
     });
     cleanups.push(() => app.close());
 

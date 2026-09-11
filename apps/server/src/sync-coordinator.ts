@@ -98,15 +98,15 @@ export interface RepositorySyncCoordinatorOptions {
 
 export interface SyncCoordinator {
   start(repositoryId: string, trigger?: SyncRunTrigger): SyncRun;
-  startHistory?(repositoryId: string, options?: HistoryStartOptions): SyncRun;
-  startFetchPullRequest?(
+  startHistory(repositoryId: string, options?: HistoryStartOptions): SyncRun;
+  startFetchPullRequest(
     repositoryId: string,
     number: number,
     options?: FetchPullRequestStartOptions,
   ): SyncRun;
-  configureHistory?(repositoryId: string, update: HistorySettingsUpdate): void;
-  pauseHistory?(repositoryId: string): void;
-  resumeHistory?(repositoryId: string, options?: HistoryStartOptions): SyncRun;
+  configureHistory(repositoryId: string, update: HistorySettingsUpdate): void;
+  pauseHistory(repositoryId: string): void;
+  resumeHistory(repositoryId: string, options?: HistoryStartOptions): SyncRun;
   /** Re-admit enabled history whose last process died mid-cursor. */
   resumeEnabledHistories?(): void;
   /** True when this repository has queued or admitted sync work. */

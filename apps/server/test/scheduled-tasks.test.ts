@@ -7,10 +7,10 @@ import {
 } from "@loongboard/database";
 import type { FastifyInstance } from "fastify";
 
-import { buildApp } from "../src/app.js";
+import { buildTestApp } from "../src/app.js";
 import { SchedulerEngine } from "../src/scheduler.js";
-import type { SyncCoordinator } from "../src/sync-coordinator.js";
 import { WorkspaceRunCoordinator } from "../src/workspace-run-coordinator.js";
+import { createSyncCoordinatorStub } from "./support/sync-coordinator.js";
 
 const databases: DatabaseClient[] = [];
 const apps: FastifyInstance[] = [];
@@ -42,15 +42,8 @@ function setup(): { app: FastifyInstance; database: DatabaseClient } {
     workspaceRuns: new WorkspaceRunCoordinator(),
     agentSessionsPath: "/tmp/loongboard-scheduled-task-tests",
   });
-  const syncCoordinator = {
-    start: async () => ({
-      repositoryId: "repo",
-      syncRunId: "sync-run",
-      startedAt: "2026-09-11T00:00:00.000Z",
-    }),
-    close: async () => undefined,
-  } as unknown as SyncCoordinator;
-  const app = buildApp(
+  const syncCoordinator = createSyncCoordinatorStub();
+  const app = buildTestApp(
     {
       database,
       timezone: "UTC",

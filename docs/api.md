@@ -1,18 +1,18 @@
 # HTTP API 与事件
 
-服务在 [app.ts](../apps/server/src/app.ts) 注册模块路由。所有路径以下均带 `/api` 前缀。精确字段、可选参数和约束以 [contracts 导出](../packages/contracts/src/index.ts) 链接到的 Zod schema 为准，本页提供查找目录，避免维护第二份字段定义。
+生产服务由 [buildProductionApp](../apps/server/src/app.ts) 组装 HTTP route；Server package 的 [index.ts](../apps/server/src/index.ts) 只公开该生产入口。所有路径以下均带 `/api` 前缀。repositories、sync、metadata、auth 的 route 注册分别位于 [repositories.ts](../apps/server/src/routes/repositories.ts)、[sync.ts](../apps/server/src/routes/sync.ts)、[metadata.ts](../apps/server/src/routes/metadata.ts)、[auth.ts](../apps/server/src/routes/auth.ts)；其他领域 route 仍从现有模块注册。精确字段、可选参数和约束以 [contracts 导出](../packages/contracts/src/index.ts) 链接到的 Zod schema 为准，本页提供查找目录，避免维护第二份字段定义。Focused tests 如需 lightweight builder，只能在同仓库内从 `src/app` 直接导入 `buildTestApp`，不属于 HTTP package public API。
 
 | 路径组 | 操作 | contracts / route |
 | --- | --- | --- |
 | `/health` | GET，精确返回 `{ "status": "ok" }` | [health](../packages/contracts/src/health.ts) / [app](../apps/server/src/app.ts) |
-| `/auth/status`、`/auth/unlock`、`/auth/password`、`/auth/disable`、`/auth/logout` | GET/POST 可选本地密码锁；仅 status/unlock/health 是公共 API，其余 API 在锁启用时需要 HttpOnly session cookie | [auth](../packages/contracts/src/auth.ts) / app |
-| `/repositories` | GET 配置仓库投影 | [repositories](../packages/contracts/src/repositories.ts) / app |
-| `/repositories/:id/sync`、`/sync-status` | POST 接受 forward/history/fetch_pr 同步并返回 `syncRunId`，GET 当前状态；HTTP trigger 固定为 `api` | [sync](../packages/contracts/src/sync.ts) / app |
-| `/repositories/:id/sync-runs`、`/sync-runs/:runId` | GET 最近 run 或具体 run（含 PR/Issue stream、计数、水位、错误） | sync / app |
-| `/repositories/:id/sync-history` | GET metadata history target、cursor/anchor 与最老覆盖边界；PUT 设置目标日期或 enable；POST `/pause`、`/continue` 控制 batch admission | sync / app |
-| `/repositories/:repositoryId/pulls/:number/fetch` | POST 定向拉取单 PR，返回独立 `fetch_pr` run，不改变 forward watermark/cursor | sync / app |
-| `/repositories/:id/pulls`、`/issues` 及各自 `/activity-days` | GET 列表和日期活动；PR 支持 `updated` / `number` sort，使用 `page` + `limit` 页码分页；Issue 继续使用 cursor；PR/Issue 可选 `archive=current|archived|all` | [metadata](../packages/contracts/src/metadata.ts) / app |
-| `/repositories/:id/merged` | GET `pull_requests` 的 merged projection，使用 `page` + `limit` 页码分页并返回过滤后的总数；没有独立同步，也不按 archive 过滤 | metadata / app |
+| `/auth/status`、`/auth/unlock`、`/auth/password`、`/auth/disable`、`/auth/logout` | GET/POST 可选本地密码锁；仅 status/unlock/health 是公共 API，其余 API 在锁启用时需要 HttpOnly session cookie | [auth](../packages/contracts/src/auth.ts) / [auth route](../apps/server/src/routes/auth.ts) |
+| `/repositories` | GET 配置仓库投影 | [repositories](../packages/contracts/src/repositories.ts) / [repositories route](../apps/server/src/routes/repositories.ts) |
+| `/repositories/:id/sync`、`/sync-status` | POST 接受 forward/history/fetch_pr 同步并返回 `syncRunId`，GET 当前状态；HTTP trigger 固定为 `api` | [sync](../packages/contracts/src/sync.ts) / [sync route](../apps/server/src/routes/sync.ts) |
+| `/repositories/:id/sync-runs`、`/sync-runs/:runId` | GET 最近 run 或具体 run（含 PR/Issue stream、计数、水位、错误） | sync / [sync route](../apps/server/src/routes/sync.ts) |
+| `/repositories/:id/sync-history` | GET metadata history target、cursor/anchor 与最老覆盖边界；PUT 设置目标日期或 enable；POST `/pause`、`/continue` 控制 batch admission | sync / [sync route](../apps/server/src/routes/sync.ts) |
+| `/repositories/:repositoryId/pulls/:number/fetch` | POST 定向拉取单 PR，返回独立 `fetch_pr` run，不改变 forward watermark/cursor | sync / [sync route](../apps/server/src/routes/sync.ts) |
+| `/repositories/:id/pulls`、`/issues` 及各自 `/activity-days` | GET 列表和日期活动；PR 支持 `updated` / `number` sort，使用 `page` + `limit` 页码分页；Issue 继续使用 cursor；PR/Issue 可选 `archive=current|archived|all` | [metadata](../packages/contracts/src/metadata.ts) / [metadata route](../apps/server/src/routes/metadata.ts) |
+| `/repositories/:id/merged` | GET `pull_requests` 的 merged projection，使用 `page` + `limit` 页码分页并返回过滤后的总数；没有独立同步，也不按 archive 过滤 | metadata / [metadata route](../apps/server/src/routes/metadata.ts) |
 | `/repositories/:id/maintenance/preview`、`/maintenance`、`/maintenance/:runId` | POST preview/accepted bounded archive-prune run，GET durable status；日期按 server timezone 转换为 UTC | [retention](../packages/contracts/src/retention.ts) / [maintenance route](../apps/server/src/metadata-maintenance-routes.ts) |
 | `/repositories/:id/maintenance/runtime-history/preview`、`/maintenance/runtime-history` | POST preview/accepted runtime sync-run purge；服务固定使用 30 天 cutoff、保留最新 100 条并返回 protected/active/stream/target 计数 | retention / maintenance route |
 | `/repositories/:id/pulls/:number/restore`、`/issues/:number/restore` | POST 恢复单个 metadata entity 的 archive marker | retention / maintenance route |

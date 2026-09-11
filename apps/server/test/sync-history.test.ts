@@ -4,28 +4,18 @@ import {
   upsertPullRequestPage,
   type DatabaseClient,
   type PullRequestMetadata,
-  type SyncRun,
 } from "@loongboard/database";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { buildApp } from "../src/app.js";
-import type { SyncCoordinator } from "../src/sync-coordinator.js";
+import { buildTestApp } from "../src/app.js";
+import { createSyncCoordinatorStub } from "./support/sync-coordinator.js";
 
-const apps: Array<ReturnType<typeof buildApp>> = [];
+const apps: Array<ReturnType<typeof buildTestApp>> = [];
 const databases: DatabaseClient[] = [];
 
-const coordinator: SyncCoordinator = {
-  start(repositoryId: string): SyncRun {
-    return {
-      repositoryId,
-      syncRunId: "sync-history-test",
-      startedAt: "2026-09-10T00:00:00.000Z",
-    };
-  },
+const coordinator = createSyncCoordinatorStub({
   configureHistory: () => undefined,
-  waitForIdle: async () => undefined,
-  close: async () => undefined,
-};
+});
 
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
@@ -34,7 +24,7 @@ afterEach(async () => {
   }
 });
 
-function setup(): ReturnType<typeof buildApp> {
+function setup(): ReturnType<typeof buildTestApp> {
   const database = openDatabase(":memory:");
   databases.push(database);
   reconcileRepositories(database, [
@@ -48,7 +38,7 @@ function setup(): ReturnType<typeof buildApp> {
       worktreeSlots: 1,
     },
   ]);
-  const app = buildApp(
+  const app = buildTestApp(
     {
       database,
       timezone: "UTC",

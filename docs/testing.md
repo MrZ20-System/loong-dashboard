@@ -33,6 +33,22 @@ pnpm check:full
 
 `pnpm check:full` is `pnpm check` followed by `pnpm test:regression`.
 
+## Server application builders
+
+The production HTTP factory is `buildProductionApp`. Its
+`BuildProductionAppDependencies` requires every product capability, and the
+production runtime supplies the complete set explicitly, including the real
+`LocalGitWorkspace`. The old `buildApp` entry point no longer exists.
+
+`buildTestApp` is a separate lightweight builder used only by focused tests in
+this repository, imported directly from `src/app`. It is not a package public
+API; the Server package index exposes only `buildProductionApp`. Optional
+capabilities and fallback services are scoped to the focused-test builder only;
+they are not production capability-presence branches.
+`SyncCoordinator` fakes use the complete interface, including required
+history and pull-request operations, so route tests exercise the same HTTP
+paths and schemas without changing them.
+
 ## 本次关键验证层
 
 新增或调整的行为应在最近边界保留轻量测试：
@@ -40,6 +56,7 @@ pnpm check:full
 - History admission、cursor continuation、`resume_after` 和 foreground 优先级在 Server coordinator tests 中验证；provider `resetAt`、真实 GitHub 分页和 quota 需要 live GitHub 环境。
 - metadata archive/restore、reopen auto-unarchive、payload prune marker、Merged projection、maintenance run 和 sync-run purge 在 database/service tests 中验证；SQLite 文件大小、free pages、快照恢复和实际 `VACUUM` 效果需要独立运维验证。
 - `title_source` 的 provisional/generated/manual ownership、首轮成功后的 native title、scheduled run 独立会话、delete 精确 `dsh-home` 在 runtime/Server tests 中验证；真实 DSH title RPC、模型推理、provider secrets 和工具调用需要固定版本 DSH 与凭证环境。
+- 当前 HTTP boundary 由 health/auth/sync-history/issue-detail 12 tests、runtime construction/projection 2 tests 和 backend-critical regression 2 tests 轻量覆盖；这些测试验证 production/test builder 分界、required SyncCoordinator route 调用及未改变的 HTTP path/schema。它们不等同于全量 `pnpm check`、真实 UI、Docker 或 live provider/DSH 验收。
 - password lock 的 auth file 权限、scrypt/HMAC cookie、authVersion 失效、backoff、reset 和 API gate 在 Server tests 中验证；密码锁不加密数据，真实浏览器 cookie/HTTPS 属性仍需部署环境确认。
 - retention Settings、Archive/All 过滤、Security 页面和标题重命名在 Web component tests 中验证；布局、路由跳转、cookie 续期和交互可用性必须通过真实 browser acceptance。
 

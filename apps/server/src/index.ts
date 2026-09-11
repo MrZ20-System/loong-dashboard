@@ -1,5 +1,8 @@
-export { buildApp } from "./app.js";
-export type { BuildAppDependencies } from "./app.js";
+export { buildProductionApp } from "./app.js";
+export type {
+  BuildProductionAppDependencies,
+  BuildProductionAppOptions,
+} from "./app.js";
 export {
   loadSystemConfig,
   parseSystemConfig,

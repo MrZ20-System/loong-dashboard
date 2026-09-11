@@ -15,9 +15,9 @@ import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { AgentChatController } from "../src/agent-chat.js";
-import { buildApp } from "../src/app.js";
-import type { SyncCoordinator } from "../src/sync-coordinator.js";
+import { buildTestApp } from "../src/app.js";
 import { WorkspaceRunCoordinator } from "../src/workspace-run-coordinator.js";
+import { createSyncCoordinatorStub } from "./support/sync-coordinator.js";
 
 class ApprovalRuntime implements AgentRuntime {
   readonly respondCalls: Array<{
@@ -110,15 +110,8 @@ function createFixture(): {
     },
     runtimeFactory: () => runtime,
   });
-  const syncCoordinator = {
-    start: async () => ({
-      repositoryId: "unused",
-      syncRunId: "unused",
-      startedAt: new Date().toISOString(),
-    }),
-    close: async () => undefined,
-  } as unknown as SyncCoordinator;
-  const app = buildApp(
+  const syncCoordinator = createSyncCoordinatorStub();
+  const app = buildTestApp(
     { database, timezone: "UTC", syncCoordinator, agentChat: controller },
     { logger: false },
   );

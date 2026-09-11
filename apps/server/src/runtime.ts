@@ -16,9 +16,13 @@ import {
   type GhGitHubMetadataProviderOptions,
   type GitHubMetadataProvider,
 } from "@loongboard/github";
+import { LocalGitWorkspace } from "@loongboard/git-workspace";
 import type { FastifyInstance } from "fastify";
 
-import { buildApp, type BuildAppOptions } from "./app.js";
+import {
+  buildProductionApp,
+  type BuildProductionAppOptions,
+} from "./app.js";
 import {
   loadSystemConfig,
   resolveSystemConfigPath,
@@ -63,7 +67,7 @@ export interface CreateServerRuntimeOptions {
   providerOptions?: GhGitHubMetadataProviderOptions;
   now?: () => Date;
   coordinatorLogger?: SyncCoordinatorLogger;
-  appOptions?: BuildAppOptions;
+  appOptions?: BuildProductionAppOptions;
   /** Override the DSH-backed runtime factory (tests inject a scripted one). */
   runtimeFactory?: (spec: AgentSessionSpec) => AgentRuntime;
 }
@@ -297,13 +301,14 @@ export function createServerRuntime(
       reclassification,
     });
     domainFiles.start();
-    const app = buildApp(
+    const app = buildProductionApp(
       {
         database,
         timezone: config.timezone,
         syncCoordinator: coordinator,
         github: provider,
         reclassification,
+        gitWorkspace: new LocalGitWorkspace(),
         agentChat,
         knowledge,
         scheduledTasks: {

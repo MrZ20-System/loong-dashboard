@@ -26,7 +26,7 @@ flowchart LR
 | 目录 | 负责什么 | 主要入口 |
 | --- | --- | --- |
 | apps/web | 页面、交互、API 客户端、编辑器 | [AppShell](../apps/web/src/shell/AppShell.tsx) |
-| apps/server | 配置、依赖组装、HTTP 和跨模块协调 | [runtime.ts](../apps/server/src/runtime.ts)、[runtime-settings-adapters.ts](../apps/server/src/runtime-settings-adapters.ts)、[app.ts](../apps/server/src/app.ts) |
+| apps/server | 配置、依赖组装、HTTP 和跨模块协调 | [runtime.ts](../apps/server/src/runtime.ts)、[runtime-settings-adapters.ts](../apps/server/src/runtime-settings-adapters.ts)、[app.ts](../apps/server/src/app.ts)、[routes/](../apps/server/src/routes) |
 | packages/contracts | Zod 请求/响应及产品事件 | [导出](../packages/contracts/src/index.ts) |
 | packages/database | SQL、schema、迁移、类型化持久化服务 | [导出](../packages/database/src/index.ts) |
 | packages/github | GitHub HTTP、凭证解析、外部响应校验 | [provider.ts](../packages/github/src/provider.ts) |
@@ -47,6 +47,8 @@ flowchart LR
 
 聊天和调度器注入同一个 `WorkspaceRunCoordinator`。Repository metadata 的 admission 还由 [sync-coordinator.ts](../apps/server/src/sync-coordinator.ts) 统一协调：同一仓库的 foreground sync / `fetch_pr` 优先于 History；metadata maintenance 以 batch 为边界让出 admission，不能在长批处理中饿死前台请求。后台 worker 不应另建一套 repository lock。
 
+HTTP 生产入口是 [buildProductionApp](../apps/server/src/app.ts)，要求注入完整的产品 capability，包括 GitHub、Agent、Knowledge、Settings、metadata maintenance、Scheduler 和真实 `LocalGitWorkspace`；Server package 的 [index.ts](../apps/server/src/index.ts) 只公开这个生产入口。同仓库 focused tests 直接从 `src/app` 导入单独的 `buildTestApp` lightweight builder，其中的 optional capability 和 fallback 只属于测试 builder，不构成第二套生产组装路径。旧的 `buildApp` 入口已删除。`app.ts` 只保留 Fastify composition、health/parser、auth guard、统一 error handler、静态站点接入和 route composition；repositories、sync、metadata、auth 的 HTTP route 分别位于 `apps/server/src/routes/` 对应文件，保持直接调用现有 service 的轻量边界。
+
 SIGINT/SIGTERM 经 [lifecycle.ts](../apps/server/src/lifecycle.ts) 触发幂等关闭；app 的关闭钩子先停止 metadata maintenance，再等待 `SchedulerEngine` 停止 timer 并结束活跃的 scheduled Agent runs，然后关闭 Agent runtime，之后才关闭同步协调、Knowledge、Domain watcher、重分类和 SQLite。增加后台服务时必须同时接入退出清理。
 
 Scheduler 是现有唯一的定时入口。`SchedulerEngine` 为持久任务维护 timer map，并把九个 canonical system action 委派给 [system-actions.ts](../apps/server/src/system-actions.ts) 的统一 registry；`runtime.ts` 不再拥有这些 action 的实现。Settings V2 是 system schedule policy authority；runtime 启动和 Settings 更新都会经 [system-schedules.ts](../apps/server/src/system-schedules.ts) 把 policy 投影到稳定的 `scheduled_tasks` 行，Scheduler 只执行 projection 并记录 runtime facts。metadata maintenance 使用现有 `repository.metadata-maintenance` system action（默认每天 03:00，按配置时区）。该 action 每天执行固定的 runtime sync-run history purge；只有 Repository retention 的 automatic archive 开关打开时才追加 metadata archive/prune，不会添加第二个 timer、后台 cron 或独立调度框架。
@@ -54,6 +56,8 @@ Scheduler 是现有唯一的定时入口。`SchedulerEngine` 为持久任务维�
 ## 必须保持的边界
 
 - Web/Server 共享 contracts，禁止复制 HTTP schema。
+- `buildProductionApp` 的生产依赖完整且必选，且是 Server package 的唯一公开 app builder；`buildTestApp` 仅供同仓库 focused tests 从 `src/app` 直接导入，不能在生产 runtime 中按 capability 是否存在选择分支。
+- `SyncCoordinator` 的产品操作 `startHistory`、`startFetchPullRequest`、`configureHistory`、`pauseHistory`、`resumeHistory` 均为必选接口；生产 route 直接调用，不以 `undefined` 防御替代产品能力。
 - `settings.json` V2 保存用户 policy；`scheduled_tasks` 是 system schedule projection，`scheduled_task_runs` 是 runtime history，runtime facts 不反向写 Settings。
 - Settings API 返回的 Code backup `repositoryPath` 和 `available` 只来自 runtime；它们不是可持久化的用户 policy。
 - 只有 agent-runtime-dsh 可以导入 `@deepseek-ai/*`；产品层消费自身事件。

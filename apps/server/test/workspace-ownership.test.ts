@@ -27,14 +27,14 @@ import type { FastifyInstance } from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { AgentChatController } from "../src/agent-chat.js";
-import { buildApp } from "../src/app.js";
+import { buildTestApp } from "../src/app.js";
 import { SchedulerEngine } from "../src/scheduler.js";
-import type { SyncCoordinator } from "../src/sync-coordinator.js";
 import { WorkspaceRunCoordinator } from "../src/workspace-run-coordinator.js";
+import { createSyncCoordinatorStub } from "./support/sync-coordinator.js";
 
 const temporaryDirectories: string[] = [];
 const databases: DatabaseClient[] = [];
-const apps: Array<ReturnType<typeof buildApp>> = [];
+const apps: Array<ReturnType<typeof buildTestApp>> = [];
 
 afterEach(async () => {
   await Promise.all(apps.splice(0).map((app) => app.close()));
@@ -139,15 +139,8 @@ function setup(options: {
       agentSessionsPath: join(directory, "agent-sessions"),
     });
   }
-  const coordinator = {
-    start: async () => ({
-      repositoryId: "x",
-      syncRunId: "r",
-      startedAt: "2026-09-03T00:00:00.000Z",
-    }),
-    close: async () => undefined,
-  } as unknown as SyncCoordinator;
-  const app = buildApp(
+  const coordinator = createSyncCoordinatorStub();
+  const app = buildTestApp(
     {
       database,
       timezone: "Asia/Shanghai",
@@ -322,15 +315,8 @@ function setupPrController(delayMs = 120, worktreePool?: WorktreePool): PrSetupR
       close: async () => undefined,
     }),
   });
-  const coordinator = {
-    start: async () => ({
-      repositoryId: "alpha",
-      syncRunId: "r",
-      startedAt: "2026-09-03T00:00:00.000Z",
-    }),
-    close: async () => undefined,
-  } as unknown as SyncCoordinator;
-  const app = buildApp(
+  const coordinator = createSyncCoordinatorStub();
+  const app = buildTestApp(
     {
       database,
       timezone: "Asia/Shanghai",
