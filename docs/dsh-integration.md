@@ -2,13 +2,13 @@
 
 ## 分层
 
-[AgentChatController](../apps/server/src/agent-chat.ts) 管理会话索引、来源、workspace、兼容消息缓存和订阅；[AgentRuntimeHost](../packages/agent-runtime/src/index.ts) 管理每会话 runtime、运行状态及空闲关闭；[DSHRuntime](../packages/agent-runtime-dsh/src/index.ts) 是唯一 DSH adapter。
+[AgentChatController](../apps/server/src/agent-chat.ts) 管理 Agent HTTP orchestration、会话索引和订阅；[AgentRuntimeHost](../packages/agent-runtime/src/index.ts) 管理每会话 runtime、运行状态及空闲关闭；[DSHRuntime](../packages/agent-runtime-dsh/src/index.ts) 是唯一 DSH adapter。
 
-当前固定 `dsh-v0.1.2-alpha.5`，依赖版本见 [dsh.lock.json](../dsh.lock.json)。该版本 SDK 的 prompt 协议没有模型/命令发现接口，因此 adapter 使用同版本官方 `dsh --profile web --no-open --port 0` Host 的原生服务。评估过的官方 UI 模块依赖 DSH 客户端容器；LoongBoard 保留自身 React shell，通过服务适配接入，没有 iframe、DSH fork 或自建插件。升级时同时维护 manifest、lock、pin 检查和 adapter，不在业务包加入兼容代码。
+当前固定 `dsh-v0.1.2-alpha.5`，依赖版本见 [dsh.lock.json](../dsh.lock.json)。该版本 SDK 的 prompt 协议没有模型/命令发现接口，因此 adapter 使用同版本官方 `dsh --profile web --no-open --port 0` Host 的原生服务。评估过的官方 UI 模块依赖 DSH 客户端容器；LoongBoard 保留自身 React shell，通过服务适配接入，没有 iframe、DSH fork 或自建插件。升级时同时维护 manifest、lock、pin 检查和 adapter，业务包不绕过 adapter 边界。
 
 ## 会话与工作目录
 
-| origin | workspace |
+| scope kind | workspacePath |
 | --- | --- |
 | PR | 该 PR target revision 的 detached worktree |
 | Repository / Issue | 配置的本地仓库根目录 |
@@ -16,7 +16,7 @@
 | Knowledge / 普通 general | knowledge 根目录 |
 | 调度创建的 general | 任务显式配置的 workspace；每次 scheduled run 都创建独立持久会话 |
 
-origin 是创建来源，workspace 是执行绑定。全局 Agent、业务面板和 Dock 通过相同产品 session ID 打开会话。每个会话拥有独立 `runtime.statePath/agent-sessions/<id>/dsh-home`。DSH 保存原生 transcript，LoongBoard 保存 opaque runtime ID、项目索引及 normalized 消息兼容缓存，不读取或重建 DSH 内部日志。
+`scope` 是会话所属产品资源，`workspacePath` 是执行绑定。全局 Agent、业务面板和 Dock 通过相同产品 session ID 打开会话。每个会话拥有独立 `runtime.statePath/agent-sessions/<id>/dsh-home`。DSH 保存原生 transcript，LoongBoard 保存 opaque runtime ID、项目索引及 normalized 消息记录，不读取或重建 DSH 内部日志。
 
 会话标题有明确的 ownership：新会话先使用 `provisional` 标题；首轮成功且 runtime 暴露原生 title 时，LoongBoard 通过 DSH 原生 session/title 能力读取并最多一次投影为 `generated`。用户 inline rename 后变为 `manual`，后续 native title 不得覆盖；title discovery 失败是非阻塞的 metadata 失败，不改变 turn 状态、不写入 prompt/transcript，也不把 prompt 文本拼成标题。Scheduled Task 每次 occurrence 创建独立 general Agent session，使用该 run 的 provisional title，不复用上一 run 的标题或 transcript。升级前已有 title 会按 `manual` 处理。
 
@@ -34,7 +34,7 @@ Archive export 与 push 由独立的 `agent.archive.checkpoint` / `agent.archive
 
 模型和 reasoning 来自 `session/modelCatalog`，命令来自 `commands/list`。system.yaml 提供安装级 fallback，启动时 `settings.json` 中已保存的 Agent operational overrides 会 hydrate 到 AgentChatController/runtime；Settings 只配置新会话默认值，Scheduled Task 自身保存的 provider/model/reasoning 仍是调度 run 的 authority。composer 修改当前会话的配置，adapter 在下一次 prompt 前调用 `session/selectModel`。普通 prompt 进入原生队列，slash command 先交给 `commands/execute`，未匹配的内容按普通 prompt 处理。
 
-原生 Host 的 approval request 映射为通用交互请求，由用户点击 runtime 提供的选项后答复；不会自动允许。其他尚未适配的交互委托给 Host 的默认处理链。当前适配层不等同于完整官方客户端，复杂原生视图仍可增量扩展。
+原生 Host 的 approval request 映射为通用交互请求，由用户点击 runtime 提供的选项后答复；不会自动允许。其他尚未适配的交互委托给 Host 的默认处理链。
 
 ## 运行与停止
 
@@ -44,7 +44,7 @@ Archive export 与 push 由独立的 `agent.archive.checkpoint` / `agent.archive
 
 ## 事件转换
 
-[原生 transport](../packages/agent-runtime-dsh/src/native-transport.ts) 封装经过校验的 HTTP RPC 和 WebSocket multiplex stream。[notification-mapper.ts](../packages/agent-runtime-dsh/src/notification-mapper.ts) 把原生日志映射到已有产品兼容事件：
+[原生 transport](../packages/agent-runtime-dsh/src/native-transport.ts) 封装经过校验的 HTTP RPC 和 WebSocket multiplex stream。[notification-mapper.ts](../packages/agent-runtime-dsh/src/notification-mapper.ts) 在 adapter 边界把 DSH `SessionEvent` 转换为 contracts 唯一的产品 wire model `AgentRuntimeEvent`。DSH `SessionEvent` 不离开 adapter：
 
 | DSH 数据 | 产品行为 |
 | --- | --- |

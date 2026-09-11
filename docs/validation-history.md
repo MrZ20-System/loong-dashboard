@@ -2,6 +2,15 @@
 
 以下记录各次验收的日期与适用边界，不代表未来工作树自动通过这些检查。环境特例不作为日常操作要求；当前命令见 [测试与验收](testing.md)。
 
+## 2026-09-12 Pre-Freeze Canonicalization
+
+- `pnpm check:full` 串行通过：552 项 workspace UT、3 项独立 regression、lint、全 workspace 类型检查、23 项 architecture boundary、DSH pin 和全部生产构建。
+- 数据库 migration runner 的 16 项专项测试通过，覆盖 populated 010/013 schema 升级、Scheduler/Agent/Worktree canonicalization、retention migration 015，以及持久 metadata、sync/history、Agent、Knowledge 和 scheduled task/run 状态保留。
+- Knowledge 与 Domain 文件 watcher 的 5 项聚焦测试通过。原生生产启动首次暴露 macOS Node 26 的异步 `EMFILE` watcher error；补齐 error listener、成组关闭和 lazy fallback 后，使用临时 data root 的 `pnpm start` 持续运行，Health、Auth、Repository、PR、Issue、Merged 和 Settings API 均返回正常，SQLite 与 `agent-history` 均落在该临时根目录。
+- 真实浏览器验收覆盖 Board、PR、Merged、Settings 和 Agent 页面，页面与 API 使用同一生产 Server；验收后服务有序停止，监听端口和 HTTP probe 均确认关闭。
+- 当前机器没有 Docker CLI，因此未声明完成真实 Compose build、restart 或 container recreate。Dockerfile/Compose 数据边界、敏感文件排除、`/data/agent-history` 和 code-backup unavailable 行为由现有自动测试覆盖；真实容器持久化仍需在具备 Docker 的环境复验。
+- 本轮没有配置真实 GitHub token 或 DSH provider secret，因此不声明 live GitHub 分页、DSH 模型推理、工具调用或原生 title RPC 已验证。
+
 ## 2026-09-09 Settings、原生 Agent 与首次同步改造
 
 - `pnpm check` 通过：313 项 UT、lint、类型检查、架构与 DSH pin 检查、全部生产构建。随后侧栏数量刷新收尾通过现有 App 定向测试（25 项）及 Web 构建。未重跑独立 regression 套件。

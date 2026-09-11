@@ -45,9 +45,13 @@ docker compose up -d --build
 
 容器内 YAML 的相对路径相对 `/data`，所以 `./knowledge`、`./.loong`、`./.worktrees` 分别落在 `/data/knowledge`、`/data/.loong`、`/data/.worktrees`。首次启动前必须确认 `/data/system.yaml` 存在，并且其中配置的 repository path 对容器可访问。
 
+Native 环境中父目录 `system.yaml` 的 `./vllm`、`./vllm-ascend` 等 repository path 会解析到宿主机 system workspace；容器只挂载 `/data`，不会自动看到这些宿主机路径。不要把 native 配置原样用于 Compose，除非 repository checkout 已放入 data root，或在本地 Compose override 中为每个 checkout 显式增加可访问的 mount，并同步修改容器内路径。
+
+当前 Dockerfile 和 Compose 没有声明 `USER`、`user`、`PUID` 或 `PGID`；镜像不支持通过 PUID/PGID 改变运行用户，设置这些变量本身也不会改变权限。`/data` bind mount 必须对容器实际用户可写；如果通过本地 override 使用非 root 用户，需自行配置用户映射和目录权限，这不属于当前默认部署的保证范围。
+
 镜像安装 Node、Git 和 CA certificates。宿主机不需要为这些组件提供挂载。GitHub 凭证通过 Settings 保存，或在启动容器时显式传入 `GH_TOKEN`/`GITHUB_TOKEN`；宿主机的 `gh` 登录状态不会自动进入容器。Dockerfile 不 COPY SSH key、token、`system.yaml`、`.loong`、knowledge 或 worktrees。Code backup 的 `repositoryPath` 和 `available` 由运行时从真实 code checkout 探测，不写入 SettingsDocumentV2；镜像 checkout 没有 `.git` 时 `available=false`，自动 checkpoint/push 会关闭，手工 Checkpoint now/Push now 会拒绝，并显示 `Code backup unavailable in container-image deployment.`。Code backup 的 policy 仍可保存，但不能开启必失败的自动任务。
 
-Agent Archive 默认使用持久 data root 下的 `/data/agent-history`；用户明确保存的自定义 archive path 优先。容器重建不会删除宿主机 data directory，因此默认 archive 不会随容器层丢失。Settings 页面在 code backup unavailable 时仍可保存普通字段、路由字段和 Agent Archive 设置。
+Agent Archive 默认使用 `systemRoot/agent-history`；在当前 Compose 中对应持久 data root 下的 `/data/agent-history`，用户明确保存的自定义 archive path 优先。运行时可以创建缺失的 archive directory，export 也可写入其中，但不会自动 `git init`；checkpoint/push 要求目标已经是可写的 Git repository，否则操作会失败并保留状态。容器重建不会删除宿主机 data directory，因此默认 archive 不会随容器层丢失。Settings 页面在 code backup unavailable 时仍可保存普通字段、路由字段和 Agent Archive 设置。
 
 停止、启动和查看日志：
 
@@ -67,7 +71,7 @@ native 环境可使用已认证的 `gh` 作为 GitHub credential fallback；Dock
 
 ## Data and code boundary
 
-生产代码和构建产物位于镜像或应用仓库；运行数据由 `system.yaml` 指定。必须持久化的内容包括 SQLite、Agent session、credential/provider secret 文件、Knowledge 仓库、Settings/Domain 文件和显式配置的 Agent Archive。`dist`、`node_modules` 和可重建的 worktree 缓存不是备份替代品。
+生产代码和构建产物位于镜像或应用仓库；运行数据由 `system.yaml` 指定。必须持久化的内容包括 SQLite、Agent session、credential/provider secret 文件、Knowledge 仓库、Settings/Domain 文件和显式配置的 Agent Archive。凭据和运行数据不进入镜像层或仓库；只通过 runtime state 或 `/data` bind mount 保存。`dist`、`node_modules` 和可重建的 worktree 缓存不是备份替代品。
 
 升级前先停止写入并备份 data directory，再执行新的 build/start 或重新构建容器。SQLite 正在写入时的在线文件复制不作为安全备份方式，详见 [Backup and Restore](backup-restore.md)。
 

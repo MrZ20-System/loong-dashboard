@@ -24,11 +24,11 @@
 | [Backup and Restore](backup-restore.md) | data root、SQLite、Knowledge、Agent session 和恢复边界 |
 | [安全与密码锁](operations.md#本地密码锁) | 可选本地锁、会话 cookie、reset 和恢复边界 |
 | [开发与验收](testing.md) | 改动顺序、测试分层、手工验收 |
-| [文档维护与清理记录](maintenance.md) | 旧方案去向、文档更新规则 |
+| [文档维护规则](maintenance.md) | 文档 authority、更新和历史验收边界 |
 | [历史验收记录](validation-history.md) | 过去的检查及其适用边界 |
 
 ## 架构决策
 
 保留 ADR 解释设计原因：[本地单用户](adr/0001-local-first-single-user.md)、[GitHub 传输边界](adr/0002-use-gh-graphql-for-metadata.md)、[本地 Git 内容](adr/0003-use-local-git-for-pr-content.md)、[外部 DSH](adr/0004-dsh-is-an-external-runtime.md)、[Markdown/Git 知识源](adr/0005-markdown-and-git-are-knowledge-source-of-truth.md)、[权限边界](adr/0006-no-product-level-agent-permission-system.md)、[边界校验](adr/0007-avoid-excessive-defensive-programming.md)。
 
-目录中的源码链接均相对应用仓库；不需要父工作区的旧方案书即可理解项目。
+目录中的源码链接均相对应用仓库；各模块章节共同构成完整的当前实现说明。

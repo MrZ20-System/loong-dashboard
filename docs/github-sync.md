@@ -2,7 +2,7 @@
 
 ## 入口与传输
 
-[provider.ts](../packages/github/src/provider.ts) 的 `GhGitHubMetadataProvider` 保留既有类名和外部 contract，作为薄 facade 组装并委派到四个具体模块：[github-client.ts](../packages/github/src/github-client.ts) 统一负责 token、`gh auth token`、REST/GraphQL、错误归一化和 quota header；[pull-requests.ts](../packages/github/src/pull-requests.ts) 负责 PR 查询、状态映射、水位/history 分页和按编号 fetch；[issues.ts](../packages/github/src/issues.ts) 负责 Issue 查询、history、详情及评论；[files.ts](../packages/github/src/files.ts) 保留纯文件 helpers 并负责 changed-file GraphQL batch、REST fallback/cap。Server 将 provider 与 [GitHubCredentialService](../packages/github/src/credentials.ts) 连接到同一个凭证边界：设置页保存的 token 优先，其次是非空 `GH_TOKEN`、`GITHUB_TOKEN`，最后执行 `gh auth token`；`gh` 解析时通过受控环境继承 token。每个 feature schema 在对应模块内严格校验，外部 JSON 不直接流入 Web。
+[provider.ts](../packages/github/src/provider.ts) 的 `GhGitHubMetadataProvider` 是 Server 使用的 GitHub metadata facade，组装并委派到四个具体模块：[github-client.ts](../packages/github/src/github-client.ts) 统一负责 token、`gh auth token`、REST/GraphQL、错误归一化和 quota header；[pull-requests.ts](../packages/github/src/pull-requests.ts) 负责 PR 查询、状态映射、水位/history 分页和按编号 fetch；[issues.ts](../packages/github/src/issues.ts) 负责 Issue 查询、history、详情及评论；[files.ts](../packages/github/src/files.ts) 负责 changed-file GraphQL batch、REST fallback/cap。Server 将 provider 与 [GitHubCredentialService](../packages/github/src/credentials.ts) 连接到同一个凭证边界：设置页保存的 token 优先，其次是非空 `GH_TOKEN`、`GITHUB_TOKEN`，最后执行 `gh auth token`；`gh` 解析时通过受控环境继承 token。每个 feature schema 在对应模块内严格校验，外部 JSON 不直接流入 Web。
 
 设置页只返回 `configured`、来源和已验证的账号/quota；不会回传 token。设置页保存的 GitHub 凭证位于 `runtime.statePath/github-credential.json`，文件权限为 0600，不进入 `settings.json`、Domain/Knowledge 版本或 Agent workspace。缺少认证时显示 `configured=false/source=none`，不会伪装成已配置。
 
@@ -32,8 +32,7 @@ invalid/expired/unknown/not-found 才允许从最新页按 durable anchor 减两
 GraphQL 错误保留状态并失败。history 不改变 forward watermark。`fetch_pr` 只请求目标 PR、只对
 该目标做文件 enrichment，并不修改 watermark、history cursor 或 recovery anchor。
 
-History 只 upsert 当前 PR/Issue metadata，并不再请求 timeline facts、重放 EOD 状态或写 Daily
-Snapshot，也不恢复 Daily crawler。它也不为每个历史 PR 立即补 changed files；forward 只 enrichment 当轮 new/head-changed/
+History 只 upsert 当前 PR/Issue metadata，不请求 timeline facts 或重放额外状态。它也不为每个历史 PR 立即补 changed files；forward 只 enrichment 当轮 new/head-changed/
 retry target，`fetch_pr` 只 enrichment 指定 PR，因此 metadata coverage 不被历史文件请求阻塞。
 
 Merged 是 `pull_requests` 的 SQLite projection：`WHERE merged_at IS NOT NULL ORDER BY merged_at DESC,
@@ -41,7 +40,7 @@ number DESC`。它没有独立表、sync run、crawler 或 scheduler；任何 fo
 merged PR 会自然进入该页面。搜索和 Domain 过滤同时用于列表与 COUNT 查询；Web 使用 response 的
 configured timezone 对当前页扁平结果插入日期分割线，不按日期发 N+1 请求。
 
-相关持久化入口：[sync-service](../packages/database/src/sync-service.ts) 与 [metadata-service](../packages/database/src/metadata-service.ts)。迁移 010 删除已落库的旧 Daily/lifecycle/逐日 coverage 表并建立 Merged partial index；011 增加 History `resume_after`，012 增加 archive/prune 状态和 maintenance runs。新增列表字段时同步修改 contracts 与 provider 映射，避免给每行引入额外远端请求。
+相关持久化入口：[sync-service](../packages/database/src/sync-service.ts) 与 [metadata-service](../packages/database/src/metadata-service.ts)。迁移 010 删除已落库的 obsolete lifecycle projection 并建立 Merged partial index；011 增加 History `resume_after`，012 增加 `archived_at`、`payload_pruned_at` 和 maintenance runs。新增列表字段时同步修改 contracts 与 provider 映射，避免给每行引入额外远端请求。
 
 ## 变更文件与分类
 

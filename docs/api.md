@@ -13,7 +13,7 @@
 | `/repositories/:repositoryId/pulls/:number/fetch` | POST 定向拉取单 PR，返回独立 `fetch_pr` run，不改变 forward watermark/cursor | sync / [sync route](../apps/server/src/routes/sync.ts) |
 | `/repositories/:id/pulls`、`/issues` 及各自 `/activity-days` | GET 列表和日期活动；PR 支持 `updated` / `number` sort，使用 `page` + `limit` 页码分页；Issue 继续使用 cursor；PR/Issue 可选 `archive=current|archived|all` | [metadata](../packages/contracts/src/metadata.ts) / [metadata route](../apps/server/src/routes/metadata.ts) |
 | `/repositories/:id/merged` | GET `pull_requests` 的 merged projection，使用 `page` + `limit` 页码分页并返回过滤后的总数；没有独立同步，也不按 archive 过滤 | metadata / [metadata route](../apps/server/src/routes/metadata.ts) |
-| `/repositories/:id/maintenance/preview`、`/maintenance`、`/maintenance/:runId` | POST preview/accepted bounded archive-prune run，GET durable status；日期按 server timezone 转换为 UTC | [retention](../packages/contracts/src/retention.ts) / [maintenance route](../apps/server/src/metadata-maintenance-routes.ts) |
+| `/repositories/:id/maintenance/preview`、`/maintenance`、`/maintenance/:runId` | POST preview/accepted bounded archive run，request selector 可用 `prune` 决定 payload cleanup，GET durable status；日期按 server timezone 转换为 UTC | [retention](../packages/contracts/src/retention.ts) / [maintenance route](../apps/server/src/metadata-maintenance-routes.ts) |
 | `/repositories/:id/maintenance/runtime-history/preview`、`/maintenance/runtime-history` | POST preview/accepted runtime sync-run purge；服务固定使用 30 天 cutoff、保留最新 100 条并返回 protected/active/stream/target 计数 | retention / maintenance route |
 | `/repositories/:id/pulls/:number/restore`、`/issues/:number/restore` | POST 恢复单个 metadata entity 的 archive marker | retention / maintenance route |
 | `/repositories/:repositoryId/issues/:number` | GET 懒加载详情 | metadata / app |
@@ -26,6 +26,8 @@
 | `/knowledge/documents`、`/:id` | GET、POST 集合创建、PUT 保存、DELETE 单项 | knowledge / knowledge route |
 | `/knowledge/documents/:id/move`、`/versions`、`/versions/:versionId/restore`、`/chat` | POST 移动、GET 历史、POST 恢复/默认聊天 | knowledge / knowledge route |
 | `/scheduled-tasks`、`/:id`、`/:id/run`、`/:id/runs` | GET/POST 集合，PUT/DELETE 单项，POST 运行，GET 历史；run 只通过 `agentSessionId` 关联 Agent session | [scheduler](../packages/contracts/src/scheduler.ts) / [scheduled-tasks](../apps/server/src/scheduled-tasks.ts) |
+
+Maintenance run kind 是 canonical 的 `archive` 或 `purge_runtime_history`；`prune` 只作为 archive request/selector 布尔值保留，其他 maintenance kind 会被拒绝。
 
 控制中心新增以下路径，精确字段由 [settings contracts](../packages/contracts/src/settings.ts) 与模块路由定义：
 

@@ -69,7 +69,7 @@ docker compose down
 - `runtime.statePath`：SQLite、Agent session、GitHub credential、provider secrets、Settings 相关运行状态。
 - `runtime.worktreesPath`：PR worktree 缓存。
 - `system workspace/settings.json`、`domains/`、`prompts/`：非秘密 Settings、Domain 源文件和 update prompt。
-- 独立配置的 Agent Archive repository/path。
+- Agent Archive path/repository（启用时；默认目录为 `systemRoot/agent-history`，自定义路径可覆盖）。
 
 `node_modules`、`dist`、`.pnpm-store` 和可安全重建的 worktree 缓存不属于代码提交内容。备份和恢复请看 [Backup and Restore](docs/backup-restore.md)。
 
@@ -95,7 +95,7 @@ docker compose up -d --build
 
 ## Backup
 
-备份前停止 native Server 或 Docker container，保留整个 data directory 及独立的 Agent Archive repository。不要把正在写入的 SQLite 文件当作安全的在线 `cp` 快照；操作步骤见 [Backup and Restore](docs/backup-restore.md)。
+备份前停止 native Server 或 Docker container，保留整个 data directory，并在启用时保留独立的 Agent Archive path/repository。不要把正在写入的 SQLite 文件当作安全的在线 `cp` 快照；操作步骤见 [Backup and Restore](docs/backup-restore.md)。
 
 ## Development
 
