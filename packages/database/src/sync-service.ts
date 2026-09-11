@@ -118,12 +118,6 @@ function normalizeError(error: unknown): string {
   return message;
 }
 
-export interface BeginStreamInput {
-  repositoryId: string;
-  entityKind: EntityKind;
-  attemptStartedAt?: Date | string;
-}
-
 export interface CreateSyncRunInput {
   repositoryId: string;
   kind: SyncRunKind;
@@ -739,29 +733,6 @@ export function updateRepositoryHistoryState(
       entityKind,
     );
   return getRepositoryHistoryState(database, repositoryId, entityKind);
-}
-
-/** Start one stream when it is not already running. */
-export function startSyncStream(
-  database: DatabaseClient,
-  input: BeginStreamInput,
-): RepositorySyncState {
-  const startedAt = timestamp(input.attemptStartedAt);
-  requireRepository(database, input.repositoryId);
-  insertMissingSyncRows(database, input.repositoryId);
-  const existing = requireSyncState(database, input.repositoryId, input.entityKind);
-  if (existing.status === "running") {
-    throw new SyncAlreadyRunningError(input.repositoryId);
-  }
-
-  database
-    .prepare(
-      `UPDATE repository_sync_state SET
-        status = 'running', last_attempt_at = ?, last_error = NULL
-       WHERE repository_id = ? AND entity_kind = ?`,
-    )
-    .run(startedAt, input.repositoryId, input.entityKind);
-  return requireSyncState(database, input.repositoryId, input.entityKind);
 }
 
 export interface CompleteStreamInput extends SyncStreamUpdate {

@@ -18,8 +18,7 @@
   },
   "dependencies": {
     "@loongboard/contracts": "workspace:*",
-    "better-sqlite3": "12.11.1",
-    "drizzle-orm": "0.44.5"
+    "better-sqlite3": "12.11.1"
   },
   "devDependencies": {
     "@types/better-sqlite3": "7.6.13",

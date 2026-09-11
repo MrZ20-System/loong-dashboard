@@ -5,16 +5,7 @@ import { dirname, join } from "node:path";
 import Database from "better-sqlite3";
 import { afterEach, describe, expect, it } from "vitest";
 
-import {
-  agentSessions,
-  createDrizzleDatabase,
-  issues,
-  openDatabase,
-  repositories,
-  runMigrations,
-  scheduledTaskRuns,
-  scheduledTasks,
-} from "../src/index.js";
+import { openDatabase, runMigrations } from "../src/migration-runner.js";
 import { initialSchemaMigration } from "../src/migrations/001-initial-schema.js";
 import { metadataListIndexesMigration } from "../src/migrations/002-metadata-list-indexes.js";
 import { issueStateConstraintMigration } from "../src/migrations/003-issue-state-constraint.js";
@@ -962,150 +953,162 @@ describe("database migrations", () => {
     }
   });
 
-  it("exposes the migrated repositories table through Drizzle", () => {
+  it("exposes the migrated repositories table through SQLite", () => {
     const sqlite = openDatabase(createDatabasePath());
 
     try {
-      const database = createDrizzleDatabase(sqlite);
-      database
-        .insert(repositories)
-        .values({
-          id: "repo-1",
-          key: "loongboard",
-          displayName: "LoongBoard",
-          githubOwner: "MrZ20",
-          githubName: "loong-dashboard",
-          localPath: "/workspace/loong-dashboard",
-          remoteName: "origin",
-          defaultBranch: "main",
-          worktreeSlots: 2,
-          enabled: true,
-          createdAt: "2026-09-02T00:00:00.000Z",
-          updatedAt: "2026-09-02T00:00:00.000Z",
-        })
-        .run();
+      sqlite.prepare(`
+        INSERT INTO repositories (
+          id, key, display_name, github_owner, github_name, local_path,
+          remote_name, default_branch, worktree_slots, enabled, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        "repo-1",
+        "loongboard",
+        "LoongBoard",
+        "MrZ20",
+        "loong-dashboard",
+        "/workspace/loong-dashboard",
+        "origin",
+        "main",
+        2,
+        1,
+        "2026-09-02T00:00:00.000Z",
+        "2026-09-02T00:00:00.000Z",
+      );
 
-      expect(database.select().from(repositories).all()).toEqual([
-        expect.objectContaining({
-          id: "repo-1",
-          key: "loongboard",
-          enabled: true,
-        }),
+      expect(sqlite.prepare("SELECT id, key, enabled FROM repositories").all()).toEqual([
+        { id: "repo-1", key: "loongboard", enabled: 1 },
       ]);
     } finally {
       sqlite.close();
     }
   });
 
-  it("maps scheduled tasks and runs through Drizzle", () => {
+  it("exposes canonical scheduled task and run tables through SQLite", () => {
     const sqlite = openDatabase(createDatabasePath());
 
     try {
-      const database = createDrizzleDatabase(sqlite);
-      database
-        .insert(scheduledTasks)
-        .values({
-          id: "task-1",
-          name: "Daily report",
-          cronExpression: "0 9 * * *",
-          timezone: "Asia/Shanghai",
-          prompt: "Create the daily report.",
-          workspacePath: "/workspace",
-          provider: "deepseek-official",
-          model: "deepseek-v4-flash",
-          reasoningEffort: "high",
-          enabled: true,
-          createdAt: "2026-09-03T00:00:00.000Z",
-          updatedAt: "2026-09-03T00:00:00.000Z",
-        })
-        .run();
-      database
-        .insert(scheduledTaskRuns)
-        .values({
-          id: "run-1",
-          taskId: "task-1",
-          scheduledFor: "2026-09-03T01:00:00.000Z",
-          status: "running",
-        })
-        .run();
+      sqlite.prepare(`
+        INSERT INTO scheduled_tasks (
+          id, name, cron_expression, timezone, prompt, workspace_path, provider,
+          model, reasoning_effort, kind, action, repository_id, enabled,
+          created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        "task-1",
+        "Daily report",
+        "0 9 * * *",
+        "Asia/Shanghai",
+        "Create the daily report.",
+        "/workspace",
+        "deepseek-official",
+        "deepseek-v4-flash",
+        "high",
+        "agent",
+        null,
+        null,
+        1,
+        "2026-09-03T00:00:00.000Z",
+        "2026-09-03T00:00:00.000Z",
+      );
+      sqlite.prepare(`
+        INSERT INTO scheduled_task_runs (id, task_id, scheduled_for, status)
+        VALUES (?, ?, ?, ?)
+      `).run("run-1", "task-1", "2026-09-03T01:00:00.000Z", "running");
 
-      expect(database.select().from(scheduledTaskRuns).all()).toEqual([
-        expect.objectContaining({
-          id: "run-1",
-          taskId: "task-1",
-          status: "running",
-        }),
+      expect(sqlite.prepare(
+        "SELECT id, task_id, status FROM scheduled_task_runs",
+      ).all()).toEqual([
+        { id: "run-1", task_id: "task-1", status: "running" },
       ]);
     } finally {
       sqlite.close();
     }
   });
 
-  it("maps an Issue Chat session to its repository issue identity", () => {
+  it("enforces Issue Chat session foreign-key identity", () => {
     const sqlite = openDatabase(createDatabasePath());
 
     try {
-      const database = createDrizzleDatabase(sqlite);
-      database
-        .insert(repositories)
-        .values({
-          id: "repo-issue",
-          key: "issue-repo",
-          displayName: "Issue Repository",
-          githubOwner: "example",
-          githubName: "issue-repo",
-          localPath: "/workspace/issue-repo",
-          remoteName: "origin",
-          defaultBranch: "main",
-          worktreeSlots: 1,
-          enabled: true,
-          createdAt: "2026-09-03T00:00:00.000Z",
-          updatedAt: "2026-09-03T00:00:00.000Z",
-        })
-        .run();
-      const issueSession = {
-        id: "issue-session-42",
-        originKind: "issue" as const,
-        repositoryId: "repo-issue",
-        issueNumber: 42,
-        dshHomePath: "/workspace/.loong/sessions/issue-session-42",
-        workspacePath: "/workspace/issue-repo",
-        provider: "deepseek-official",
-        model: "deepseek-v4-flash",
-        reasoningEffort: "high",
-        status: "idle",
-        createdAt: "2026-09-03T00:00:00.000Z",
-        lastUsedAt: "2026-09-03T00:00:00.000Z",
-      };
+      sqlite.prepare(`
+        INSERT INTO repositories (
+          id, key, display_name, github_owner, github_name, local_path,
+          remote_name, default_branch, worktree_slots, enabled, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        "repo-issue",
+        "issue-repo",
+        "Issue Repository",
+        "example",
+        "issue-repo",
+        "/workspace/issue-repo",
+        "origin",
+        "main",
+        1,
+        1,
+        "2026-09-03T00:00:00.000Z",
+        "2026-09-03T00:00:00.000Z",
+      );
+      const insertSession = sqlite.prepare(`
+        INSERT INTO agent_sessions (
+          id, origin_kind, repository_id, issue_number, dsh_home_path,
+          workspace_path, provider, model, reasoning_effort, status,
+          created_at, last_used_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
 
       expect(() =>
-        database.insert(agentSessions).values(issueSession).run(),
+        insertSession.run(
+          "issue-session-42",
+          "issue",
+          "repo-issue",
+          42,
+          "/workspace/.loong/sessions/issue-session-42",
+          "/workspace/issue-repo",
+          "deepseek-official",
+          "deepseek-v4-flash",
+          "high",
+          "idle",
+          "2026-09-03T00:00:00.000Z",
+          "2026-09-03T00:00:00.000Z",
+        ),
       ).toThrowError(/FOREIGN KEY constraint failed/);
-      database
-        .insert(issues)
-        .values({
-          repositoryId: "repo-issue",
-          nodeId: "issue-node-42",
-          number: 42,
-          title: "Track issue sessions",
-          url: "https://github.com/example/issue-repo/issues/42",
-          state: "open",
-          commentsCount: 0,
-          createdAt: "2026-09-03T00:00:00.000Z",
-          updatedAt: "2026-09-03T00:00:00.000Z",
-        })
-        .run();
-      database
-        .insert(agentSessions)
-        .values(issueSession)
-        .run();
+      sqlite.prepare(`
+        INSERT INTO issues (
+          repository_id, node_id, number, title, url, state, comments_count,
+          created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(
+        "repo-issue",
+        "issue-node-42",
+        42,
+        "Track issue sessions",
+        "https://github.com/example/issue-repo/issues/42",
+        "open",
+        0,
+        "2026-09-03T00:00:00.000Z",
+        "2026-09-03T00:00:00.000Z",
+      );
+      insertSession.run(
+        "issue-session-42",
+        "issue",
+        "repo-issue",
+        42,
+        "/workspace/.loong/sessions/issue-session-42",
+        "/workspace/issue-repo",
+        "deepseek-official",
+        "deepseek-v4-flash",
+        "high",
+        "idle",
+        "2026-09-03T00:00:00.000Z",
+        "2026-09-03T00:00:00.000Z",
+      );
 
-      expect(database.select().from(agentSessions).all()).toEqual([
-        expect.objectContaining({
-          id: "issue-session-42",
-          repositoryId: "repo-issue",
-          issueNumber: 42,
-        }),
+      expect(sqlite.prepare(
+        "SELECT id, repository_id, issue_number FROM agent_sessions",
+      ).all()).toEqual([
+        { id: "issue-session-42", repository_id: "repo-issue", issue_number: 42 },
       ]);
     } finally {
       sqlite.close();

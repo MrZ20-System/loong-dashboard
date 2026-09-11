@@ -273,15 +273,6 @@ export function updateAgentSession(
   return requireAgentSession(database, sessionId);
 }
 
-/** Rename a session with explicit manual ownership of the resulting title. */
-export function renameAgentSession(
-  database: DatabaseClient,
-  sessionId: string,
-  title: string,
-): AgentSessionSummaryWithTitleSource {
-  return updateAgentSession(database, sessionId, { title });
-}
-
 export interface GeneratedAgentSessionTitleResult {
   readonly updated: boolean;
   readonly session: AgentSessionSummaryWithTitleSource;

@@ -7,7 +7,6 @@ import {
   InvalidAgentSessionTitleError,
   listAgentMessages,
   listAgentSessions,
-  renameAgentSession,
   requireAgentSession,
   setGeneratedAgentSessionTitleIfProvisional,
   updateAgentSession,
@@ -109,7 +108,7 @@ describe("agent session service", () => {
       reasoningEffort: "high",
       now: "2026-09-03T00:00:00.000Z",
     });
-    const renamed = renameAgentSession(database, "sess_manual_title", "  My title  ");
+    const renamed = updateAgentSession(database, "sess_manual_title", { title: "  My title  " });
     expect(renamed.title).toBe("My title");
     expect(renamed.titleSource).toBe("manual");
     expect(
@@ -131,9 +130,9 @@ describe("agent session service", () => {
       now: "2026-09-03T00:00:00.000Z",
     });
     const valid = "😀".repeat(80);
-    expect(renameAgentSession(database, "sess_title_validation", valid).title).toBe(valid);
+    expect(updateAgentSession(database, "sess_title_validation", { title: valid }).title).toBe(valid);
     for (const invalid of ["😀".repeat(81), "line\nbreak", "   "]) {
-      expect(() => renameAgentSession(database, "sess_title_validation", invalid)).toThrow(
+      expect(() => updateAgentSession(database, "sess_title_validation", { title: invalid })).toThrow(
         InvalidAgentSessionTitleError,
       );
     }

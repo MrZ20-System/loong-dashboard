@@ -13,7 +13,7 @@ import {
   getSyncRun,
   getIssueActivityDays,
   getIssueDetail,
-  getIssueDetailSyncedUpdatedAt,
+  getIssueDetailCacheState,
   getPullRequestActivityDays,
   getRepositorySyncStatus,
   getRepositorySyncState,
@@ -384,7 +384,7 @@ describe("Issue detail cache", () => {
         ],
       });
 
-      expect(getIssueDetailSyncedUpdatedAt(database, "repo", 7)).toBe(
+      expect(getIssueDetailCacheState(database, "repo", 7)?.syncedUpdatedAt).toBe(
         "2026-09-03T00:00:00.000Z",
       );
       expect(getIssueDetail(database, "repo", 7)).toMatchObject({
@@ -444,7 +444,7 @@ describe("Issue detail cache", () => {
         }),
       ]);
 
-      expect(getIssueDetailSyncedUpdatedAt(database, "repo", 7)).toBe(
+      expect(getIssueDetailCacheState(database, "repo", 7)?.syncedUpdatedAt).toBe(
         "2026-09-03T00:00:00.000Z",
       );
       expect(getIssueDetail(database, "repo", 7)).toMatchObject({

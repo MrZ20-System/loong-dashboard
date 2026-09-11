@@ -1,6 +1,6 @@
 # 数据模型与持久化
 
-数据库位置为 `runtime.statePath/loongboard.sqlite3`。[migration-runner.ts](../packages/database/src/migration-runner.ts) 使用 better-sqlite3 开启外键，以有序事务执行迁移，并在 `schema_migrations` 记录已应用 id；[schema.ts](../packages/database/src/schema.ts) 是 Drizzle 类型化 schema。
+数据库位置为 `runtime.statePath/loongboard.sqlite3`。[migration-runner.ts](../packages/database/src/migration-runner.ts) 使用 better-sqlite3 开启外键，以有序事务执行迁移，并在 `schema_migrations` 记录已应用 id。迁移与按业务拆分的类型化 SQLite 服务共同构成本包唯一的 schema/source boundary；不再维护独立 ORM schema。
 
 ## 实体与服务
 
@@ -25,7 +25,7 @@ Repository summary 的 list/get projection 同时返回本地 `pullRequestCount`
 
 ## 当前迁移序列
 
-[migrations](../packages/database/src/migrations) 中依次包含：001 初始模型、002 列表索引、003 Issue 状态约束、004 Domain 分类、005 Issue 详情缓存、006 Agent 来源元数据与统一 Scheduler 字段、007 持久 repository sync/history、008 曾引入的 PR Daily/lifecycle 数据、009 PR 查询模式索引、010 删除已废弃的 Daily/lifecycle/逐日 coverage 并加入 Merged partial index、011 持久 History rate-limit recovery、012 metadata retention 字段和 maintenance runs、013 Agent session title source、014 Scheduler task/run、Agent session origin_kind 与 Worktree slot 的 canonical schema。007–010 可能已经存在于用户数据库，因此保留为升级历史；当前 schema 不再包含 Daily 体系。011 的 `resume_after` 是 History 的下次安全 admission 时间；012 的 `archived_at`/`payload_pruned_at` 是可逆 metadata 状态；013 将升级前已有 title 标为 `manual`；014 将旧 Scheduler/session/worktree 形状一次性收敛到当前模型，并对无法安全保留的 repository 绑定明确失败。新增 schema 变化必须添加新迁移，并同步 Drizzle 声明及 typed service，不能改写已执行迁移。
+[migrations](../packages/database/src/migrations) 中依次包含：001 初始模型、002 列表索引、003 Issue 状态约束、004 Domain 分类、005 Issue 详情缓存、006 Agent 来源元数据与统一 Scheduler 字段、007 持久 repository sync/history、008 曾引入的 PR Daily/lifecycle 数据、009 PR 查询模式索引、010 删除已废弃的 Daily/lifecycle/逐日 coverage 并加入 Merged partial index、011 持久 History rate-limit recovery、012 metadata retention 字段和 maintenance runs、013 Agent session title source、014 Scheduler task/run、Agent session origin_kind 与 Worktree slot 的 canonical schema。007–010 可能已经存在于用户数据库，因此保留为升级历史；当前 schema 不再包含 Daily 体系。011 的 `resume_after` 是 History 的下次安全 admission 时间；012 的 `archived_at`/`payload_pruned_at` 是可逆 metadata 状态；013 将升级前已有 title 标为 `manual`；014 将旧 Scheduler/session/worktree 形状一次性收敛到当前模型，并对无法安全保留的 repository 绑定明确失败。新增 schema 变化必须添加新迁移，并同步对应 typed service，不能改写已执行迁移。
 
 Domain 的用户源文件位于 system workspace 的 `domains/<repository-key>.json`，由 [DomainFileService](../apps/server/src/domain-file.ts) 负责安全路径、机械校验、pretty format 和外部编辑吸收；`domain_rules` 与 `pull_request_domains` 只是分类查询投影。文件解析失败时源文本仍可读，最近一次有效投影继续提供分类，修复后再投影并触发重分类。文件版本的内容和 hash 保存在 `runtime.statePath/domain-file-versions/`，它是短期恢复记录，不替代 JSON 源文件或 Git。
 

@@ -253,29 +253,6 @@ export function replaceIssueDetailCache(
   })();
 }
 
-/**
- * The issue.updatedAt value whose body/comments are currently cached.
- * The Issue detail route fetches only when this differs from the stored
- * issue row's updated_at.
- */
-export function getIssueDetailSyncedUpdatedAt(
-  database: DatabaseClient,
-  repositoryId: string,
-  number: number,
-): string | null {
-  requireRepository(database, repositoryId);
-  const row = database
-    .prepare(
-      `SELECT detail_synced_updated_at
-       FROM issues
-       WHERE repository_id = ? AND number = ?`,
-    )
-    .get(repositoryId, number) as
-    | { detail_synced_updated_at: string | null }
-    | undefined;
-  return row?.detail_synced_updated_at ?? null;
-}
-
 export interface IssueDetailCacheState {
   updatedAt: string;
   syncedUpdatedAt: string | null;

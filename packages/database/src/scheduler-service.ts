@@ -339,7 +339,6 @@ export function insertScheduledRun(
   };
 }
 
-/** Running run rows; a task/workspace guard lives in the scheduler engine. */
 export function getScheduledRun(
   database: DatabaseClient,
   runId: string,
@@ -352,17 +351,6 @@ export function getScheduledRun(
     )
     .get(runId) as Record<string, unknown> | undefined;
   return row === undefined ? null : mapRun(row);
-}
-
-export function listRunningRuns(database: DatabaseClient): ScheduledRunRow[] {
-  const rows = database
-    .prepare(
-      `SELECT id, task_id, scheduled_for, started_at, finished_at, status,
-              agent_session_id, error
-       FROM scheduled_task_runs WHERE status = 'running'`,
-    )
-    .all() as Array<Record<string, unknown>>;
-  return rows.map(mapRun);
 }
 
 export function listScheduledTaskRuns(

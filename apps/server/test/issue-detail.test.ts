@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
-  getIssueDetailSyncedUpdatedAt,
+  getIssueDetailCacheState,
   openDatabase,
   reconcileRepositories,
   replaceIssueDetailCache,
@@ -251,9 +251,9 @@ describe("Issue detail lazy cache route", () => {
         { id: 2, authorLogin: "bob", body: "Second fetched comment" },
       ],
     });
-    expect(
-      getIssueDetailSyncedUpdatedAt(client, "alpha", 7),
-    ).toBe("2026-09-03T00:00:00.000Z");
+    expect(getIssueDetailCacheState(client, "alpha", 7)?.syncedUpdatedAt).toBe(
+      "2026-09-03T00:00:00.000Z",
+    );
 
     const second = await app.inject({
       method: "GET",

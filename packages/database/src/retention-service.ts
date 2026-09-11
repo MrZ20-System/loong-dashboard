@@ -453,13 +453,6 @@ export function getMaintenanceRun(
   return row === undefined ? null : mapMaintenanceRun(row);
 }
 
-export function readMaintenanceRun(
-  database: DatabaseClient,
-  runId: string,
-): MaintenanceRunRecord | null {
-  return getMaintenanceRun(database, runId);
-}
-
 export function requireMaintenanceRun(
   database: DatabaseClient,
   runId: string,

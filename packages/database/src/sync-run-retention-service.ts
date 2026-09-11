@@ -359,7 +359,3 @@ export function purgeRuntimeHistoryBatch(
     maintenanceRunId: normalized.maintenanceRunId,
   };
 }
-
-// Names used by callers that describe this operation as sync-run retention.
-export const previewSyncRunPurge = previewRuntimeHistoryPurge;
-export const purgeSyncRunBatch = purgeRuntimeHistoryBatch;

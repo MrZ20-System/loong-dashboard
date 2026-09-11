@@ -19,7 +19,7 @@ flowchart LR
   Adapter --> DSH[外部 DSH 子进程]
 ```
 
-[根 package.json](../package.json) 定义 pnpm workspace 和检查入口。前端使用 React 19、React Router 7、TanStack Query 5、Vite 7、Monaco、react-markdown/remark-gfm 和 Mermaid。服务端使用 Fastify 5、Zod 3、YAML；数据层使用 better-sqlite3 和 Drizzle。具体版本以各 package.json、pnpm-lock.yaml 和 dsh.lock.json 为准。
+[根 package.json](../package.json) 定义 pnpm workspace 和检查入口。前端使用 React 19、React Router 7、TanStack Query 5、Vite 7、Monaco、react-markdown/remark-gfm 和 Mermaid。服务端使用 Fastify 5、Zod 3、YAML；数据层使用 better-sqlite3、顺序迁移和按业务拆分的类型化 SQLite service。具体版本以各 package.json、pnpm-lock.yaml 和 dsh.lock.json 为准。
 
 ## 目录职责
 
@@ -87,7 +87,7 @@ Scheduler 是现有唯一的定时入口。`SchedulerEngine` 为持久任务维�
 | 需求 | 从哪里开始 | 联动检查 |
 | --- | --- | --- |
 | 新增 API 字段 | contracts 对应文件 | Server 返回、Web client、契约 UT |
-| 调整表/索引 | database schema 和 migrations | typed service、迁移 UT、读写调用方 |
+| 调整表/索引 | database migrations | typed service、迁移 UT、读写调用方 |
 | 同步或分类异常 | sync-coordinator / enrichment-service / domain-classifier | provider、水位、classification-service |
 | PR 文件/布局 | diff.ts / pull-request-detail.tsx | git-workspace、文件缓存、Monaco |
 | Agent 流式/停止 | agent-chat.ts / agent-runtime-dsh | host、消息持久化、SSE、互斥 |

@@ -1,8 +1,5 @@
-export { createDrizzleDatabase } from "./drizzle.js";
-export type { LoongBoardDatabase } from "./drizzle.js";
-export { openDatabase, runMigrations } from "./migration-runner.js";
+export { openDatabase } from "./migration-runner.js";
 export type { Migration } from "./migration-runner.js";
-export * from "./schema.js";
 export {
   addDaysToCalendarDate,
   calendarDateRangeToUtc,
@@ -35,14 +32,11 @@ export {
   listSyncRunTargets,
   interruptSyncRun,
   recoverInterruptedSyncStates,
-  recoverInterruptedSyncRuns,
-  startSyncStream,
   SyncAlreadyRunningError,
   SyncRunNotFoundError,
   updateRepositoryHistoryState,
 } from "./sync-service.js";
 export type {
-  BeginStreamInput,
   CompleteStreamInput,
   FailStreamInput,
   CreateSyncRunInput,
@@ -63,7 +57,6 @@ export {
   getIssueActivityDays,
   getIssueDetail,
   getIssueDetailCacheState,
-  getIssueDetailSyncedUpdatedAt,
   getPullRequestActivityDays,
   InvalidCursorError,
   listIssues,
@@ -93,7 +86,6 @@ export type {
 export {
   getPullRequestFiles,
   listCurrentPullRequestEnrichmentStates,
-  listDomainTagsForPullRequests,
   listPullRequestFileSets,
   listPullRequestsNeedingFileEnrichment,
   PullRequestNotFoundError,
@@ -111,7 +103,6 @@ export {
   listBusyWorkspacePaths,
   listRunningKnowledgeSessionIds,
   InvalidAgentSessionTitleError,
-  renameAgentSession,
   recoverInterruptedAgentSessions,
   requireAgentSession,
   setGeneratedAgentSessionTitleIfProvisional,
@@ -145,7 +136,6 @@ export {
   KnowledgeVersionNotFoundError,
   listDocumentVersions,
   listKnowledgeDocuments,
-  requireKnowledgeDocument,
   setKnowledgeDocumentDefaultSession,
   updateKnowledgeDocumentPath,
   upsertKnowledgeDocument,
@@ -161,7 +151,6 @@ export {
   getScheduledRun,
   getScheduledTask,
   insertScheduledRun,
-  listRunningRuns,
   listScheduledTaskRuns,
   listScheduledTasks,
   recoverInterruptedScheduledRuns,
@@ -190,7 +179,6 @@ export {
   listMaintenanceRuns,
   MaintenanceRunNotFoundError,
   previewArchive,
-  readMaintenanceRun,
   requireMaintenanceRun,
   restoreIssue,
   restorePullRequest,
@@ -198,9 +186,7 @@ export {
 } from "./retention-service.js";
 export {
   previewRuntimeHistoryPurge,
-  previewSyncRunPurge,
   purgeRuntimeHistoryBatch,
-  purgeSyncRunBatch,
 } from "./sync-run-retention-service.js";
 export type {
   ActivityDay,
