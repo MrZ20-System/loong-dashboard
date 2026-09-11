@@ -91,7 +91,12 @@ describe("DSHRuntime native transport lifecycle", () => {
           },
         }, 2),
       );
-      transport.pushJournal(journalEvent("turn/end", {}, 3));
+      transport.pushJournal(journalEvent("session/title", {
+        title: "  Native\n title  ",
+        messageSeqs: [1],
+        source: { kind: "provider", provider: "dsh-title" },
+      }, 3));
+      transport.pushJournal(journalEvent("turn/end", {}, 4));
       expect(await completed).toEqual({
         done: false,
         value: { type: "assistant.completed", markdown: "final answer" },
@@ -101,6 +106,12 @@ describe("DSHRuntime native transport lifecycle", () => {
         value: { type: "status", status: "idle" },
       });
       expect((await iterator.next()).done).toBe(true);
+
+      await expect(runtime.getTitle("s1")).resolves.toEqual({
+        title: "Native title",
+        source: "provider",
+      });
+      expect(requestFor(transport, "session/list")?.args).toEqual({ _request: {} });
 
       const promptRequests = allRequestsFor(transport, "session/prompt");
       expect(promptRequests).toHaveLength(1);
@@ -267,6 +278,59 @@ describe("DSHRuntime native transport lifecycle", () => {
       });
       expect((await iterator.next()).done).toBe(true);
     } finally {
+      await runtime.close();
+    }
+  });
+
+  it("renames the opaque runtime session with the native Host RPC shape", async () => {
+    const transport = new FakeNativeDshTransport("opaque-session");
+    const runtime = new DSHRuntime({ transportFactory: () => transport });
+    const iterator = runtime.run(spec(), "hello");
+
+    try {
+      await nextEvent(iterator);
+      await nextEvent(iterator);
+      await expect(runtime.rename("s1", "  A\nvery long title  ")).resolves.toEqual({
+        title: "A very long title",
+        source: "user",
+      });
+      expect(requestFor(transport, "session/rename")?.args).toEqual({
+        request: { sessionId: "opaque-session", title: "A very long title" },
+      });
+    } finally {
+      await iterator.return(undefined);
+      await runtime.close();
+    }
+  });
+
+  it("rejects empty titles and title operations without an opaque runtime id", async () => {
+    const transport = new FakeNativeDshTransport();
+    const runtime = new DSHRuntime({ transportFactory: () => transport });
+    await expect(runtime.rename("s1", " \n\t ")).rejects.toThrow(
+      'DSH cannot rename session "s1": title must not be empty',
+    );
+    await expect(runtime.getTitle("s1")).rejects.toThrow(
+      'DSH cannot read title for session "s1": no runtime session id is available',
+    );
+    await runtime.close();
+  });
+
+  it("bounds renamed titles to one trimmed line of at most 80 code points", async () => {
+    const transport = new FakeNativeDshTransport("opaque-session");
+    const runtime = new DSHRuntime({ transportFactory: () => transport });
+    const iterator = runtime.run(spec(), "hello");
+    const longTitle = `  ${"界".repeat(81)}\n  `;
+
+    try {
+      await nextEvent(iterator);
+      await nextEvent(iterator);
+      const renamed = await runtime.rename("s1", longTitle);
+      expect(renamed).toEqual({ title: "界".repeat(80), source: "user" });
+      expect(requestFor(transport, "session/rename")?.args).toEqual({
+        request: { sessionId: "opaque-session", title: "界".repeat(80) },
+      });
+    } finally {
+      await iterator.return(undefined);
       await runtime.close();
     }
   });

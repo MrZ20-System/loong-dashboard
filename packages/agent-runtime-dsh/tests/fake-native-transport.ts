@@ -89,6 +89,23 @@ export class FakeNativeDshTransport implements NativeDshTransport {
         return Promise.resolve(this.commands);
       case "llm/listConfigurableProviders":
         return Promise.resolve(this.providers);
+      case "session/list":
+        return Promise.resolve({
+          items: [{
+            sessionId: this.sessionId,
+            updatedAt: 1,
+            running: false,
+            blank: false,
+            projections: { asOfSeq: 0, values: {} },
+          }],
+        });
+      case "session/rename": {
+        const request = args.request;
+        const title = request !== null && typeof request === "object" && !Array.isArray(request) && typeof (request as Record<string, unknown>).title === "string"
+          ? (request as Record<string, unknown>).title as string
+          : "";
+        return Promise.resolve({ title, seq: 1 });
+      }
       default:
         return Promise.resolve(undefined);
     }

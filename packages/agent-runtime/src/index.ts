@@ -12,6 +12,16 @@ export type {
   AgentScope,
 } from "@loongboard/contracts";
 
+/**
+ * A runtime-owned title projection.  This deliberately contains no vendor
+ * event or SDK type; adapters may omit `source` when the native list API only
+ * exposes the projected title text.
+ */
+export interface AgentRuntimeTitle {
+  title: string;
+  source?: "fallback" | "provider" | "user";
+}
+
 /** Everything the runtime needs to spawn/attach one LoongBoard session. */
 export interface AgentSessionSpec {
   sessionId: string;
@@ -44,6 +54,10 @@ export interface AgentRuntime {
    * context after the process was shut down for idleness (plan 13.3.10).
    */
   runtimeSessionId?(sessionId: string): string | null;
+  /** Read a title already accepted by the runtime, when supported. */
+  getTitle?(sessionId: string): Promise<AgentRuntimeTitle | null>;
+  /** Explicitly rename an existing runtime session, when supported. */
+  rename?(sessionId: string, title: string): Promise<AgentRuntimeTitle>;
   /** Discover capabilities through the runtime's public API, when available. */
   discoverCapabilities?(spec: AgentSessionSpec): Promise<AgentRuntimeCapabilities>;
 }
@@ -82,6 +96,28 @@ export class AgentRuntimeHost {
 
   runtime(sessionId: string): AgentRuntime | undefined {
     return this.runtimes.get(sessionId);
+  }
+
+  async getTitle(sessionId: string): Promise<AgentRuntimeTitle | null> {
+    const runtime = this.runtimes.get(sessionId);
+    if (runtime === undefined) {
+      throw new Error(`Runtime session "${sessionId}" is not active`);
+    }
+    if (runtime.getTitle === undefined) {
+      throw new Error(`Runtime title capability is unavailable for session "${sessionId}"`);
+    }
+    return runtime.getTitle(sessionId);
+  }
+
+  async rename(sessionId: string, title: string): Promise<AgentRuntimeTitle> {
+    const runtime = this.runtimes.get(sessionId);
+    if (runtime === undefined) {
+      throw new Error(`Runtime session "${sessionId}" is not active`);
+    }
+    if (runtime.rename === undefined) {
+      throw new Error(`Runtime rename capability is unavailable for session "${sessionId}"`);
+    }
+    return runtime.rename(sessionId, title);
   }
 
   /** Return the live runtime for a session, creating it on first use. */

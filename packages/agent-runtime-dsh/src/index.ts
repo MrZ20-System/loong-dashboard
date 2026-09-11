@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { HarnessNotification } from "@deepseek-ai/dsh-sdk-client";
-import type { AgentRuntimeCapabilities, AgentRuntime, AgentRuntimeEvent, AgentSessionSpec } from "@loongboard/agent-runtime";
+import type { AgentRuntimeCapabilities, AgentRuntime, AgentRuntimeEvent, AgentRuntimeTitle, AgentSessionSpec } from "@loongboard/agent-runtime";
 import { DshNotificationMapper } from "./notification-mapper.js";
 import { NativeChannel, NativeDshProcess, type NativeDshTransport, type NativeDshTransportOptions } from "./native-transport.js";
 import { configureNativeCredential } from "./native-credentials.js";
@@ -25,9 +25,48 @@ const commandSchema = z.array(z.object({ name: z.string(), description: z.string
 const journalSchema = z.object({ type: z.literal("event"), event: z.object({
   type: z.string(), seq: z.number(), time: z.number(), data: z.unknown(),
 }) });
+const sessionListSchema = z.object({
+  items: z.array(z.object({
+    sessionId: z.string(),
+    projections: z.object({
+      values: z.object({ title: z.string().nullable().optional() }).passthrough(),
+    }).optional(),
+  }).passthrough()),
+}).passthrough();
 type Frame = { source: "host" | "journal"; value: unknown };
 function record(value: unknown): Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function normalizeTitle(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const title = value.replace(/\s+/gu, " ").trim();
+  const bounded = Array.from(title).slice(0, 80).join("");
+  return bounded.length > 0 ? bounded : null;
+}
+
+function titleFromFrame(value: unknown): AgentRuntimeTitle | null {
+  const frame = record(value);
+  if (frame.type === "snapshot") {
+    const records = Array.isArray(frame.records) ? frame.records : [];
+    for (let index = records.length - 1; index >= 0; index -= 1) {
+      const title = titleFromFrame(records[index]);
+      if (title !== null) return title;
+    }
+    const projection = record(record(frame.projections).values);
+    const title = normalizeTitle(projection.title);
+    return title === null ? null : { title };
+  }
+  if (frame.type !== "event") return null;
+  const event = record(frame.event);
+  if (event.type !== "session/title") return null;
+  const data = record(event.data);
+  const title = normalizeTitle(data.title);
+  if (title === null) return null;
+  const source = record(data.source).kind;
+  return source === "fallback" || source === "provider" || source === "user"
+    ? { title, source }
+    : { title };
 }
 
 /** One supported native DSH Host per isolated LoongBoard conversation. */
@@ -35,6 +74,7 @@ export class DSHRuntime implements AgentRuntime {
   private readonly transports = new Map<string, NativeDshTransport>();
   private readonly pendingInteractions = new Map<string, { sessionId: string; clientId: string; transport: NativeDshTransport }>();
   private readonly runtimeSessionIds = new Map<string, string>();
+  private readonly titles = new Map<string, AgentRuntimeTitle>();
   constructor(private readonly options: DSHRuntimeOptions = {}) {}
 
   private async transportFor(spec: AgentSessionSpec): Promise<NativeDshTransport> {
@@ -142,6 +182,8 @@ export class DSHRuntime implements AgentRuntime {
             if (host.event === "api-session/error") { failure = typeof args[1] === "string" ? args[1] : "DSH session failed"; break; }
           }
         } else {
+          const title = titleFromFrame(frame.value);
+          if (title !== null) this.titles.set(spec.sessionId, title);
           const parsed = journalSchema.safeParse(frame.value);
           if (parsed.success) {
             const event = parsed.data.event;
@@ -205,18 +247,68 @@ export class DSHRuntime implements AgentRuntime {
     this.pendingInteractions.delete(requestId);
   }
   runtimeSessionId(sessionId: string): string | null { return this.runtimeSessionIds.get(sessionId) ?? null; }
+
+  async getTitle(sessionId: string): Promise<AgentRuntimeTitle | null> {
+    const runtimeSessionId = this.requireRuntimeSessionId(sessionId, "read title");
+    const transport = this.requireTransport(sessionId, "read title");
+    const cached = this.titles.get(sessionId);
+    const result = sessionListSchema.parse(await transport.request("session/list", { _request: {} }));
+    const row = result.items.find((item) => item.sessionId === runtimeSessionId);
+    if (row === undefined) {
+      throw new Error(`DSH cannot read title for session "${sessionId}": runtime session "${runtimeSessionId}" was not found`);
+    }
+    const title = normalizeTitle(row.projections?.values.title);
+    if (title === null) return this.titles.get(sessionId) ?? null;
+    const next = { title, ...(cached?.title === title && cached.source ? { source: cached.source } : {}) };
+    this.titles.set(sessionId, next);
+    return next;
+  }
+
+  async rename(sessionId: string, title: string): Promise<AgentRuntimeTitle> {
+    const normalized = normalizeTitle(title);
+    if (normalized === null) throw new Error(`DSH cannot rename session "${sessionId}": title must not be empty`);
+    const runtimeSessionId = this.requireRuntimeSessionId(sessionId, "rename session");
+    const transport = this.requireTransport(sessionId, "rename session");
+    const result = z.object({ title: z.string(), seq: z.number() }).parse(
+      await transport.request("session/rename", { request: { sessionId: runtimeSessionId, title: normalized } }),
+    );
+    const accepted = normalizeTitle(result.title);
+    if (accepted === null) throw new Error(`DSH rename for session "${sessionId}" returned an empty title`);
+    const value: AgentRuntimeTitle = { title: accepted, source: "user" };
+    this.titles.set(sessionId, value);
+    return value;
+  }
+
+  private requireRuntimeSessionId(sessionId: string, operation: string): string {
+    const runtimeSessionId = this.runtimeSessionIds.get(sessionId);
+    if (runtimeSessionId === undefined) {
+      throw new Error(`DSH cannot ${operation} for session "${sessionId}": no runtime session id is available; run or resume the session first`);
+    }
+    return runtimeSessionId;
+  }
+
+  private requireTransport(sessionId: string, operation: string): NativeDshTransport {
+    const transport = this.transports.get(sessionId);
+    if (transport === undefined) {
+      throw new Error(`DSH cannot ${operation} for session "${sessionId}": runtime is not active`);
+    }
+    return transport;
+  }
+
   async stop(sessionId: string): Promise<void> {
     const transport = this.transports.get(sessionId);
     this.transports.delete(sessionId);
     // The controller supplies a persisted id for idle resume. A cancelled
     // turn deliberately supplies none and must not inherit this local cache.
     this.runtimeSessionIds.delete(sessionId);
+    this.titles.delete(sessionId);
     if (transport) await transport.close();
   }
   async close(): Promise<void> {
     const transports = [...this.transports.values()];
     this.transports.clear();
     this.runtimeSessionIds.clear();
+    this.titles.clear();
     await Promise.all(transports.map((transport) => transport.close()));
   }
 }

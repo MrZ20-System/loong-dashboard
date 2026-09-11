@@ -1,6 +1,6 @@
 # @loongboard/agent-runtime
 
-产品 Agent runtime。AgentRuntime、AgentSessionSpec、AgentRuntimeHost；不导入 DSH SDK 或持久化消息。
+产品 Agent runtime。AgentRuntime、AgentSessionSpec、AgentRuntimeHost；不导入 DSH SDK 或持久化消息。可选的 `getTitle`/`rename` 能力只返回 vendor-neutral `AgentRuntimeTitle`，不会暴露原生 SessionEvent。
 
 - [实现说明](../../docs/dsh-integration.md)
 - [源码入口](src/index.ts)

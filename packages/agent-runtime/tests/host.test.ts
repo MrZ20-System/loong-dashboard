@@ -3,6 +3,7 @@ import {
   AgentRuntimeHost,
   type AgentRuntime,
   type AgentRuntimeEvent,
+  type AgentRuntimeTitle,
   type AgentSessionSpec,
 } from "../src/index.js";
 
@@ -43,6 +44,17 @@ function recordedRuntime(events: AgentRuntimeEvent[] = []): AgentRuntime & {
     stopMock: ReturnType<typeof vi.fn>;
     closeMock: ReturnType<typeof vi.fn>;
     stopCalls: number;
+  };
+}
+
+function titledRuntime(): AgentRuntime {
+  return {
+    ...recordedRuntime(),
+    getTitle: async () => ({ title: "A title" }),
+    rename: async (_sessionId: string, title: string): Promise<AgentRuntimeTitle> => ({
+      title,
+      source: "user",
+    }),
   };
 }
 
@@ -113,6 +125,32 @@ describe("AgentRuntimeHost", () => {
     host.endRun("s1");
     await new Promise((resolve) => setTimeout(resolve, 10));
     expect(created.stopCalls).toBe(1);
+    await host.close();
+  });
+
+  it("exposes optional title capabilities through the vendor-neutral host", async () => {
+    const host = new AgentRuntimeHost(() => titledRuntime(), 0);
+    host.ensure(spec("s1"));
+    await expect(host.getTitle("s1")).resolves.toEqual({ title: "A title" });
+    await expect(host.rename("s1", "Renamed")).resolves.toEqual({
+      title: "Renamed",
+      source: "user",
+    });
+    await host.close();
+  });
+
+  it("reports missing title capability clearly", async () => {
+    const host = new AgentRuntimeHost(() => recordedRuntime(), 0);
+    host.ensure(spec("s1"));
+    await expect(host.getTitle("s1")).rejects.toThrow(
+      'Runtime title capability is unavailable for session "s1"',
+    );
+    await expect(host.rename("s1", "Renamed")).rejects.toThrow(
+      'Runtime rename capability is unavailable for session "s1"',
+    );
+    await expect(host.getTitle("missing")).rejects.toThrow(
+      'Runtime session "missing" is not active',
+    );
     await host.close();
   });
 });
