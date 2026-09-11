@@ -3,6 +3,14 @@ export {
   type HealthResponse,
 } from "./health.js";
 export {
+  authPasswordUpdateSchema,
+  authStatusSchema,
+  authUnlockRequestSchema,
+  type AuthPasswordUpdate,
+  type AuthStatus,
+  type AuthUnlockRequest,
+} from "./auth.js";
+export {
   decodeListCursor,
   encodeListCursor,
   listCursorPayloadSchema,

@@ -49,3 +49,12 @@ export type {
   SyncCoordinator,
   SyncCoordinatorLogger,
 } from "./sync-coordinator.js";
+export {
+  AuthInvalidPasswordError,
+  AuthRateLimitedError,
+  AuthRequiredError,
+  AuthService,
+  authFilePath,
+  resetAuthFile,
+} from "./auth.js";
+export type { AuthMutationResult, AuthServiceOptions } from "./auth.js";

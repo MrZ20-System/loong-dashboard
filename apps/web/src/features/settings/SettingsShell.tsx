@@ -10,6 +10,7 @@ const settingsTabs = [
   { to: "/settings/domains", label: "Domains", end: false },
   { to: "/settings/schedules", label: "Schedules", end: false },
   { to: "/settings/health", label: "Health", end: false },
+  { to: "/settings/security", label: "Security", end: false },
 ] as const;
 
 export function SettingsShell({ children }: { children: ReactNode }) {

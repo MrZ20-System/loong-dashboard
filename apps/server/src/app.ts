@@ -16,6 +16,9 @@ import {
 import {
   activityDaysQuerySchema,
   activityDaysResponseSchema,
+  authPasswordUpdateSchema,
+  authStatusSchema,
+  authUnlockRequestSchema,
   apiErrorSchema,
   healthResponseSchema,
   issueDetailSchema,
@@ -86,6 +89,12 @@ import {
   type SettingsController,
 } from "./settings.js";
 import { registerProductionStaticSite } from "./static-site.js";
+import {
+  AuthInvalidPasswordError,
+  AuthRateLimitedError,
+  AuthRequiredError,
+  AuthService,
+} from "./auth.js";
 
 const healthResponse: HealthResponse = healthResponseSchema.parse({
   status: "ok",
@@ -125,6 +134,8 @@ export interface BuildAppDependencies {
   domainFiles?: DomainFileService;
   /** Persistent control-center settings service. */
   settings?: SettingsController;
+  /** Optional local password lock; absent keeps embedded/test apps unlocked. */
+  auth?: AuthService;
 }
 
 /**
@@ -143,6 +154,7 @@ export function buildApp(
 ): FastifyInstance {
   const { database, timezone, syncCoordinator } = dependencies;
   const { staticRoot, ...fastifyOptions } = options;
+  const auth = dependencies.auth ?? AuthService.disabled();
   const ownsReclassification = dependencies.reclassification === undefined;
   const reclassification =
     dependencies.reclassification ??
@@ -157,6 +169,20 @@ export function buildApp(
 
   app.get("/api/health", async (_request, reply) => {
     return reply.code(200).send(healthResponse);
+  });
+  app.get("/api/health/live", async (_request, reply) => {
+    return reply.code(200).send(healthResponse);
+  });
+
+  registerAuthRoutes(app, auth);
+  app.addHook("onRequest", async (request, reply) => {
+    const pathname = request.url.split("?", 1)[0];
+    if (!pathname.startsWith("/api/") || isPublicApiPath(pathname)) return;
+    if (auth.isAuthorized(request.headers.cookie)) return;
+    return reply
+      .code(401)
+      .type("application/json")
+      .send({ error: { code: "AUTH_REQUIRED", message: "Authentication required" } });
   });
 
   registerStageOneRoutes(app, database, timezone, syncCoordinator, issueDetails);
@@ -451,6 +477,65 @@ function registerStageOneRoutes(
   });
 }
 
+function registerAuthRoutes(app: FastifyInstance, auth: AuthService): void {
+  app.get("/api/auth/status", async (request, reply) => {
+    return sendParsed(reply, 200, authStatusSchema, auth.status(request.headers.cookie));
+  });
+
+  app.post("/api/auth/unlock", async (request, reply) => {
+    const { password } = parseRequest(authUnlockRequestSchema, request.body);
+    try {
+      const result = await auth.unlock(password);
+      if (result.token !== null) {
+        reply.header("Set-Cookie", auth.sessionCookie(result.token, request.protocol === "https"));
+      }
+      return sendParsed(reply, 200, authStatusSchema, result.status);
+    } catch (error: unknown) {
+      if (error instanceof AuthRateLimitedError) {
+        reply.header("Retry-After", String(error.retryAfterSeconds));
+      }
+      throw error;
+    }
+  });
+
+  app.post("/api/auth/password", async (request, reply) => {
+    const { password, currentPassword } = parseRequest(authPasswordUpdateSchema, request.body);
+    try {
+      const result = await auth.setPassword(password, request.headers.cookie, currentPassword);
+      if (result.token !== null) {
+        reply.header("Set-Cookie", auth.sessionCookie(result.token, request.protocol === "https"));
+      }
+      return sendParsed(reply, 200, authStatusSchema, result.status);
+    } catch (error: unknown) {
+      if (error instanceof AuthRateLimitedError) {
+        reply.header("Retry-After", String(error.retryAfterSeconds));
+      }
+      throw error;
+    }
+  });
+
+  app.post("/api/auth/disable", async (request, reply) => {
+    const result = await auth.disable(request.headers.cookie);
+    reply.header("Set-Cookie", auth.clearSessionCookie(request.protocol === "https"));
+    return sendParsed(reply, 200, authStatusSchema, result.status);
+  });
+
+  // Logout is intentionally idempotent and public: clearing an old cookie is
+  // safe even after the password has been rotated or reset locally.
+  app.post("/api/auth/logout", async (request, reply) => {
+    assertEmptyRequestBody(request.body);
+    reply.header("Set-Cookie", auth.clearSessionCookie(request.protocol === "https"));
+    return sendParsed(reply, 200, authStatusSchema, auth.status());
+  });
+}
+
+function isPublicApiPath(pathname: string): boolean {
+  return pathname === "/api/health" ||
+    pathname === "/api/health/live" ||
+    pathname === "/api/auth/status" ||
+    pathname === "/api/auth/unlock";
+}
+
 function configureJsonParser(app: FastifyInstance): void {
   const defaultJsonParser = app.getDefaultJsonParser("error", "ignore");
   app.removeContentTypeParser("application/json");
@@ -537,7 +622,11 @@ function errorResponse(error: unknown): {
             code === "AGENT_SESSION_NOT_FOUND" ||
             code === "SYNC_RUN_NOT_FOUND"
           ? 404
-          : code === "SYNC_ALREADY_RUNNING" ||
+            : code === "AUTH_REQUIRED" || code === "AUTH_INVALID_PASSWORD"
+              ? 401
+              : code === "AUTH_RATE_LIMITED"
+                ? 429
+                : code === "SYNC_ALREADY_RUNNING" ||
               code === "HISTORY_PAUSED" ||
               code === "DOMAIN_NAME_CONFLICT" ||
               code === "AGENT_TURN_BUSY" ||
@@ -589,6 +678,15 @@ function errorCode(error: unknown): ApiErrorCode {
   if (hasCode(error, "WORKTREE_POOL_EXHAUSTED")) return "WORKTREE_POOL_EXHAUSTED";
   if (hasCode(error, "SYNC_ALREADY_RUNNING")) return "SYNC_ALREADY_RUNNING";
   if (hasCode(error, "HISTORY_PAUSED")) return "HISTORY_PAUSED";
+  if (error instanceof AuthRequiredError || hasCode(error, "AUTH_REQUIRED")) {
+    return "AUTH_REQUIRED";
+  }
+  if (error instanceof AuthInvalidPasswordError || hasCode(error, "AUTH_INVALID_PASSWORD")) {
+    return "AUTH_INVALID_PASSWORD";
+  }
+  if (error instanceof AuthRateLimitedError || hasCode(error, "AUTH_RATE_LIMITED")) {
+    return "AUTH_RATE_LIMITED";
+  }
   if (error instanceof SyncRunNotFoundError || hasCode(error, "SYNC_RUN_NOT_FOUND")) {
     return "SYNC_RUN_NOT_FOUND";
   }

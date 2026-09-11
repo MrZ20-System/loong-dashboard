@@ -35,6 +35,8 @@ function globalContext(pathname: string): HeaderContext {
     return { eyebrow: "Settings", title: "Domains", repositoryId: null };
   if (pathname.startsWith("/settings/health") || pathname.startsWith("/health"))
     return { eyebrow: "Settings", title: "Health", repositoryId: null };
+  if (pathname.startsWith("/settings/security"))
+    return { eyebrow: "Settings", title: "Security", repositoryId: null };
   if (pathname.startsWith("/settings"))
     return { eyebrow: "Settings", title: "Settings", repositoryId: null };
   if (pathname === "/")

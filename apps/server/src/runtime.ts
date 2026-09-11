@@ -62,6 +62,7 @@ import type { RepositoryWorktreeSettings } from "@loongboard/contracts";
 import { AgentArchiveExporter } from "./agent-archive.js";
 import { GitRepositoryLock } from "./git-repository-lock.js";
 import { WorktreeMaintenanceService } from "./worktree-maintenance.js";
+import { AuthService } from "./auth.js";
 
 export interface CreateServerRuntimeOptions {
   /** Use a prevalidated config in tests or an embedding process. */
@@ -92,6 +93,7 @@ export interface ServerRuntime {
   readonly scheduler: SchedulerEngine;
   readonly domainFiles: DomainFileService;
   readonly settings: SettingsController;
+  readonly auth: AuthService;
 }
 
 /** Resolve the one SQLite path owned by the Server runtime. */
@@ -135,6 +137,11 @@ export function createServerRuntime(
     const credential = new GitHubCredentialService({
       filePath: join(config.runtime.statePath, "github-credential.json"),
       environment: options.environment ?? process.env,
+    });
+    const auth = new AuthService({
+      statePath: config.runtime.statePath,
+      environment: options.environment ?? process.env,
+      now: options.now,
     });
     const provider =
       options.provider ??
@@ -806,6 +813,7 @@ export function createServerRuntime(
         },
         domainFiles,
         settings,
+        auth,
       },
       options.appOptions,
     );
@@ -837,6 +845,7 @@ export function createServerRuntime(
       scheduler,
       domainFiles,
       settings,
+      auth,
     };
   } catch (error) {
     database.close();

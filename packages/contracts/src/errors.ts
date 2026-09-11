@@ -25,6 +25,9 @@ export const apiErrorCodeSchema = z.enum([
   "HISTORY_PAUSED",
   "SYNC_RUN_NOT_FOUND",
   "SYNC_FAILED",
+  "AUTH_REQUIRED",
+  "AUTH_INVALID_PASSWORD",
+  "AUTH_RATE_LIMITED",
   "INTERNAL_ERROR",
 ]);
 

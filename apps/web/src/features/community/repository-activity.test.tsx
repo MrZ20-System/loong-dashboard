@@ -28,6 +28,7 @@ function mockActivity() {
   const today = new Date().toISOString().slice(0, 10);
   const fetchMock = vi.fn<typeof fetch>(async (input) => {
     const url = new URL(String(input), "http://localhost");
+    if (url.pathname === "/api/auth/status") return json({ enabled: false, unlocked: true });
     if (url.pathname === "/api/repositories")
       return json({ items: [repository] });
     if (url.pathname.endsWith("/pulls/activity-days")) {

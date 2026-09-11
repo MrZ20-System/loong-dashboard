@@ -18,6 +18,7 @@ import { DomainsSettingsPage } from "../features/settings/DomainsSettingsPage";
 import { SettingsShell } from "../features/settings/SettingsShell";
 import { AgentSettings, IntegrationsSettings, RepositoriesSettings, SettingsControlCenter, KnowledgeCheckpointSettingsPage, CodeBackupSettingsPage } from "../features/settings/SettingsControlCenter";
 import { HealthPage } from "../features/system/HealthPage";
+import { SecuritySettings } from "../features/settings/SecuritySettings";
 import { AppSidebar } from "./AppSidebar";
 import { ContextHeader } from "./ContextHeader";
 import { NotFoundPage } from "./NotFoundPage";
@@ -83,6 +84,7 @@ export function AppShell() {
               <Route path="/settings/agent" element={<SettingsShell><AgentSettings /></SettingsShell>} />
               <Route path="/settings/checkpoint" element={<SettingsShell><KnowledgeCheckpointSettingsPage /></SettingsShell>} />
               <Route path="/settings/code-backup" element={<SettingsShell><CodeBackupSettingsPage /></SettingsShell>} />
+              <Route path="/settings/security" element={<SettingsShell><SecuritySettings /></SettingsShell>} />
               <Route
                 path="/settings/domains"
                 element={

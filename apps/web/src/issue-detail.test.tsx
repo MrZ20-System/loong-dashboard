@@ -49,6 +49,7 @@ function json(value: unknown): Response {
 function renderIssueDetail(): void {
   const fetchMock = vi.fn<typeof fetch>(async (input) => {
     const url = new URL(String(input), "http://localhost");
+    if (url.pathname === "/api/auth/status") return json({ enabled: false, unlocked: true });
     expect(url.pathname).toBe("/api/repositories/repo/issues/7");
     return json(issue);
   });

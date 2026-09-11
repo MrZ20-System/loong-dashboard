@@ -66,6 +66,7 @@ function mockApi(options: { pulls?: unknown[]; issues?: unknown[]; pullPages?: u
   const pullPages = options.pullPages ?? [pulls];
   const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
     const url = new URL(String(input), "http://localhost");
+    if (url.pathname === "/api/auth/status") return json({ enabled: false, unlocked: true });
     if (url.pathname === "/api/repositories") return json({ items: options.repositories ?? [repository] });
     if (/^\/api\/repositories\/[^/]+\/settings$/.test(url.pathname) && (init?.method ?? "GET") === "GET") {
       const repositoryId = url.pathname.split("/")[3] ?? "repo";
@@ -601,7 +602,7 @@ describe("LoongBoard app shell", () => {
   it("marks direct Settings active and closes the mobile drawer", async () => {
     mockApi();
     renderApp("/");
-    fireEvent.click(screen.getByRole("button", { name: "Open navigation" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Open navigation" }));
     fireEvent.click(appSidebar().getByRole("link", { name: "Settings" }));
     expect(
       await screen.findByRole("heading", { name: "LoongBoard settings" }),
@@ -662,7 +663,11 @@ describe("LoongBoard app shell", () => {
   it("switches the shell theme from the default light tokens", async () => {
     mockApi();
     renderApp("/");
-    const shell = document.querySelector(".app-shell");
+    const shell = await waitFor(() => {
+      const element = document.querySelector(".app-shell");
+      if (element === null) throw new Error("App shell is not mounted");
+      return element;
+    });
     expect(shell).toHaveAttribute("data-theme", "light");
     fireEvent.click(screen.getByRole("button", { name: "Dark" }));
     expect(shell).toHaveAttribute("data-theme", "dark");

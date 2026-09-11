@@ -137,6 +137,7 @@ function mockApi(options: { prepare?: Promise<unknown> } = {}) {
   const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
     const url = new URL(String(input), "http://localhost");
     calls.push(url.pathname + url.search);
+    if (url.pathname === "/api/auth/status") return json({ enabled: false, unlocked: true });
     if (url.pathname === "/api/repositories") return json({ items: [] });
     if (url.pathname.endsWith("/prepare")) {
       if (options.prepare !== undefined) await options.prepare;

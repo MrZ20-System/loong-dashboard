@@ -24,6 +24,7 @@ function json(value: unknown, status = 200) {
 function mockApi(options: { pulls?: unknown[]; domains?: unknown[]; reclassification?: { running: boolean; pendingCount: number | null } } = {}) {
   const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
     const url = new URL(String(input), "http://localhost");
+    if (url.pathname === "/api/auth/status") return json({ enabled: false, unlocked: true });
     if (url.pathname === "/api/repositories") return json({ items: [repository] });
     if (url.pathname.endsWith("/domains")) {
       if (init?.method === "POST") {
