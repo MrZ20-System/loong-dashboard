@@ -1,7 +1,7 @@
 # LoongBoard Pre-Freeze Refactor Progress
 
 - Baseline SHA: `57d1cedafab9a1510d6616619cc33859f56d125d`
-- Current phase: Phase 1 — schema canonicalization
+- Current phase: Phase 2 — settings canonicalization
 
 ## Frozen product semantics
 
@@ -24,19 +24,27 @@
 
 - Phase 0: added explicit canonical tests for PR ordering/archive/Merged projection, Issue reopen/payload-marker independence, forward/history/fetch state isolation, manual Agent title ownership, and Git backup push behavior.
 - Confirmed existing scheduler persistence tests cover a fresh Agent Session per occurrence, no task session reuse, and no Agent workspace claim for system tasks.
+- Phase 1: rebuilt Scheduler task/run, Agent session, and Worktree slot persistence into one canonical schema; removed runtime/API compatibility projections and legacy metadata cursor/date/sync paths.
+- Phase 1 review fixes: each scheduled run exposes its own Agent link; repository-scoped system actions require a valid repository; orphan legacy run pointers safely become NULL; system task Agent-only fields are NULL.
 
 ## Pending changes
 
-- Phase 1: add migration 014 and remove schema/runtime compatibility paths identified by the audit.
-- Phases 2–13: execute the supplied canonicalization plan in dependency order.
+- Phase 2: migrate settings documents to strict V2 and make settings policy the only policy authority.
+- Phases 3–13: execute the supplied canonicalization plan in dependency order.
 
 ## Migrations added
 
-- None.
+- `014_phase1_schema_canonicalization`: removes Scheduler conversation pointers, canonicalizes actions, makes `origin_kind` the Agent discriminator, removes Worktree busy ownership residue, and preserves valid child references.
 
 ## Legacy items removed
 
-- None.
+- `scheduled_tasks.conversation_id` and `setScheduledTaskConversation`.
+- `scheduled_task_runs.conversation_id`; runs expose only `agentSessionId`.
+- Runtime system-action normalization and hyphenated action aliases.
+- `agent_sessions.scope_type` runtime/schema use and `scopeType` list query.
+- `worktree_slots.busy_session_id` runtime/schema use.
+- Generic list cursor sort variants and legacy metadata `date` query.
+- Test-only `startRepositorySync`; production Coordinator transitions are now the only path.
 
 ## Tests run
 
@@ -45,6 +53,11 @@
 - Phase 0 Server sync/scheduler/title: 3 files, 24 tests passed.
 - Database, Git workspace, Server, Agent Runtime typechecks passed in delegated targeted runs.
 - `git diff --check` passed.
+- Phase 1 Contracts cursor/scheduler: 2 files, 7 tests passed.
+- Phase 1 Database migration/scheduler/agent/worktree/metadata: 5 files, 46 tests passed.
+- Phase 1 Server scheduler/settings/sync/title: 5 files, 32 tests passed.
+- Phase 1 Web schedules/metadata/App: 4 files, 40 tests passed.
+- Contracts, Database, Server, and Web typechecks passed; `git diff --check` passed.
 
 ## Known failures
 

@@ -133,71 +133,52 @@ export const activityDaysResponseSchema = z
   })
   .strict();
 
-/** Normalize the former single-day query into the public range shape. */
-function normalizeLegacyDateQuery(value: unknown): unknown {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return value;
-  }
-  const query = { ...(value as Record<string, unknown>) };
-  const legacyDate = query.date;
-  delete query.date;
-  if (query.from === undefined && legacyDate !== undefined) query.from = legacyDate;
-  if (query.to === undefined && legacyDate !== undefined) query.to = legacyDate;
-  return query;
-}
-
 const validDateRange = ({ from, to }: { from?: string; to?: string }) =>
   from === undefined || to === undefined || from <= to;
 
-export const pullRequestsQuerySchema = z.preprocess(
-  normalizeLegacyDateQuery,
-  z
-    .object({
-      from: calendarDateSchema.optional(),
-      to: calendarDateSchema.optional(),
-      status: pullRequestStatusSchema.optional(),
-      sort: pullRequestListSortSchema.optional(),
-      search: listSearchSchema,
-      page: pageQuerySchema,
-      limit: pageSizeQuerySchema,
-      // Fastify surfaces a repeated query key as an array; a single value is
-      // normalized so `?domain=a` and `?domain=a&domain=b` share one code path.
-      // Semantics: a pull request matches when it carries ANY selected domain.
-      domain: z.preprocess(
-        (value) =>
-          value === undefined ? undefined : typeof value === "string" ? [value] : value,
-        z.array(domainRuleIdSchema).max(20).optional(),
-      ),
-      archive: archiveFilterSchema.optional(),
-    })
-    .strict()
-    .refine(validDateRange, {
-      message: "from must be on or before to",
-      path: ["to"],
-    }),
-);
+export const pullRequestsQuerySchema = z
+  .object({
+    from: calendarDateSchema.optional(),
+    to: calendarDateSchema.optional(),
+    status: pullRequestStatusSchema.optional(),
+    sort: pullRequestListSortSchema.optional(),
+    search: listSearchSchema,
+    page: pageQuerySchema,
+    limit: pageSizeQuerySchema,
+    // Fastify surfaces a repeated query key as an array; a single value is
+    // normalized so `?domain=a` and `?domain=a&domain=b` share one code path.
+    // Semantics: a pull request matches when it carries ANY selected domain.
+    domain: z.preprocess(
+      (value) =>
+        value === undefined ? undefined : typeof value === "string" ? [value] : value,
+      z.array(domainRuleIdSchema).max(20).optional(),
+    ),
+    archive: archiveFilterSchema.optional(),
+  })
+  .strict()
+  .refine(validDateRange, {
+    message: "from must be on or before to",
+    path: ["to"],
+  });
 
-export const issuesQuerySchema = z.preprocess(
-  normalizeLegacyDateQuery,
-  z
-    .object({
-      from: calendarDateSchema.optional(),
-      to: calendarDateSchema.optional(),
-      status: issueStatusSchema.optional(),
-      search: listSearchSchema,
-      limit: z.preprocess(
-        (value) => (value === undefined ? undefined : Number(value)),
-        z.number().int().positive().max(100).optional(),
-      ),
-      cursor: opaqueCursorSchema.optional(),
-      archive: archiveFilterSchema.optional(),
-    })
-    .strict()
-    .refine(validDateRange, {
-      message: "from must be on or before to",
-      path: ["to"],
-    }),
-);
+export const issuesQuerySchema = z
+  .object({
+    from: calendarDateSchema.optional(),
+    to: calendarDateSchema.optional(),
+    status: issueStatusSchema.optional(),
+    search: listSearchSchema,
+    limit: z.preprocess(
+      (value) => (value === undefined ? undefined : Number(value)),
+      z.number().int().positive().max(100).optional(),
+    ),
+    cursor: opaqueCursorSchema.optional(),
+    archive: archiveFilterSchema.optional(),
+  })
+  .strict()
+  .refine(validDateRange, {
+    message: "from must be on or before to",
+    path: ["to"],
+  });
 
 /** Full stored PR row used by the detail page (plan 17.2, 18.2). */
 export const pullRequestDetailSchema = pullRequestListItemSchema.extend({

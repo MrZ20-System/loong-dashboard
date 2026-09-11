@@ -10,7 +10,6 @@ import {
   createScheduledTask,
   deleteAgentSession,
   findAgentSession,
-  getScheduledTask,
   listAgentMessages,
   listScheduledTaskRuns,
   openDatabase,
@@ -101,8 +100,8 @@ function createFixture(): {
   return { database, directory, task };
 }
 
-describe("SchedulerEngine conversation lifecycle", () => {
-  it("creates a new conversation for every run and keeps run history addressable", async () => {
+describe("SchedulerEngine session lifecycle", () => {
+  it("creates a new Agent session for every run and keeps run history addressable", async () => {
     const { database, directory, task } = createFixture();
     const engine = new SchedulerEngine({
       database,
@@ -113,22 +112,20 @@ describe("SchedulerEngine conversation lifecycle", () => {
 
     await engine.runNow(task.id);
     expect((await waitForTerminalRun(database, task.id)).status).toBe("completed");
-    const firstTask = getScheduledTask(database, task.id);
-    expect(firstTask?.conversationId).toBeTruthy();
-    const firstConversation = firstTask?.conversationId as string;
     const firstRun = listScheduledTaskRuns(database, task.id)[0];
+    const firstConversation = firstRun?.agentSessionId as string;
+    expect(firstConversation).toBeTruthy();
     expect(listAgentMessages(database, firstConversation)).toHaveLength(1);
 
     await engine.runNow(task.id);
     expect((await waitForTerminalRun(database, task.id)).status).toBe("completed");
     const runs = listScheduledTaskRuns(database, task.id);
     const secondRun = runs.find((run) => run.id !== firstRun?.id);
-    const secondConversation = secondRun?.conversationId;
+    const secondConversation = secondRun?.agentSessionId;
     expect(secondConversation).toBeTruthy();
     expect(secondConversation).not.toBe(firstConversation);
     expect(listAgentMessages(database, firstConversation)).toHaveLength(1);
     expect(listAgentMessages(database, secondConversation as string)).toHaveLength(1);
-    expect(getScheduledTask(database, task.id)?.conversationId).toBe(secondConversation);
 
     deleteAgentSession(database, firstConversation);
     await engine.runNow(task.id);
@@ -136,10 +133,10 @@ describe("SchedulerEngine conversation lifecycle", () => {
     const thirdRun = listScheduledTaskRuns(database, task.id).find(
       (run) => run.id !== firstRun?.id && run.id !== secondRun?.id,
     );
-    expect(thirdRun?.conversationId).toBeTruthy();
-    expect(thirdRun?.conversationId).not.toBe(firstConversation);
-    expect(thirdRun?.conversationId).not.toBe(secondConversation);
-    expect(listAgentMessages(database, thirdRun?.conversationId as string)).toHaveLength(1);
+    expect(thirdRun?.agentSessionId).toBeTruthy();
+    expect(thirdRun?.agentSessionId).not.toBe(firstConversation);
+    expect(thirdRun?.agentSessionId).not.toBe(secondConversation);
+    expect(listAgentMessages(database, thirdRun?.agentSessionId as string)).toHaveLength(1);
     expect(listScheduledTaskRuns(database, task.id)).toHaveLength(3);
 
     await engine.close();
@@ -157,17 +154,17 @@ describe("SchedulerEngine conversation lifecycle", () => {
     await engine.runNow(task.id);
     await waitForTerminalRun(database, task.id);
     const firstRun = listScheduledTaskRuns(database, task.id)[0];
-    const firstConversation = firstRun?.conversationId as string;
+    const firstConversation = firstRun?.agentSessionId as string;
     updateAgentSession(database, firstConversation, { model: "manually-selected" });
     updateScheduledTask(database, task.id, { model: "future-scheduled-model" });
 
     await engine.runNow(task.id);
     await waitForTerminalRun(database, task.id);
     const runs = listScheduledTaskRuns(database, task.id);
-    const secondRun = runs.find((run) => run.conversationId !== firstConversation);
-    expect(secondRun?.conversationId).not.toBe(firstConversation);
+    const secondRun = runs.find((run) => run.agentSessionId !== firstConversation);
+    expect(secondRun?.agentSessionId).not.toBe(firstConversation);
     expect(requireAgentSession(database, firstConversation).model).toBe("manually-selected");
-    expect(requireAgentSession(database, secondRun?.conversationId as string).model).toBe(
+    expect(requireAgentSession(database, secondRun?.agentSessionId as string).model).toBe(
       "future-scheduled-model",
     );
     await engine.close();
@@ -204,11 +201,10 @@ describe("SchedulerEngine conversation lifecycle", () => {
       },
     });
 
-    const release = workspaceRuns.acquire(task.workspacePath);
+    const release = workspaceRuns.acquire(join(directory, "workspace"));
     await engine.runNow(task.id);
     expect((await waitForTerminalRun(database, task.id)).status).toBe("completed");
     expect(calls).toBe(1);
-    expect(getScheduledTask(database, task.id)?.conversationId).toBeNull();
     release?.();
     await engine.close();
   });

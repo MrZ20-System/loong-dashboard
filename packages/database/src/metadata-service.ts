@@ -1,7 +1,7 @@
 import {
-  decodeListCursor,
-  encodeListCursor,
-  type ListCursorPayload,
+  decodeUpdatedCursor,
+  encodeUpdatedCursor,
+  type UpdatedCursor,
 } from "@loongboard/contracts";
 import { listDomainTagsForPullRequests } from "./classification-service.js";
 import { requireRepository } from "./repository-service.js";
@@ -33,11 +33,6 @@ import {
 } from "./types.js";
 
 const DEFAULT_PAGE_SIZE = 100;
-
-type ListDateRangeOptions = {
-  from?: string | null;
-  to?: string | null;
-};
 
 export class InvalidCursorError extends Error {
   readonly code = "INVALID_CURSOR" as const;
@@ -351,10 +346,10 @@ function pageOffset(page: number, limit: number): number {
   return zeroBasedPage * limit;
 }
 
-function cursorValues(value: string | null | undefined): ListCursorPayload | null {
+function cursorValues(value: string | null | undefined): UpdatedCursor | null {
   if (!value) return null;
   try {
-    return decodeListCursor(value);
+    return decodeUpdatedCursor(value);
   } catch {
     throw new InvalidCursorError();
   }
@@ -408,12 +403,9 @@ function datePredicate(
 function updatedCursorPredicate(
   clauses: string[],
   parameters: unknown[],
-  cursor: ListCursorPayload | null,
+  cursor: UpdatedCursor | null,
 ): void {
   if (!cursor) return;
-  if (cursor.sort !== "updated" || cursor.updatedAt === undefined) {
-    throw new InvalidCursorError();
-  }
   clauses.push("(updated_at < ? OR (updated_at = ? AND number < ?))");
   parameters.push(cursor.updatedAt, cursor.updatedAt, cursor.number);
 }
@@ -495,7 +487,7 @@ function appendArchiveFilter(
 export function listPullRequests(
   database: DatabaseClient,
   repositoryId: string,
-  options: PullRequestListOptions & ListDateRangeOptions,
+  options: PullRequestListOptions,
 ): PageList<PullRequestListItem> {
   requireRepository(database, repositoryId);
   const calendarTimeZone = resolveTimeZone(options);
@@ -508,8 +500,8 @@ export function listPullRequests(
   datePredicate(
     clauses,
     parameters,
-    options.from ?? options.date,
-    options.to ?? options.date,
+    options.from,
+    options.to,
     calendarTimeZone,
   );
   if (options.status) {
@@ -705,7 +697,7 @@ export function getPullRequestDetail(
 export function listIssues(
   database: DatabaseClient,
   repositoryId: string,
-  options: IssueListOptions & ListDateRangeOptions,
+  options: IssueListOptions,
 ): ListPage<IssueListItem> {
   requireRepository(database, repositoryId);
   const calendarTimeZone = resolveTimeZone(options);
@@ -717,8 +709,8 @@ export function listIssues(
   datePredicate(
     clauses,
     parameters,
-    options.from ?? options.date,
-    options.to ?? options.date,
+    options.from,
+    options.to,
     calendarTimeZone,
   );
   if (options.status) {
@@ -753,7 +745,7 @@ export function listIssues(
     items,
     nextCursor:
       hasMore && last
-        ? encodeListCursor({ sort: "updated", updatedAt: last.updatedAt, number: last.number })
+        ? encodeUpdatedCursor({ updatedAt: last.updatedAt, number: last.number })
         : null,
     calendarTimeZone,
   };

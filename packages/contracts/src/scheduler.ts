@@ -2,31 +2,52 @@ import { z } from "zod";
 
 import { utcDateTimeSchema } from "./validation.js";
 
-/** Scheduled agent task contracts (plan 16, 17.7). */
+/** Scheduled Agent and system task contracts. */
 
 const reasoningEffortSchema = z.string().trim().min(1);
 
-/** A schedule may send a prompt to an Agent conversation or invoke a system action. */
 export const scheduledTaskKindSchema = z.enum(["agent", "system"]);
 
-/** System actions are intentionally opaque to the cron package and interpreted by Server. */
-export const scheduledSystemActionSchema = z.string().trim().min(1).optional();
+/** Only the persisted dotted action namespace is accepted at the HTTP boundary. */
+export const scheduledSystemActionSchema = z.enum([
+  "repository.sync",
+  "repository.metadata-maintenance",
+  "repository.worktrees.cleanup",
+  "git.checkpoint",
+  "git.push",
+  "knowledge.checkpoint",
+  "knowledge.push",
+  "agent.archive.checkpoint",
+  "agent.archive.push",
+]);
 
+const repositoryScopedScheduledActions = new Set([
+  "repository.sync",
+  "repository.metadata-maintenance",
+  "repository.worktrees.cleanup",
+]);
+
+export function scheduledActionRequiresRepository(
+  action: string | null | undefined,
+): boolean {
+  return action !== null && action !== undefined && repositoryScopedScheduledActions.has(action);
+}
+
+/** Agent-only fields are explicit NULLs on system task responses. */
 export const scheduledTaskSchema = z
   .object({
     id: z.string().min(1),
     name: z.string().min(1),
     cronExpression: z.string().min(1),
     timezone: z.string().min(1),
-    prompt: z.string(),
-    workspacePath: z.string().min(1),
-    provider: z.string().min(1),
-    model: z.string().min(1),
-    reasoningEffort: reasoningEffortSchema,
-    kind: scheduledTaskKindSchema.optional(),
-    action: z.string().trim().min(1).nullable().optional(),
-    repositoryId: z.string().trim().min(1).nullable().optional(),
-    conversationId: z.string().trim().min(1).nullable().optional(),
+    prompt: z.string().nullable(),
+    workspacePath: z.string().min(1).nullable(),
+    provider: z.string().min(1).nullable(),
+    model: z.string().min(1).nullable(),
+    reasoningEffort: reasoningEffortSchema.nullable(),
+    kind: scheduledTaskKindSchema,
+    action: scheduledSystemActionSchema.nullable(),
+    repositoryId: z.string().trim().min(1).nullable(),
     enabled: z.boolean(),
     lastRunAt: utcDateTimeSchema.nullable(),
     nextRunAt: utcDateTimeSchema.nullable(),
@@ -52,9 +73,8 @@ const scheduledTaskCreateBodySchema = z
     model: z.string().trim().min(1).optional(),
     reasoningEffort: reasoningEffortSchema.optional(),
     kind: scheduledTaskKindSchema.optional(),
-    action: scheduledSystemActionSchema,
+    action: scheduledSystemActionSchema.optional(),
     repositoryId: z.string().trim().min(1).optional(),
-    conversationId: z.string().trim().min(1).nullable().optional(),
     enabled: z.boolean().optional(),
   })
   .strict();
@@ -69,7 +89,30 @@ export const scheduledTaskCreateSchema = scheduledTaskCreateBodySchema.superRefi
           message: "System tasks require an action",
         });
       }
+      for (const field of ["prompt", "workspacePath", "provider", "model", "reasoningEffort"] as const) {
+        if (value[field] !== undefined) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [field],
+            message: "System tasks cannot define Agent-only fields",
+          });
+        }
+      }
+      if (scheduledActionRequiresRepository(value.action) && value.repositoryId === undefined) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["repositoryId"],
+          message: "This system action requires a repositoryId",
+        });
+      }
       return;
+    }
+    if (value.action !== undefined) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["action"],
+        message: "Agent tasks cannot define a system action",
+      });
     }
     if (value.prompt === undefined || value.prompt.length === 0) {
       context.addIssue({
@@ -108,7 +151,6 @@ export const scheduledRunSchema = z
     finishedAt: utcDateTimeSchema.nullable(),
     status: z.enum(["running", "completed", "failed", "skipped"]),
     agentSessionId: z.string().nullable(),
-    conversationId: z.string().nullable().optional(),
     error: z.string().nullable(),
   })
   .strict();

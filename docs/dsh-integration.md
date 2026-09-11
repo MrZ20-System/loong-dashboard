@@ -18,7 +18,7 @@
 
 origin 是创建来源，workspace 是执行绑定。全局 Agent、业务面板和 Dock 通过相同产品 session ID 打开会话。每个会话拥有独立 `runtime.statePath/agent-sessions/<id>/dsh-home`。DSH 保存原生 transcript，LoongBoard 保存 opaque runtime ID、项目索引及 normalized 消息兼容缓存，不读取或重建 DSH 内部日志。
 
-会话标题有明确的 ownership：新会话先使用 `provisional` 标题；首轮成功且 runtime 暴露原生 title 时，LoongBoard 通过 DSH 原生 session/title 能力读取并最多一次投影为 `generated`。用户 inline rename 后变为 `manual`，后续 native title 不得覆盖；title discovery 失败是非阻塞的 metadata 失败，不改变 turn 状态、不写入 prompt/transcript，也不把 prompt 文本拼成标题。Scheduled Task 每次 occurrence 创建独立 general conversation，使用该 run 的 provisional title，不复用上一 run 的标题或 transcript。升级前已有 title 会按 `manual` 处理。
+会话标题有明确的 ownership：新会话先使用 `provisional` 标题；首轮成功且 runtime 暴露原生 title 时，LoongBoard 通过 DSH 原生 session/title 能力读取并最多一次投影为 `generated`。用户 inline rename 后变为 `manual`，后续 native title 不得覆盖；title discovery 失败是非阻塞的 metadata 失败，不改变 turn 状态、不写入 prompt/transcript，也不把 prompt 文本拼成标题。Scheduled Task 每次 occurrence 创建独立 general Agent session，使用该 run 的 provisional title，不复用上一 run 的标题或 transcript。升级前已有 title 会按 `manual` 处理。
 
 原生 Host 仅监听 loopback。启动 token 和认证 cookie 留在 adapter，浏览器只访问 LoongBoard API。GitHub token 不注入 DSH 子进程。Settings 保存的 provider secret 通过 DSH 的动态 provider settings 和 credentials 服务配置到对应独立 home；provider 与凭证引用由 DSH 发现，产品不维护静态环境变量映射。生产运行使用受控的 `env`、`startupTimeoutMs` 和测试/嵌入用 `transportFactory` 参数；adapter 负责回收原生 Host 进程及其 stream，不把 provider secret 复制到进程环境。
 

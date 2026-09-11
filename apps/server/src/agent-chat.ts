@@ -342,7 +342,6 @@ export class AgentChatController {
   /** Sessions matching an optional scope filter, newest activity first. */
   listSessions(query: AgentSessionsQuery): AgentSessionSummary[] {
     return listAgentSessions(this.dependencies.database, {
-      scopeType: query.scopeType,
       originKind: query.originKind,
       repositoryId: query.repositoryId,
       prNumber: query.prNumber,

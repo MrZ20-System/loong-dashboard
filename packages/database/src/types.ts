@@ -236,7 +236,8 @@ export interface IssueDetailCacheInput {
 export interface ListQueryOptions {
   /** IANA zone used for date filtering and returned by HTTP. */
   calendarTimeZone: string;
-  date?: string | null;
+  from?: string | null;
+  to?: string | null;
   limit?: number;
 }
 

@@ -59,7 +59,6 @@ export type TaskDraft = {
   kind?: "agent" | "system";
   action?: string;
   repositoryId?: string;
-  conversationId?: string | null;
 };
 
 export function fetchScheduledTasks(fetchImpl: ScheduleFetch = globalThis.fetch): Promise<ScheduledTasksResponse> {

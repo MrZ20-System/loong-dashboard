@@ -63,12 +63,10 @@ export function RepositoryActivityPage() {
   const to = selectedRange.to ?? defaultRange.to;
   useEffect(() => {
     if (
-      searchParams.get("date") !== null ||
       searchParams.get("from") !== from ||
       searchParams.get("to") !== to
     ) {
       const next = new URLSearchParams(searchParams);
-      next.delete("date");
       next.set("from", from);
       next.set("to", to);
       setSearchParams(next, { replace: true });
@@ -105,7 +103,6 @@ export function RepositoryActivityPage() {
 
   const selectRange = ({ from: nextFrom, to: nextTo }: DateRangeValue) => {
     const next = new URLSearchParams(searchParams);
-    next.delete("date");
     if (nextFrom) next.set("from", nextFrom);
     else next.delete("from");
     if (nextTo) next.set("to", nextTo);

@@ -11,20 +11,20 @@ export class ScheduledTaskNotFoundError extends Error {
   }
 }
 
+/** A persisted task. Agent-only fields are NULL for system tasks. */
 export interface ScheduledTaskRow {
   id: string;
   name: string;
   cronExpression: string;
   timezone: string;
-  prompt: string;
-  workspacePath: string;
-  provider: string;
-  model: string;
-  reasoningEffort: string;
+  prompt: string | null;
+  workspacePath: string | null;
+  provider: string | null;
+  model: string | null;
+  reasoningEffort: string | null;
   kind: "agent" | "system";
   action: string | null;
   repositoryId: string | null;
-  conversationId: string | null;
   enabled: boolean;
   lastRunAt: string | null;
   nextRunAt: string | null;
@@ -38,15 +38,14 @@ export interface ScheduledTaskCreateInput {
   name: string;
   cronExpression: string;
   timezone: string;
-  prompt: string;
-  workspacePath: string;
-  provider: string;
-  model: string;
-  reasoningEffort: string;
+  prompt?: string | null;
+  workspacePath?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  reasoningEffort?: string | null;
   kind?: "agent" | "system";
   action?: string | null;
   repositoryId?: string | null;
-  conversationId?: string | null;
   enabled?: boolean;
   nextRunAt?: string | null;
 }
@@ -60,15 +59,14 @@ interface TaskRowSql {
   name: string;
   cron_expression: string;
   timezone: string;
-  prompt: string;
-  workspace_path: string;
-  provider: string;
-  model: string;
-  reasoning_effort: string;
+  prompt: string | null;
+  workspace_path: string | null;
+  provider: string | null;
+  model: string | null;
+  reasoning_effort: string | null;
   kind: "agent" | "system";
   action: string | null;
   repository_id: string | null;
-  conversation_id: string | null;
   enabled: number;
   last_run_at: string | null;
   next_run_at: string | null;
@@ -76,15 +74,39 @@ interface TaskRowSql {
   updated_at: string;
 }
 
+interface AgentTaskFields {
+  prompt: string | null;
+  workspacePath: string | null;
+  provider: string | null;
+  model: string | null;
+  reasoningEffort: string | null;
+}
+
 /**
- * The server-owned system actions use dotted names. Keep old rows readable
- * after the action namespace migration so a restart cannot strand an enabled
- * task with the retired hyphenated spelling.
+ * Keep the DB representation canonical at the service boundary. System tasks
+ * do not carry placeholder Agent configuration, and Agent tasks fail fast when
+ * one of their required fields is missing.
  */
-function normalizeSystemAction(action: string | null): string | null {
-  if (action === "repository-sync") return "repository.sync";
-  if (action === "knowledge-checkpoint") return "knowledge.checkpoint";
-  return action;
+function normalizeAgentFields(
+  kind: "agent" | "system",
+  fields: AgentTaskFields,
+): AgentTaskFields {
+  if (kind === "system") {
+    return {
+      prompt: null,
+      workspacePath: null,
+      provider: null,
+      model: null,
+      reasoningEffort: null,
+    };
+  }
+  const missing = Object.entries(fields)
+    .filter(([, value]) => value === null || value === undefined || value === "")
+    .map(([name]) => name);
+  if (missing.length > 0) {
+    throw new Error(`Agent scheduled task is missing required fields: ${missing.join(", ")}`);
+  }
+  return fields;
 }
 
 function mapTask(row: TaskRowSql): ScheduledTaskRow {
@@ -93,15 +115,14 @@ function mapTask(row: TaskRowSql): ScheduledTaskRow {
     name: row.name,
     cronExpression: row.cron_expression,
     timezone: row.timezone,
-    prompt: row.prompt,
-    workspacePath: row.workspace_path,
-    provider: row.provider,
-    model: row.model,
-    reasoningEffort: row.reasoning_effort,
-    kind: row.kind ?? "agent",
-    action: normalizeSystemAction(row.action ?? null),
+    prompt: row.prompt ?? null,
+    workspacePath: row.workspace_path ?? null,
+    provider: row.provider ?? null,
+    model: row.model ?? null,
+    reasoningEffort: row.reasoning_effort ?? null,
+    kind: row.kind,
+    action: row.action ?? null,
     repositoryId: row.repository_id ?? null,
-    conversationId: row.conversation_id ?? null,
     enabled: row.enabled === 1,
     lastRunAt: row.last_run_at,
     nextRunAt: row.next_run_at,
@@ -115,8 +136,7 @@ function taskById(database: DatabaseClient, taskId: string): TaskRowSql | null {
     .prepare(
       `SELECT id, name, cron_expression, timezone, prompt, workspace_path,
               provider, model, reasoning_effort, kind, action, repository_id,
-              conversation_id, enabled, last_run_at, next_run_at, created_at,
-              updated_at
+              enabled, last_run_at, next_run_at, created_at, updated_at
        FROM scheduled_tasks WHERE id = ?`,
     )
     .get(taskId) as TaskRowSql | undefined;
@@ -128,8 +148,7 @@ export function listScheduledTasks(database: DatabaseClient): ScheduledTaskRow[]
     .prepare(
       `SELECT id, name, cron_expression, timezone, prompt, workspace_path,
               provider, model, reasoning_effort, kind, action, repository_id,
-              conversation_id, enabled, last_run_at, next_run_at, created_at,
-              updated_at
+              enabled, last_run_at, next_run_at, created_at, updated_at
        FROM scheduled_tasks ORDER BY created_at ASC`,
     )
     .all() as TaskRowSql[];
@@ -159,28 +178,35 @@ export function createScheduledTask(
   now: string = new Date().toISOString(),
 ): ScheduledTaskRow {
   const id = input.id ?? `task_${randomBytes(10).toString("hex")}`;
+  const kind = input.kind ?? "agent";
+  const agentFields = normalizeAgentFields(kind, {
+    prompt: input.prompt ?? null,
+    workspacePath: input.workspacePath ?? null,
+    provider: input.provider ?? null,
+    model: input.model ?? null,
+    reasoningEffort: input.reasoningEffort ?? null,
+  });
   database
     .prepare(
       `INSERT INTO scheduled_tasks (
         id, name, cron_expression, timezone, prompt, workspace_path,
         provider, model, reasoning_effort, kind, action, repository_id,
-        conversation_id, enabled, last_run_at, next_run_at, created_at, updated_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
+        enabled, last_run_at, next_run_at, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`,
     )
     .run(
       id,
       input.name,
       input.cronExpression,
       input.timezone,
-      input.prompt,
-      input.workspacePath,
-      input.provider,
-      input.model,
-      input.reasoningEffort,
-      input.kind ?? "agent",
-      input.action ?? null,
+      agentFields.prompt,
+      agentFields.workspacePath,
+      agentFields.provider,
+      agentFields.model,
+      agentFields.reasoningEffort,
+      kind,
+      kind === "system" ? input.action ?? null : null,
       input.repositoryId ?? null,
-      input.conversationId ?? null,
       input.enabled === false ? 0 : 1,
       input.nextRunAt ?? null,
       now,
@@ -198,6 +224,14 @@ export function updateScheduledTask(
   now: string = new Date().toISOString(),
 ): ScheduledTaskRow {
   const existing = requireScheduledTask(database, taskId);
+  const kind = patch.kind ?? existing.kind;
+  const agentFields = normalizeAgentFields(kind, {
+    prompt: patch.prompt !== undefined ? patch.prompt : existing.prompt,
+    workspacePath: patch.workspacePath !== undefined ? patch.workspacePath : existing.workspacePath,
+    provider: patch.provider !== undefined ? patch.provider : existing.provider,
+    model: patch.model !== undefined ? patch.model : existing.model,
+    reasoningEffort: patch.reasoningEffort !== undefined ? patch.reasoningEffort : existing.reasoningEffort,
+  });
   const sets: string[] = [];
   const parameters: unknown[] = [];
   const add = (column: string, value: unknown) => {
@@ -207,15 +241,14 @@ export function updateScheduledTask(
   if (patch.name !== undefined) add("name", patch.name);
   if (patch.cronExpression !== undefined) add("cron_expression", patch.cronExpression);
   if (patch.timezone !== undefined) add("timezone", patch.timezone);
-  if (patch.prompt !== undefined) add("prompt", patch.prompt);
-  if (patch.workspacePath !== undefined) add("workspace_path", patch.workspacePath);
-  if (patch.provider !== undefined) add("provider", patch.provider);
-  if (patch.model !== undefined) add("model", patch.model);
-  if (patch.reasoningEffort !== undefined) add("reasoning_effort", patch.reasoningEffort);
-  if (patch.kind !== undefined) add("kind", patch.kind);
-  if (patch.action !== undefined) add("action", patch.action);
+  add("prompt", agentFields.prompt);
+  add("workspace_path", agentFields.workspacePath);
+  add("provider", agentFields.provider);
+  add("model", agentFields.model);
+  add("reasoning_effort", agentFields.reasoningEffort);
+  add("kind", kind);
+  add("action", kind === "system" ? patch.action !== undefined ? patch.action : existing.action : null);
   if (patch.repositoryId !== undefined) add("repository_id", patch.repositoryId);
-  if (patch.conversationId !== undefined) add("conversation_id", patch.conversationId);
   if (patch.enabled !== undefined) add("enabled", patch.enabled ? 1 : 0);
   if (patch.nextRunAt !== undefined) add("next_run_at", patch.nextRunAt);
   if (patch.nextRunAt === undefined && patch.enabled === false) {
@@ -226,10 +259,7 @@ export function updateScheduledTask(
   parameters.push(now, taskId);
   database.prepare(`UPDATE scheduled_tasks SET ${sets.join(", ")} WHERE id = ?`).run(...parameters);
   const updated = getScheduledTask(database, taskId);
-  if (updated === null) {
-    // Should never happen: updateScheduledTask only runs against existing rows.
-    throw new ScheduledTaskNotFoundError(taskId);
-  }
+  if (updated === null) throw new ScheduledTaskNotFoundError(taskId);
   return updated;
 }
 
@@ -252,21 +282,6 @@ export function setTaskOccurrence(
   return requireScheduledTask(database, taskId);
 }
 
-/** Persist the conversation reused by future runs of one agent task. */
-export function setScheduledTaskConversation(
-  database: DatabaseClient,
-  taskId: string,
-  conversationId: string | null,
-  now: string = new Date().toISOString(),
-): ScheduledTaskRow {
-  database
-    .prepare(
-      "UPDATE scheduled_tasks SET conversation_id = ?, updated_at = ? WHERE id = ?",
-    )
-    .run(conversationId, now, taskId);
-  return requireScheduledTask(database, taskId);
-}
-
 export function deleteScheduledTask(database: DatabaseClient, taskId: string): void {
   const result = database.prepare("DELETE FROM scheduled_tasks WHERE id = ?").run(taskId);
   if (result.changes === 0) throw new ScheduledTaskNotFoundError(taskId);
@@ -280,7 +295,6 @@ export interface ScheduledRunRow {
   finishedAt: string | null;
   status: "running" | "completed" | "failed" | "skipped";
   agentSessionId: string | null;
-  conversationId: string | null;
   error: string | null;
 }
 
@@ -293,7 +307,6 @@ function mapRun(row: Record<string, unknown>): ScheduledRunRow {
     finishedAt: (row.finished_at as string | null) ?? null,
     status: row.status as ScheduledRunRow["status"],
     agentSessionId: (row.agent_session_id as string | null) ?? null,
-    conversationId: (row.conversation_id as string | null) ?? null,
     error: (row.error as string | null) ?? null,
   };
 }
@@ -310,10 +323,10 @@ export function insertScheduledRun(
     .prepare(
       `INSERT INTO scheduled_task_runs (
         id, task_id, scheduled_for, started_at, finished_at, status, agent_session_id,
-        conversation_id, error
-      ) VALUES (?, ?, ?, NULL, NULL, 'running', NULL, ?, NULL)`,
+        error
+      ) VALUES (?, ?, ?, NULL, NULL, 'running', NULL, NULL)`,
     )
-    .run(id, taskId, scheduledFor, null);
+    .run(id, taskId, scheduledFor);
   return {
     id,
     taskId,
@@ -322,7 +335,6 @@ export function insertScheduledRun(
     finishedAt: null,
     status: "running",
     agentSessionId: null,
-    conversationId: null,
     error: null,
   };
 }
@@ -335,7 +347,7 @@ export function getScheduledRun(
   const row = database
     .prepare(
       `SELECT id, task_id, scheduled_for, started_at, finished_at, status,
-              agent_session_id, conversation_id, error
+              agent_session_id, error
        FROM scheduled_task_runs WHERE id = ?`,
     )
     .get(runId) as Record<string, unknown> | undefined;
@@ -346,7 +358,7 @@ export function listRunningRuns(database: DatabaseClient): ScheduledRunRow[] {
   const rows = database
     .prepare(
       `SELECT id, task_id, scheduled_for, started_at, finished_at, status,
-              agent_session_id, conversation_id, error
+              agent_session_id, error
        FROM scheduled_task_runs WHERE status = 'running'`,
     )
     .all() as Array<Record<string, unknown>>;
@@ -362,7 +374,7 @@ export function listScheduledTaskRuns(
   const rows = database
     .prepare(
       `SELECT id, task_id, scheduled_for, started_at, finished_at, status,
-              agent_session_id, conversation_id, error
+              agent_session_id, error
        FROM scheduled_task_runs
        WHERE task_id = ?
        ORDER BY scheduled_for DESC
@@ -379,7 +391,6 @@ export function updateScheduledRun(
     status?: ScheduledRunRow["status"];
     finishedAt?: string;
     agentSessionId?: string | null;
-    conversationId?: string | null;
     error?: string | null;
     startedAt?: string;
   },
@@ -404,10 +415,6 @@ export function updateScheduledRun(
     sets.push("agent_session_id = ?");
     parameters.push(patch.agentSessionId);
   }
-  if (patch.conversationId !== undefined) {
-    sets.push("conversation_id = ?");
-    parameters.push(patch.conversationId);
-  }
   if (patch.error !== undefined) {
     sets.push("error = ?");
     parameters.push(patch.error);
@@ -427,7 +434,7 @@ export function updateScheduledRun(
   return mapRun(updated);
 }
 
-/** Mark runs that were interrupted by a restart as failed (plan 16.2). */
+/** Mark runs that were interrupted by a restart as failed. */
 export function recoverInterruptedScheduledRuns(database: DatabaseClient): number {
   const result = database
     .prepare(

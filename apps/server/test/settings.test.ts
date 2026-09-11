@@ -14,9 +14,11 @@ import { tmpdir } from "node:os";
 import {
   openDatabase,
   reconcileRepositories,
+  beginQueuedForwardSync,
   completeSyncStream,
+  completeSyncRunStream,
+  createSyncRun,
   getRepositorySyncState,
-  startRepositorySync,
   type DatabaseClient,
 } from "@loongboard/database";
 import { GitHubCredentialService } from "@loongboard/github";
@@ -231,7 +233,24 @@ describe("SettingsController", () => {
   it("persists the initial sync window without changing an existing watermark", async () => {
     const { root, statePath, database } = fixture();
     const startedAt = "2026-09-09T10:00:00.000Z";
-    startRepositorySync(database, "vllm", startedAt);
+    const run = createSyncRun(database, {
+      repositoryId: "vllm",
+      kind: "forward",
+      attemptStartedAt: startedAt,
+    });
+    beginQueuedForwardSync(database, {
+      repositoryId: "vllm",
+      runId: run.syncRunId,
+      startedAt,
+    });
+    completeSyncRunStream(database, run.syncRunId, "pull_request", {
+      finishedAt: "2026-09-09T10:00:01.000Z",
+      watermarkAfter: startedAt,
+    });
+    completeSyncRunStream(database, run.syncRunId, "issue", {
+      finishedAt: "2026-09-09T10:00:01.000Z",
+      watermarkAfter: startedAt,
+    });
     completeSyncStream(database, {
       repositoryId: "vllm",
       entityKind: "pull_request",

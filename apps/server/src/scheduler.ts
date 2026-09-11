@@ -6,7 +6,6 @@ import {
   listScheduledTasks,
   recoverInterruptedScheduledRuns,
   requireScheduledTask,
-  setScheduledTaskConversation,
   setTaskOccurrence,
   updateScheduledRun,
   type DatabaseClient,
@@ -34,7 +33,7 @@ export class ScheduledTaskWorkspaceBusyError extends Error {
 export interface SchedulerSystemExecutionContext {
   task: ScheduledTaskRow;
   run: ScheduledRunRow;
-  workspacePath: string;
+  workspacePath: string | null;
 }
 
 /**
@@ -51,17 +50,17 @@ export interface SchedulerEngineOptions {
   chats: AgentChatController;
   /** Shared in-process ownership guard for every agent workspace. */
   workspaceRuns: WorkspaceRunCoordinator;
-  /** Root for per-run DSH homes (plan 13.2). */
+  /** Root for per-run DSH homes. */
   agentSessionsPath: string;
-  /** Injected repository-sync/checkpoint/push implementation for system tasks. */
+  /** Injected repository sync/checkpoint/push implementation for system tasks. */
   executor?: SchedulerExecutor;
   now?: () => Date;
 }
 
 /**
- * One timer engine for Agent conversations and trusted system actions. Every
- * Agent occurrence creates a new durable conversation; the task's legacy
- * conversation pointer is only maintained as a compatibility projection.
+ * One timer engine for Agent sessions and trusted system actions. Every Agent
+ * occurrence creates a new durable session. System actions share
+ * the timer and run history but never claim an Agent workspace.
  */
 export class SchedulerEngine {
   private readonly database: DatabaseClient;
@@ -71,7 +70,7 @@ export class SchedulerEngine {
   private readonly now: () => Date;
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly runningRuns = new Map<string, Promise<void>>();
-  private readonly runContext = new Map<string, { workspacePath: string }>();
+  private readonly runContext = new Map<string, { workspacePath: string | null }>();
   private closed = false;
 
   constructor(options: SchedulerEngineOptions) {
@@ -137,6 +136,9 @@ export class SchedulerEngine {
     const task = requireScheduledTask(this.database, taskId);
     const release = this.tryAcquireTaskWorkspace(task);
     if (release === null) {
+      if (task.workspacePath === null) {
+        throw new Error(`Agent scheduled task ${task.id} is missing workspacePath`);
+      }
       throw new ScheduledTaskWorkspaceBusyError(task.workspacePath);
     }
     try {
@@ -151,7 +153,7 @@ export class SchedulerEngine {
 
   private launchRun(
     run: ScheduledRunRow,
-    workspacePath: string,
+    workspacePath: string | null,
     release: () => void,
   ): void {
     this.runContext.set(run.id, { workspacePath });
@@ -269,7 +271,6 @@ export class SchedulerEngine {
         const result = await this.runAgentTask(task, run, workspace);
         updateScheduledRun(this.database, run.id, {
           agentSessionId: result.sessionId,
-          conversationId: result.sessionId,
         });
       }
     } catch (error) {
@@ -296,12 +297,23 @@ export class SchedulerEngine {
     }
   }
 
-  /** Execute one Agent occurrence in a new durable conversation. */
+  /** Execute one Agent occurrence in a new durable session. */
   private async runAgentTask(
     task: ScheduledTaskRow,
     run: ScheduledRunRow,
-    workspace: string,
+    workspace: string | null,
   ): Promise<{ sessionId: string }> {
+    if (
+      task.kind !== "agent" ||
+      workspace === null ||
+      task.workspacePath === null ||
+      task.prompt === null ||
+      task.provider === null ||
+      task.model === null ||
+      task.reasoningEffort === null
+    ) {
+      throw new Error(`Agent scheduled task ${task.id} is missing canonical Agent fields`);
+    }
     const session = await this.chats.ensureScheduledSession({
       taskId: task.id,
       runId: run.id,
@@ -316,34 +328,33 @@ export class SchedulerEngine {
       model: task.model,
       reasoningEffort: task.reasoningEffort,
     });
-    const conversationId = configured.session.id;
-    // Keep the old task pointer only as a compatibility projection. It is
-    // never read to select the session for a subsequent occurrence.
-    setScheduledTaskConversation(this.database, task.id, conversationId, this.timestamp());
+    const sessionId = configured.session.id;
     updateScheduledRun(this.database, run.id, {
-      agentSessionId: conversationId,
-      conversationId,
+      agentSessionId: sessionId,
     });
     // The prompt is appended once per scheduled occurrence and sent verbatim;
     // the scheduler never parses report format.
     appendAgentMessage(this.database, {
-      sessionId: conversationId,
+      sessionId,
       role: "user",
       contentMarkdown: task.prompt,
       now: this.timestamp(),
     });
-    const result = await this.chats.runSessionTurn(conversationId, task.prompt, {
+    const result = await this.chats.runSessionTurn(sessionId, task.prompt, {
       // fire/runNow already owns this path; acquiring again deadlocks.
       workspaceOwned: true,
     });
     if (result.status !== "idle") {
       throw new Error(`Agent session ended with status: ${result.status}`);
     }
-    return { sessionId: conversationId };
+    return { sessionId };
   }
 
   private tryAcquireTaskWorkspace(task: ScheduledTaskRow): (() => void) | null {
     if (task.kind === "system") return () => undefined;
+    if (task.workspacePath === null) {
+      throw new Error(`Agent scheduled task ${task.id} is missing workspacePath`);
+    }
     return this.workspaceRuns.acquire(task.workspacePath);
   }
 

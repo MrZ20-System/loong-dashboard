@@ -328,22 +328,6 @@ describe("LoongBoard metadata routes", () => {
     })).toBe(true));
   });
 
-  it("keeps legacy date URLs compatible while requesting from/to", async () => {
-    const fetchMock = mockApi();
-    renderApp("/repositories/repo/pulls?date=2026-09-03&cursor=stale");
-    await screen.findByRole("heading", { name: "Pull requests" });
-    await waitFor(() =>
-      expect(
-        fetchMock.mock.calls.some(
-          ([input]) =>
-            String(input).includes(
-              "/api/repositories/repo/pulls?from=2026-09-03&to=2026-09-03",
-            ),
-        ),
-      ).toBe(true),
-    );
-  });
-
   it("keeps Server order, paginates, and preserves stored status", async () => {
     const rows = [pull(9), { ...pull(8), status: "merged" as const }];
     mockApi({ pullPages: [[rows[0]], [rows[1]]] });

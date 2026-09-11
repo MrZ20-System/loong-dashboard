@@ -131,7 +131,7 @@ export function AgentChatPanel({
       scope.prNumber !== undefined,
     queryFn: () =>
       listAgentSessions({
-        scopeType: "pr",
+        originKind: "pr",
         repositoryId: scope.kind === "pr" ? scope.repositoryId : undefined,
         prNumber: scope.kind === "pr" ? scope.prNumber : undefined,
       }),

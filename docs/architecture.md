@@ -59,7 +59,7 @@ Scheduler 是现有唯一的定时入口。它为持久任务维护 timer map；
 - Git 命令在 git-workspace；Knowledge 的 checkpoint 也由该包执行。
 - 原始 SQL 全部在 database；Server 编排类型化服务。
 - PR/Issue **列表**只读 SQLite。Issue **详情**可按缓存版本触发 provider 刷新。
-- `pull_requests` 保存当前已知 PR 事实。Recently Updated 使用 `(updated_at, number)` cursor，PR Number 使用 number cursor；Merged 直接投影 `merged_at IS NOT NULL` 并使用 `(merged_at, number)` cursor。三者都不在 Web 中做全量排序。
+- `pull_requests` 保存当前已知 PR 事实。Recently Updated/Number 两种 PR 列表和 Merged 列表均使用 `page` + `limit` 的 OFFSET 分页；只有 Issue 列表使用 `(updatedAt, number)` cursor。三者都不在 Web 中做全量排序。
 - Merged 没有独立表、同步类型或 GitHub crawler；Web 只对单个扁平分页结果按配置时区生成日期分割线。
 - `forward` 只推进 forward metadata watermark；`history` 独立维护 cursor、recovery anchor、目标日期和最老覆盖边界；`fetch_pr` 只处理目标 PR，不改变另外两者的状态。History 只补 metadata，不重建逐日状态，也不阻塞在整批历史 changed-files enrichment 上。
 - 数据库启动恢复 queued/running metadata/history run；同仓库持久化 running history 会阻止重复 admission，已启用但未达到目标的 bounded history 会以新 run 从持久 cursor 继续。

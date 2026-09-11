@@ -10,7 +10,6 @@ export interface WorktreeSlotRow {
   path: string;
   prNumber: number | null;
   targetSha: string | null;
-  busySessionId: string | null;
   lastUsedAt: string | null;
 }
 
@@ -31,7 +30,6 @@ function mapWorktreeSlot(row: Record<string, unknown>): WorktreeSlotRow {
     path: row.path as string,
     prNumber: (row.pr_number as number | null) ?? null,
     targetSha: (row.target_sha as string | null) ?? null,
-    busySessionId: (row.busy_session_id as string | null) ?? null,
     lastUsedAt: (row.last_used_at as string | null) ?? null,
   };
 }
@@ -69,8 +67,8 @@ export function listWorktreeSlots(
 
 /**
  * Record one successful allocation/reuse/sync. The row is authoritative for
- * pr_number, target_sha, and last_used_at; an existing busy_session_id is
- * preserved so concurrent session lifecycle state is not overwritten.
+ * pr_number, target_sha, and last_used_at. Live ownership is supplied by the
+ * running agent sessions and WorkspaceRunCoordinator.
  */
 export function recordWorktreeSlotUse(
   database: DatabaseClient,
@@ -88,8 +86,8 @@ export function recordWorktreeSlotUse(
       .prepare(
         `INSERT INTO worktree_slots (
           id, repository_id, slot_name, path, pr_number, target_sha,
-          busy_session_id, last_used_at
-        ) VALUES (?, ?, ?, ?, ?, ?, NULL, ?)`,
+          last_used_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id,
@@ -122,9 +120,8 @@ export function recordWorktreeSlotUse(
 
 /**
  * Remove affinity metadata after the owning physical worktree was removed.
- * Live busy ownership is supplied by agent sessions/coordinator at the
- * maintenance boundary; this function intentionally does not consult the
- * legacy busy_session_id column as a second authority.
+ * Live ownership is supplied by agent sessions/coordinator at the maintenance
+ * boundary; this function only removes the exact affinity row.
  */
 export function deleteWorktreeSlot(
   database: DatabaseClient,

@@ -175,13 +175,13 @@ export function ScheduledTasksPage() {
                   <span className={`status-pill status-pill--${task.enabled ? "ok" : "unknown"}`}>{task.enabled ? "Enabled" : "Disabled"}</span> · {task.kind === "system" ? `System · ${task.action ?? "action"}` : "Agent conversation"} · {task.cronExpression} · {task.timezone}
                 </p>
                 <p className="scheduled-meta">
-                  next: {task.nextRunAt ?? "—"} · last: {task.lastRunAt ?? "—"} · workspace: {task.workspacePath}
+                  next: {task.nextRunAt ?? "—"} · last: {task.lastRunAt ?? "—"} · workspace: {task.workspacePath ?? "—"}
                 </p>
                 <p className="scheduled-meta">
                   last result: {runQueries[taskIndex]?.data?.items[0]?.status ?? (runQueries[taskIndex]?.isPending ? "Loading" : "No runs")}
                 </p>
               </div>
-              {task.kind === "system" ? <Link className="scheduled-conversation-link" to={systemTaskHref(task.action)}>Open settings</Link> : task.conversationId && <Link className="scheduled-conversation-link" to={`/agent?session=${encodeURIComponent(task.conversationId)}`}>Open conversation</Link>}
+              {task.kind === "system" && <Link className="scheduled-conversation-link" to={systemTaskHref(task.action)}>Open settings</Link>}
               <div className="scheduled-actions">
                 <button type="button" onClick={() => toggle.mutate({ id: task.id, enabled: !task.enabled })} disabled={toggle.isPending}>
                   {task.enabled ? "Disable" : "Enable"}
@@ -195,7 +195,7 @@ export function ScheduledTasksPage() {
               </div>
             </header>
             {expandedId === task.id && <div className="scheduled-runs">
-              {editingTaskId === task.id && <form className="scheduled-edit-form" onSubmit={(event) => { event.preventDefault(); const formData = new FormData(event.currentTarget); const patch = { name: String(formData.get("name") ?? "").trim(), cronExpression: String(formData.get("cronExpression") ?? "").trim(), timezone: String(formData.get("timezone") ?? "").trim(), ...(task.kind === "agent" ? { prompt: String(formData.get("prompt") ?? ""), workspacePath: String(formData.get("workspacePath") ?? "").trim() } : { action: String(formData.get("action") ?? "").trim() }) } as Parameters<typeof updateScheduledTask>[1]; if (!patch.name || !patch.cronExpression || !patch.timezone || (task.kind === "agent" && (!(patch.prompt ?? "") || !(patch.workspacePath ?? ""))) || (task.kind === "system" && !(patch.action ?? ""))) { setError(task.kind === "agent" ? "Agent tasks require name, schedule, prompt, and workspace path." : "System tasks require name, schedule, and action."); return; } setError(null); edit.mutate({ id: task.id, patch }); }}><label>Name<input name="name" defaultValue={task.name} /></label><label>Cron<input name="cronExpression" defaultValue={task.cronExpression} /></label><label>Timezone<input name="timezone" defaultValue={task.timezone} /></label>{task.kind === "agent" ? <><label>Workspace path<input name="workspacePath" defaultValue={task.workspacePath} /></label><label>Prompt<textarea name="prompt" defaultValue={task.prompt} rows={3} /></label></> : <label>System action<input name="action" defaultValue={task.action ?? ""} /></label>}<div className="scheduled-actions"><button className="button-primary" type="submit" disabled={edit.isPending}>{edit.isPending ? "Saving…" : "Save changes"}</button><button type="button" onClick={() => setEditingTaskId(null)}>Cancel</button></div></form>}
+              {editingTaskId === task.id && <form className="scheduled-edit-form" onSubmit={(event) => { event.preventDefault(); const formData = new FormData(event.currentTarget); const patch = { name: String(formData.get("name") ?? "").trim(), cronExpression: String(formData.get("cronExpression") ?? "").trim(), timezone: String(formData.get("timezone") ?? "").trim(), ...(task.kind === "agent" ? { prompt: String(formData.get("prompt") ?? ""), workspacePath: String(formData.get("workspacePath") ?? "").trim() } : { action: String(formData.get("action") ?? "").trim() }) } as Parameters<typeof updateScheduledTask>[1]; if (!patch.name || !patch.cronExpression || !patch.timezone || (task.kind === "agent" && (!(patch.prompt ?? "") || !(patch.workspacePath ?? ""))) || (task.kind === "system" && !(patch.action ?? ""))) { setError(task.kind === "agent" ? "Agent tasks require name, schedule, prompt, and workspace path." : "System tasks require name, schedule, and action."); return; } setError(null); edit.mutate({ id: task.id, patch }); }}><label>Name<input name="name" defaultValue={task.name} /></label><label>Cron<input name="cronExpression" defaultValue={task.cronExpression} /></label><label>Timezone<input name="timezone" defaultValue={task.timezone} /></label>{task.kind === "agent" ? <><label>Workspace path<input name="workspacePath" defaultValue={task.workspacePath ?? ""} /></label><label>Prompt<textarea name="prompt" defaultValue={task.prompt ?? ""} rows={3} /></label></> : <label>System action<input name="action" defaultValue={task.action ?? ""} /></label>}<div className="scheduled-actions"><button className="button-primary" type="submit" disabled={edit.isPending}>{edit.isPending ? "Saving…" : "Save changes"}</button><button type="button" onClick={() => setEditingTaskId(null)}>Cancel</button></div></form>}
               {runs?.isPending && <p role="status">Loading runs…</p>}
               {runs?.isError && <p role="alert">{runs.error.message}</p>}
               {runs?.data?.items.length === 0 && <p role="status">No runs yet.</p>}
@@ -206,6 +206,7 @@ export function ScheduledTasksPage() {
                     <span>{run.scheduledFor}</span>
                     <span>{run.startedAt ?? "—"} → {run.finishedAt ?? "—"}</span>
                     {run.error !== null && <span className="agent-error">{run.error}</span>}
+                    {run.agentSessionId !== null && run.agentSessionId.length > 0 && <Link className="scheduled-conversation-link" to={`/agent?session=${encodeURIComponent(run.agentSessionId)}`}>Open conversation</Link>}
                   </li>
                 ))}
               </ul>

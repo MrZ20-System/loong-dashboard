@@ -71,7 +71,6 @@ export function MetadataPage({ kind }: { kind: "pulls" | "issues" }) {
   const page = kind === "pulls" ? readPage(searchParams.get("page")) : issuePage;
   const rawPage = searchParams.get("page");
   const rawView = searchParams.get("view");
-  const rawDate = searchParams.get("date");
   const rawFrom = searchParams.get("from");
   const rawTo = searchParams.get("to");
   const rawStatus = searchParams.get("status");
@@ -95,8 +94,7 @@ export function MetadataPage({ kind }: { kind: "pulls" | "issues" }) {
       }
     };
     const desiredArchive = archive === "current" ? null : archive;
-    if (rawDate !== null || rawFrom !== from || rawTo !== to || rawStatus !== status || rawArchive !== desiredArchive || rawSearch !== search || rawDomains.join("\u0000") !== domains.join("\u0000")) {
-      next.delete("date");
+    if (rawFrom !== from || rawTo !== to || rawStatus !== status || rawArchive !== desiredArchive || rawSearch !== search || rawDomains.join("\u0000") !== domains.join("\u0000")) {
       setOrDelete("from", from);
       setOrDelete("to", to);
       setOrDelete("status", status);
@@ -120,7 +118,7 @@ export function MetadataPage({ kind }: { kind: "pulls" | "issues" }) {
       next.delete("page"); changed = true;
     }
     if (changed) setSearchParams(next, { replace: true });
-  }, [archive, domains, filterKey, from, kind, page, rawArchive, rawDate, rawDomains, rawFrom, rawPage, rawSearch, rawStatus, rawTo, rawView, search, searchParams, setSearchParams, status, to, view]);
+  }, [archive, domains, filterKey, from, kind, page, rawArchive, rawDomains, rawFrom, rawPage, rawSearch, rawStatus, rawTo, rawView, search, searchParams, setSearchParams, status, to, view]);
   useEffect(() => {
     setIssueCursors({ 1: null });
     setIssuePage(1);
@@ -176,7 +174,7 @@ export function MetadataPage({ kind }: { kind: "pulls" | "issues" }) {
   const changeView = (nextView: PullRequestView) => updateUrl((next) => next.set("view", nextView));
   const setDomains = (values: string[]) => updateUrl((next) => { next.delete("domain"); for (const value of values) next.append("domain", value); });
   const changeFilter = (key: "status" | "archive", value: string | null) => updateUrl((next) => { if (value && !(key === "archive" && value === "current")) next.set(key, value); else next.delete(key); });
-  const changeDate = (value: DateRangeValue) => updateUrl((next) => { next.delete("date"); if (value.from) next.set("from", value.from); else next.delete("from"); if (value.to) next.set("to", value.to); else next.delete("to"); });
+  const changeDate = (value: DateRangeValue) => updateUrl((next) => { if (value.from) next.set("from", value.from); else next.delete("from"); if (value.to) next.set("to", value.to); else next.delete("to"); });
   const changeSearch = (value: string) => updateUrl((next) => { if (value.trim()) next.set("search", value); else next.delete("search"); });
 
   return <section className="metadata-page" aria-labelledby="metadata-heading">

@@ -548,13 +548,9 @@ export const agentSessions = sqliteTable(
   "agent_sessions",
   {
     id: text("id").primaryKey(),
-    scopeType: text("scope_type", {
-      enum: ["pr", "issue", "knowledge", "general"],
-    }).notNull(),
-    /** Origin kind is separate from the legacy scope_type discriminator. */
     originKind: text("origin_kind", {
       enum: ["pr", "issue", "knowledge", "general", "repository", "domain"],
-    }),
+    }).notNull(),
     repositoryId: text("repository_id").references(() => repositories.id, {
       onDelete: "set null",
     }),
@@ -582,6 +578,11 @@ export const agentSessions = sqliteTable(
     lastUsedAt: text("last_used_at").notNull(),
   },
   (table) => [
+    index("agent_sessions_origin_idx").on(
+      table.originKind,
+      table.repositoryId,
+      desc(table.lastUsedAt),
+    ),
     foreignKey({
       columns: [table.repositoryId, table.prNumber],
       foreignColumns: [pullRequests.repositoryId, pullRequests.number],
@@ -591,8 +592,8 @@ export const agentSessions = sqliteTable(
       foreignColumns: [issues.repositoryId, issues.number],
     }).onDelete("set null"),
     check(
-      "agent_sessions_scope_type_check",
-      sql`${table.scopeType} IN ('pr', 'issue', 'knowledge', 'general')`,
+      "agent_sessions_origin_kind_check",
+      sql`${table.originKind} IN ('pr', 'issue', 'knowledge', 'general', 'repository', 'domain')`,
     ),
     check(
       "agent_sessions_repository_scope_check",
@@ -641,9 +642,6 @@ export const worktreeSlots = sqliteTable(
     path: text("path").notNull().unique(),
     prNumber: integer("pr_number"),
     targetSha: text("target_sha"),
-    busySessionId: text("busy_session_id").references(() => agentSessions.id, {
-      onDelete: "set null",
-    }),
     lastUsedAt: text("last_used_at"),
   },
   (table) => [
@@ -704,20 +702,16 @@ export const scheduledTasks = sqliteTable(
     name: text("name").notNull(),
     cronExpression: text("cron_expression").notNull(),
     timezone: text("timezone").notNull(),
-    prompt: text("prompt").notNull(),
-    workspacePath: text("workspace_path").notNull(),
-    provider: text("provider").notNull(),
-    model: text("model").notNull(),
-    reasoningEffort: text("reasoning_effort").notNull(),
+    prompt: text("prompt"),
+    workspacePath: text("workspace_path"),
+    provider: text("provider"),
+    model: text("model"),
+    reasoningEffort: text("reasoning_effort"),
     kind: text("kind", { enum: ["agent", "system"] }).notNull().default("agent"),
     action: text("action"),
     repositoryId: text("repository_id").references(() => repositories.id, {
       onDelete: "set null",
     }),
-    conversationId: text("conversation_id").references(
-      (): AnySQLiteColumn => agentSessions.id,
-      { onDelete: "set null" },
-    ),
     enabled: integer("enabled", { mode: "boolean" }).notNull(),
     lastRunAt: text("last_run_at"),
     nextRunAt: text("next_run_at"),
@@ -727,6 +721,30 @@ export const scheduledTasks = sqliteTable(
   (table) => [
     index("scheduled_tasks_next_run_idx").on(table.enabled, table.nextRunAt),
     check("scheduled_tasks_enabled_check", sql`${table.enabled} IN (0, 1)`),
+    check("scheduled_tasks_kind_check", sql`${table.kind} IN ('agent', 'system')`),
+    check(
+      "scheduled_tasks_kind_fields_check",
+      sql`(
+        (${table.kind} = 'agent'
+          AND ${table.prompt} IS NOT NULL
+          AND ${table.workspacePath} IS NOT NULL
+          AND ${table.provider} IS NOT NULL
+          AND ${table.model} IS NOT NULL
+          AND ${table.reasoningEffort} IS NOT NULL
+          AND ${table.action} IS NULL)
+        OR
+        (${table.kind} = 'system'
+          AND ${table.action} IS NOT NULL
+          AND (
+            ${table.action} NOT IN (
+              'repository.sync',
+              'repository.metadata-maintenance',
+              'repository.worktrees.cleanup'
+            )
+            OR ${table.repositoryId} IS NOT NULL
+          ))
+      )`,
+    ),
   ],
 );
 
@@ -746,10 +764,6 @@ export const scheduledTaskRuns = sqliteTable(
     agentSessionId: text("agent_session_id").references(() => agentSessions.id, {
       onDelete: "set null",
     }),
-    conversationId: text("conversation_id").references(
-      (): AnySQLiteColumn => agentSessions.id,
-      { onDelete: "set null" },
-    ),
     error: text("error"),
   },
   (table) => [

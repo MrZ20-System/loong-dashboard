@@ -11,11 +11,10 @@ export {
   type AuthUnlockRequest,
 } from "./auth.js";
 export {
-  decodeListCursor,
-  encodeListCursor,
-  listCursorPayloadSchema,
-  listCursorSortSchema,
-  type ListCursorPayload,
+  decodeUpdatedCursor,
+  encodeUpdatedCursor,
+  updatedCursorSchema,
+  type UpdatedCursor,
 } from "./cursor.js";
 export {
   scheduledRunSchema,
@@ -27,6 +26,7 @@ export {
   scheduledTaskSchema,
   scheduledTaskKindSchema,
   scheduledSystemActionSchema,
+  scheduledActionRequiresRepository,
   scheduledTasksResponseSchema,
   scheduledTaskUpdateSchema,
   type ScheduledRun,

@@ -28,7 +28,7 @@ PR 会话在每个 turn 前核对 workspace revision；显式 Sync workspace 先
 
 缩容会扫描整个 pool，而不是只扫描低编号 slot。超出 configured slots 的 clean、非 busy slot 会通过非强制 `git worktree remove` 删除；busy slot 进入 pending retirement，等 live Agent session 结束后再处理；dirty slot 和 Git status 失败的 slot 保留并报告。TTL 自动清理只删除 clean、非 busy 且 `last_used_at` 已超过 TTL 的 slot；手动清理忽略 TTL，但仍保护 busy、dirty 和无法确认状态的 slot。
 
-busy 的唯一 live authority 是运行中的 Agent session 与 `WorkspaceRunCoordinator` 提供的路径集合。`worktree_slots` 只保存 PR affinity、目标 SHA 和 LRU 元数据；其中历史 `busy_session_id` 不参与 janitor 的 ownership 判定。成功删除物理 worktree 后，Server 应以 repository、slot name 和精确 path 删除对应的 affinity 行。
+busy 的唯一 live authority 是运行中的 Agent session 与 `WorkspaceRunCoordinator` 提供的路径集合。`worktree_slots` 只保存 PR affinity、目标 SHA 和 LRU 元数据；janitor 依据 live authority 判定 ownership。成功删除物理 worktree 后，Server 应以 repository、slot name 和精确 path 删除对应的 affinity 行。
 
 ## 维护入口
 

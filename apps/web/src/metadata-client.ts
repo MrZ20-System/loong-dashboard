@@ -60,18 +60,14 @@ export function isValidDate(value: string | null): value is string {
   return calendarDateSchema.safeParse(value).success;
 }
 
-/** Read a complete range, with a fallback for malformed or legacy URLs. */
+/** Read a complete range, with a fallback for malformed URLs. */
 export function readDateRange(
   params: URLSearchParams,
   fallback: DateRange,
 ): DateRange {
-  const legacyDate = params.get("date");
   const rawFrom = params.get("from");
   const rawTo = params.get("to");
   if (rawFrom === null && rawTo === null) {
-    if (legacyDate !== null && isValidDate(legacyDate)) {
-      return { from: legacyDate, to: legacyDate };
-    }
     return fallback;
   }
   if (!isValidDate(rawFrom) || !isValidDate(rawTo) || rawFrom > rawTo) {
@@ -86,7 +82,6 @@ export function readMetadataFilters(
 ): MetadataFilters {
   const fromValue = params.get("from");
   const toValue = params.get("to");
-  const dateValue = params.get("date");
   const statusValue = params.get("status");
   const archiveValue = params.get("archive");
   const searchValue = params.get("search") ?? "";
@@ -95,7 +90,6 @@ export function readMetadataFilters(
   const candidate: Record<string, unknown> = {};
   if (fromValue !== null) candidate.from = fromValue;
   if (toValue !== null) candidate.to = toValue;
-  if (dateValue !== null) candidate.date = dateValue;
   if (statusValue !== null) candidate.status = statusValue;
   if (archiveValue !== null) candidate.archive = archiveValue;
   if (rawDomainValues.length > 0) candidate.domain = rawDomainValues;
@@ -112,9 +106,8 @@ export function readMetadataFilters(
     };
   }
   const statusSchema = kind === "pulls" ? pullRequestStatusSchema : issueStatusSchema;
-  const legacyDate = isValidDate(dateValue) ? dateValue : null;
-  const from = fromValue === null ? legacyDate : isValidDate(fromValue) ? fromValue : null;
-  const to = toValue === null ? legacyDate : isValidDate(toValue) ? toValue : null;
+  const from = fromValue !== null && isValidDate(fromValue) ? fromValue : null;
+  const to = toValue !== null && isValidDate(toValue) ? toValue : null;
   const validOrder = from === null || to === null || from <= to;
   return {
     from: validOrder ? from : null,
@@ -136,8 +129,6 @@ export function buildListUrl(
   filters: {
     from?: string | null;
     to?: string | null;
-    /** Accepted for callers that still pass the pre-range shape. */
-    date?: string | null;
     status?: string | null;
     search?: string | null;
     sort?: "updated" | "number" | null;
@@ -149,8 +140,8 @@ export function buildListUrl(
   },
 ): string {
   const query = new URLSearchParams();
-  const from = filters.from ?? filters.date ?? null;
-  const to = filters.to ?? filters.date ?? null;
+  const from = filters.from ?? null;
+  const to = filters.to ?? null;
   if (from) query.set("from", from);
   if (to) query.set("to", to);
   if (filters.status) query.set("status", filters.status);
@@ -227,7 +218,6 @@ export function fetchList(
   filters: {
     from?: string | null;
     to?: string | null;
-    date?: string | null;
     status?: string | null;
     search?: string | null;
     sort?: "updated" | "number" | null;

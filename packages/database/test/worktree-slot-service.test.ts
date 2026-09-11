@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  createAgentSession,
   deleteWorktreeSlot,
   listWorktreeSlots,
   openDatabase,
@@ -74,7 +73,6 @@ describe("worktree slot service", () => {
         lastUsedAt: T1,
       });
       expect(first.id).toMatch(/^wslot_/);
-      expect(first.busySessionId).toBeNull();
       expect(listWorktreeSlots(database, "alpha")).toEqual([first]);
 
       const reused = recordWorktreeSlotUse(database, {
@@ -108,49 +106,6 @@ describe("worktree slot service", () => {
       });
       expect(listWorktreeSlots(database, "alpha")).toHaveLength(1);
       expect(listWorktreeSlots(database, "other")).toEqual([]);
-    } finally {
-      database.close();
-    }
-  });
-
-  it("keeps an existing busy_session_id when metadata is updated", () => {
-    const database = freshDatabase();
-    try {
-      createAgentSession(database, {
-        id: "sess_busy",
-        scope: { kind: "general" },
-        dshHomePath: "/home/sess_busy/dsh",
-        workspacePath: "/worktrees/alpha/slot-01",
-        provider: "deepseek-official",
-        model: "deepseek-v4-flash",
-        reasoningEffort: "high",
-        now: T1,
-      });
-      const recorded = recordWorktreeSlotUse(database, {
-        repositoryId: "alpha",
-        slotName: "slot-01",
-        path: "/worktrees/alpha/slot-01",
-        prNumber: 1,
-        targetSha: SHA_A,
-        lastUsedAt: T1,
-      });
-      database
-        .prepare(
-          "UPDATE worktree_slots SET busy_session_id = ? WHERE id = ?",
-        )
-        .run("sess_busy", recorded.id);
-
-      const reused = recordWorktreeSlotUse(database, {
-        repositoryId: "alpha",
-        slotName: "slot-01",
-        path: "/worktrees/alpha/slot-01",
-        prNumber: 2,
-        targetSha: SHA_B,
-        lastUsedAt: T2,
-      });
-      expect(reused.busySessionId).toBe("sess_busy");
-      expect(reused.prNumber).toBe(2);
-      expect(reused.targetSha).toBe(SHA_B);
     } finally {
       database.close();
     }

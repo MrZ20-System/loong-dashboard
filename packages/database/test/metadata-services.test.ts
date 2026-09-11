@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   archiveBatch,
+  beginQueuedForwardSync,
   completeSyncStream,
   createDomainRule,
   createSyncRun,
@@ -26,7 +27,6 @@ import {
   reconcileRepositories,
   replacePullRequestFiles,
   replaceIssueDetailCache,
-  startRepositorySync,
   upsertIssuePage,
   upsertPullRequestPage,
 } from "../src/index.js";
@@ -187,13 +187,31 @@ describe("sync state persistence", () => {
   it("transitions streams, rejects overlap, and preserves a failure watermark", () => {
     withDatabase((database) => {
       reconcileRepositories(database, [repository("alpha")], "2026-09-03T00:00:00.000Z");
-      const run = startRepositorySync(database, "alpha", "2026-09-03T01:00:00.000Z");
+      const run = createSyncRun(database, {
+        repositoryId: "alpha",
+        kind: "forward",
+        attemptStartedAt: "2026-09-03T01:00:00.000Z",
+      });
+      beginQueuedForwardSync(database, {
+        repositoryId: "alpha",
+        runId: run.syncRunId,
+        startedAt: "2026-09-03T01:00:00.000Z",
+      });
       expect(run).toEqual({
         repositoryId: "alpha",
         syncRunId: expect.any(String),
         startedAt: "2026-09-03T01:00:00.000Z",
+        kind: "forward",
+        trigger: "manual",
       });
-      expect(() => startRepositorySync(database, "alpha")).toThrow(/already running/);
+      const overlap = createSyncRun(database, {
+        repositoryId: "alpha",
+        kind: "forward",
+      });
+      expect(() => beginQueuedForwardSync(database, {
+        repositoryId: "alpha",
+        runId: overlap.syncRunId,
+      })).toThrow(/already running/);
 
       completeSyncStream(database, {
         repositoryId: "alpha",
@@ -223,7 +241,16 @@ describe("sync state persistence", () => {
         }),
       });
 
-      startRepositorySync(database, "alpha", "2026-09-03T02:00:00.000Z");
+      const second = createSyncRun(database, {
+        repositoryId: "alpha",
+        kind: "forward",
+        attemptStartedAt: "2026-09-03T02:00:00.000Z",
+      });
+      beginQueuedForwardSync(database, {
+        repositoryId: "alpha",
+        runId: second.syncRunId,
+        startedAt: "2026-09-03T02:00:00.000Z",
+      });
       failSyncStream(database, {
         repositoryId: "alpha",
         entityKind: "pull_request",
@@ -239,7 +266,16 @@ describe("sync state persistence", () => {
     const path = databasePath();
     const first = openDatabase(path);
     reconcileRepositories(first, [repository("alpha")], "2026-09-03T00:00:00.000Z");
-    startRepositorySync(first, "alpha", "2026-09-03T01:00:00.000Z");
+    const run = createSyncRun(first, {
+      repositoryId: "alpha",
+      kind: "forward",
+      attemptStartedAt: "2026-09-03T01:00:00.000Z",
+    });
+    beginQueuedForwardSync(first, {
+      repositoryId: "alpha",
+      runId: run.syncRunId,
+      startedAt: "2026-09-03T01:00:00.000Z",
+    });
     first.close();
 
     const reopened = openDatabase(path);
@@ -263,7 +299,16 @@ describe("sync state persistence", () => {
   it("uses the persisted attempt timestamp when completing a stream", () => {
     withDatabase((database) => {
       reconcileRepositories(database, [repository("repo")]);
-      startRepositorySync(database, "repo", "2026-09-03T01:00:00.000Z");
+      const run = createSyncRun(database, {
+        repositoryId: "repo",
+        kind: "forward",
+        attemptStartedAt: "2026-09-03T01:00:00.000Z",
+      });
+      beginQueuedForwardSync(database, {
+        repositoryId: "repo",
+        runId: run.syncRunId,
+        startedAt: "2026-09-03T01:00:00.000Z",
+      });
 
       completeSyncStream(database, {
         repositoryId: "repo",
@@ -819,12 +864,20 @@ describe("metadata upserts and queries", () => {
         listIssues(database, "repo", { calendarTimeZone: "UTC" }),
       ).toThrowError(/Repository is missing or disabled/);
       expect(() =>
-        startRepositorySync(database, "repo"),
+        createSyncRun(database, { repositoryId: "repo", kind: "forward" }),
       ).toThrowError(/Repository is missing or disabled/);
 
       reconcileRepositories(database, [repository("repo")]);
       expect(() =>
         listIssues(database, "repo", { calendarTimeZone: "UTC", cursor: "not-a-cursor" }),
+      ).toThrowError(InvalidCursorError);
+      const legacySortCursor = btoa(JSON.stringify({
+        version: 1,
+        sort: "number",
+        number: 7,
+      })).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+      expect(() =>
+        listIssues(database, "repo", { calendarTimeZone: "UTC", cursor: legacySortCursor }),
       ).toThrowError(InvalidCursorError);
     });
   });
@@ -841,7 +894,8 @@ describe("metadata upserts and queries", () => {
       expect(
         listPullRequests(database, "repo", {
           calendarTimeZone: "America/New_York",
-          date: "2026-03-08",
+          from: "2026-03-08",
+          to: "2026-03-08",
         }),
       ).toMatchObject({ items: [expect.objectContaining({ number: 2 })], totalCount: 1, totalPages: 1 });
       expect(
@@ -853,7 +907,8 @@ describe("metadata upserts and queries", () => {
       expect(
         listPullRequests(database, "repo", {
           calendarTimeZone: "America/New_York",
-          date: "2026-03-09",
+          from: "2026-03-09",
+          to: "2026-03-09",
         }),
       ).toMatchObject({ items: [expect.objectContaining({ number: 3 })], totalCount: 1, totalPages: 1 });
       expect(

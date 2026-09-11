@@ -12,7 +12,6 @@ import type { DatabaseClient } from "./types.js";
 
 export interface AgentSessionRecord {
   id: string;
-  scopeType: "pr" | "issue" | "knowledge" | "general";
   originKind: AgentScope["kind"];
   repositoryId: string | null;
   prNumber: number | null;
@@ -80,7 +79,7 @@ function nowIso(): string {
 }
 
 function mapSession(row: Record<string, unknown>): AgentSessionSummaryWithTitleSource {
-  const kind = (row.origin_kind ?? row.scope_type) as AgentScope["kind"];
+  const kind = row.origin_kind as AgentScope["kind"];
   const scope: AgentScope = {
     kind,
     ...(row.repository_id !== null && row.repository_id !== undefined ? { repositoryId: row.repository_id as string } : {}),
@@ -136,7 +135,7 @@ function normalizeTitle(title: string): string {
 /** Scope equality key used to find the default session for a chat. */
 function scopeClause(scope: AgentScope): { sql: string; params: unknown[] } {
   const params: unknown[] = [scope.kind];
-  let sql = "COALESCE(origin_kind, scope_type) = ?";
+  let sql = "origin_kind = ?";
   const add = (column: string, value: unknown) => {
     if (value === undefined) {
       sql += ` AND ${column} IS NULL`;
@@ -182,31 +181,24 @@ export function createAgentSession(
   input: CreateAgentSessionInput,
 ): AgentSessionSummaryWithTitleSource {
   const { scope } = input;
-  // scope_type is the legacy discriminator and cannot be widened without
-  // rebuilding existing SQLite tables. origin_kind carries new repository /
-  // domain values while old rows continue to satisfy the original CHECK.
-  const legacyScopeType = scope.kind === "repository" || scope.kind === "domain"
-    ? "general"
-    : scope.kind;
   const title = input.title === null || input.title === undefined
     ? null
     : normalizeTitle(input.title);
   const titleSource = input.titleSource ?? (title === null ? "provisional" : "manual");
   database.prepare(
     `INSERT INTO agent_sessions (
-      id, scope_type, origin_kind, repository_id, pr_number, issue_number, target_sha,
+      id, origin_kind, repository_id, pr_number, issue_number, target_sha,
       knowledge_document_id, domain_id, origin_route, title, title_source, dsh_session_id,
       dsh_home_path, workspace_path, provider, model, reasoning_effort, status,
       created_at, last_used_at
     ) VALUES (
-      @id, @scopeType, @originKind, @repositoryId, @prNumber, @issueNumber, @targetSha,
+      @id, @originKind, @repositoryId, @prNumber, @issueNumber, @targetSha,
       @knowledgeDocumentId, @domainId, @originRoute, @title, @titleSource, NULL, @dshHomePath,
       @workspacePath, @provider, @model, @reasoningEffort, 'idle', @createdAt,
       @lastUsedAt
     )`,
   ).run({
     id: input.id,
-    scopeType: legacyScopeType,
     originKind: scope.kind,
     repositoryId: scope.repositoryId ?? null,
     prNumber: scope.prNumber ?? null,
@@ -325,7 +317,6 @@ export function touchAgentSession(database: DatabaseClient, sessionId: string): 
 }
 
 export interface AgentSessionListFilter {
-  scopeType?: AgentScope["kind"];
   originKind?: AgentScope["kind"];
   repositoryId?: string;
   prNumber?: number;
@@ -348,11 +339,8 @@ export function listAgentSessions(
     clauses.push(`${column} = ?`);
     parameters.push(value);
   };
-  if (filter.scopeType !== undefined) {
-    add("COALESCE(origin_kind, scope_type)", filter.scopeType);
-  }
   if (filter.originKind !== undefined) {
-    add("COALESCE(origin_kind, scope_type)", filter.originKind);
+    add("origin_kind", filter.originKind);
   }
   add("repository_id", filter.repositoryId);
   add("pr_number", filter.prNumber);
@@ -395,9 +383,9 @@ export function deleteAgentSession(
 }
 
 /**
- * Worktree paths owned by running sessions of a repository (plan 12.2:
- * `busy_session_id != null` slots are never recycled). The running status is
- * the durable busy marker because worktree_slots rows stay unmanaged in V1.
+ * Worktree paths owned by running sessions of a repository. The running
+ * session rows are the durable ownership projection; slot rows only retain
+ * affinity and LRU metadata.
  */
 export function listBusyWorkspacePaths(
   database: DatabaseClient,
@@ -419,7 +407,7 @@ export function listRunningKnowledgeSessionIds(database: DatabaseClient): string
   const rows = database
     .prepare(
       `SELECT id FROM agent_sessions
-       WHERE scope_type = 'knowledge' AND status = 'running'`,
+       WHERE origin_kind = 'knowledge' AND status = 'running'`,
     )
     .all() as Array<{ id: string }>;
   return rows.map((row) => row.id);

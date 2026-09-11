@@ -47,7 +47,7 @@ const MAX_FILTERED_ARCHIVE_SESSIONS = 900;
 
 function scopeFromRow(row: Record<string, unknown>): AgentScope {
   return {
-    kind: (row.origin_kind ?? row.scope_type) as AgentScope["kind"],
+    kind: row.origin_kind as AgentScope["kind"],
     ...(row.repository_id !== null && row.repository_id !== undefined
       ? { repositoryId: row.repository_id as string }
       : {}),
@@ -126,7 +126,7 @@ export function listAgentArchiveProjection(
     : ` WHERE id IN (${sessionIds.map(() => "?").join(", ")})`;
   const sessionRows = database
     .prepare(
-      `SELECT id, origin_kind, scope_type, repository_id, pr_number,
+      `SELECT id, origin_kind, repository_id, pr_number,
               issue_number, target_sha, knowledge_document_id, domain_id,
               origin_route, workspace_path, provider, model, reasoning_effort,
               status, dsh_session_id, title, title_source, created_at, last_used_at

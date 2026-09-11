@@ -25,6 +25,9 @@ import { repositorySyncHistoryMigration } from "../src/migrations/007-repository
 import { pullRequestLifecycleMigration } from "../src/migrations/008-pull-request-lifecycle.js";
 import { listQueryModesMigration } from "../src/migrations/009-list-query-modes.js";
 import { removeDailyProjectionsMigration } from "../src/migrations/010-remove-daily-projections.js";
+import { historyRateLimitRecoveryMigration } from "../src/migrations/011-history-rate-limit-recovery.js";
+import { metadataRetentionMigration } from "../src/migrations/012-metadata-retention.js";
+import { agentSessionTitleSourceMigration } from "../src/migrations/013-agent-session-title-source.js";
 
 const CORE_TABLES = [
   "agent_messages",
@@ -109,6 +112,42 @@ function createVersion010Database(databasePath: string): Database.Database {
   return database;
 }
 
+function createVersion013Database(databasePath: string): Database.Database {
+  const database = new Database(databasePath);
+  database.pragma("foreign_keys = ON");
+  database.exec(`
+    CREATE TABLE schema_migrations (
+      id TEXT PRIMARY KEY,
+      applied_at TEXT NOT NULL
+    )
+  `);
+  const migrations = [
+    initialSchemaMigration,
+    metadataListIndexesMigration,
+    issueStateConstraintMigration,
+    domainClassificationMigration,
+    issueDetailCacheMigration,
+    agentRuntimeSchedulerMigration,
+    repositorySyncHistoryMigration,
+    pullRequestLifecycleMigration,
+    listQueryModesMigration,
+    removeDailyProjectionsMigration,
+    historyRateLimitRecoveryMigration,
+    metadataRetentionMigration,
+    agentSessionTitleSourceMigration,
+  ];
+  const record = database.prepare(
+    "INSERT INTO schema_migrations (id, applied_at) VALUES (?, ?)",
+  );
+  for (const migration of migrations) {
+    database.transaction(() => {
+      migration.migrate(database);
+      record.run(migration.id, "2026-09-01T00:00:00.000Z");
+    })();
+  }
+  return database;
+}
+
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) {
     rmSync(directory, { recursive: true, force: true });
@@ -147,6 +186,7 @@ describe("database migrations", () => {
         { id: "011_history_rate_limit_recovery" },
         { id: "012_metadata_retention" },
         { id: "013_agent_session_title_source" },
+        { id: "014_phase1_schema_canonicalization" },
       ]);
     } finally {
       database.close();
@@ -181,6 +221,7 @@ describe("database migrations", () => {
         expect.objectContaining({ id: "011_history_rate_limit_recovery" }),
         expect.objectContaining({ id: "012_metadata_retention" }),
         expect.objectContaining({ id: "013_agent_session_title_source" }),
+        expect.objectContaining({ id: "014_phase1_schema_canonicalization" }),
       ]);
       expect(
         database
@@ -344,7 +385,7 @@ describe("database migrations", () => {
       database
         .prepare(
           `INSERT INTO agent_sessions (
-             id, scope_type, title, title_source, dsh_home_path, workspace_path,
+             id, origin_kind, title, title_source, dsh_home_path, workspace_path,
              provider, model, reasoning_effort, status, created_at, last_used_at
            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
@@ -475,8 +516,8 @@ describe("database migrations", () => {
       expect(database.prepare("SELECT title, title_source FROM agent_sessions WHERE id = 'session-010'").get()).toEqual({
         title: "Existing conversation", title_source: "manual",
       });
-      expect(database.prepare("SELECT name, conversation_id FROM scheduled_tasks WHERE id = 'task-010'").get()).toEqual({
-        name: "Existing task", conversation_id: "session-010",
+      expect(database.prepare("SELECT name, kind, action FROM scheduled_tasks WHERE id = 'task-010'").get()).toEqual({
+        name: "Existing task", kind: "agent", action: null,
       });
       expect(database.prepare("SELECT status, agent_session_id FROM scheduled_task_runs WHERE id = 'task-run-010'").get()).toEqual({
         status: "completed", agent_session_id: "session-010",
@@ -485,6 +526,342 @@ describe("database migrations", () => {
         status: "paused", cursor: "opaque-cursor", last_run_id: "history-run-010", resume_after: null,
       });
       expect(readFileSync(settingsPath, "utf8")).toBe(settings);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("canonicalizes a populated 013 schema without losing rows, child references, or constraints", () => {
+    const database = createVersion013Database(createDatabasePath());
+
+    try {
+      database.exec(`
+        INSERT INTO repositories (
+          id, key, display_name, github_owner, github_name, local_path,
+          remote_name, default_branch, worktree_slots, enabled, created_at, updated_at
+        ) VALUES (
+          'repo-phase1', 'repo-phase1', 'Phase 1 Repository', 'example', 'phase1',
+          '/workspace/phase1', 'origin', 'main', 2, 1,
+          '2026-09-04T00:00:00.000Z', '2026-09-04T00:00:00.000Z'
+        );
+        INSERT INTO pull_requests (
+          repository_id, node_id, number, title, url, author_login, state_raw,
+          status, is_draft, created_at, updated_at, closed_at, merged_at,
+          base_ref_name, head_ref_name, head_sha, additions, deletions,
+          changed_files_count, detail_body
+        ) VALUES (
+          'repo-phase1', 'phase1-pr-node', 42, 'Phase 1 PR',
+          'https://github.com/example/phase1/pull/42', 'author', 'OPEN',
+          'open', 0, '2026-09-01T00:00:00.000Z', '2026-09-02T00:00:00.000Z',
+          NULL, NULL, 'main', 'feature', 'sha-42', 3, 1, 1, 'body'
+        );
+        INSERT INTO issues (
+          repository_id, node_id, number, title, url, author_login, state,
+          comments_count, created_at, updated_at, closed_at, detail_body
+        ) VALUES (
+          'repo-phase1', 'phase1-issue-node', 7, 'Phase 1 Issue',
+          'https://github.com/example/phase1/issues/7', 'author', 'open', 0,
+          '2026-09-01T00:00:00.000Z', '2026-09-02T00:00:00.000Z', NULL, 'issue'
+        );
+        INSERT INTO knowledge_documents (
+          id, path, title, content_hash, default_session_id, created_at, updated_at
+        ) VALUES (
+          'doc-phase1', 'phase1.md', 'Phase 1', 'hash-phase1', NULL,
+          '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z'
+        );
+        INSERT INTO agent_sessions (
+          id, scope_type, repository_id, pr_number, issue_number, target_sha,
+          knowledge_document_id, dsh_session_id, dsh_home_path, workspace_path,
+          provider, model, reasoning_effort, status, created_at, last_used_at,
+          origin_kind, domain_id, origin_route, title, title_source
+        ) VALUES
+          ('session-pr', 'pr', 'repo-phase1', 42, NULL, 'sha-42', NULL, NULL,
+           '/sessions/session-pr', '/workspace/phase1', 'provider', 'model', 'high',
+           'idle', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z', NULL,
+           NULL, '/pr', 'PR session', 'manual'),
+          ('session-issue', 'issue', 'repo-phase1', NULL, 7, NULL, NULL, NULL,
+           '/sessions/session-issue', '/workspace/phase1', 'provider', 'model', 'high',
+           'idle', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z', NULL,
+           NULL, '/issue', 'Issue session', 'manual'),
+          ('session-knowledge', 'knowledge', NULL, NULL, NULL, NULL, 'doc-phase1', NULL,
+           '/sessions/session-knowledge', '/workspace/phase1', 'provider', 'model', 'high',
+           'idle', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z', NULL,
+           NULL, '/knowledge', 'Knowledge session', 'manual'),
+          ('session-general', 'general', NULL, NULL, NULL, NULL, NULL, NULL,
+           '/sessions/session-general', '/workspace/phase1', 'provider', 'model', 'high',
+           'idle', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z', NULL,
+           NULL, '/general', 'General session', 'manual'),
+          ('session-repository', 'general', 'repo-phase1', NULL, NULL, NULL, NULL, NULL,
+           '/sessions/session-repository', '/workspace/phase1', 'provider', 'model', 'high',
+           'idle', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z', 'repository',
+           NULL, '/repository', 'Repository session', 'manual'),
+          ('session-domain', 'general', 'repo-phase1', NULL, NULL, NULL, NULL, NULL,
+           '/sessions/session-domain', '/workspace/phase1', 'provider', 'model', 'high',
+           'idle', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z', 'domain',
+           'domain-1', '/domain', 'Domain session', 'manual');
+        UPDATE knowledge_documents SET default_session_id = 'session-knowledge'
+        WHERE id = 'doc-phase1';
+        INSERT INTO agent_messages (
+          id, session_id, sequence, role, content_markdown, metadata_json, created_at
+        ) VALUES (
+          'message-phase1', 'session-general', 0, 'user', 'hello', '{}',
+          '2026-09-04T00:00:00.000Z'
+        );
+        INSERT INTO document_versions (
+          id, document_id, version_number, content, source, agent_run_id, created_at
+        ) VALUES (
+          'version-phase1', 'doc-phase1', 1, '# Phase 1', 'manual', NULL,
+          '2026-09-04T00:00:00.000Z'
+        );
+        INSERT INTO scheduled_tasks (
+          id, name, cron_expression, timezone, prompt, workspace_path, provider,
+          model, reasoning_effort, enabled, last_run_at, next_run_at, created_at,
+          updated_at, kind, action, repository_id, conversation_id
+        ) VALUES
+          ('task-agent-phase1', 'Agent task', '0 9 * * *', 'Asia/Shanghai', 'agent prompt',
+           '/workspace/phase1', 'provider', 'model', 'high', 1, NULL,
+           '2026-09-05T01:00:00.000Z', '2026-09-04T00:00:00.000Z',
+           '2026-09-04T00:00:00.000Z', 'agent', NULL, 'repo-phase1', 'session-general'),
+          ('task-repository-phase1', 'Repository task', '0 10 * * *', 'Asia/Shanghai', 'legacy prompt',
+           '/legacy/workspace', 'legacy-provider', 'legacy-model', 'legacy-reasoning', 1, NULL, '2026-09-05T02:00:00.000Z',
+           '2026-09-04T00:00:00.000Z', '2026-09-04T00:00:00.000Z', 'system',
+           'repository-sync', 'repo-phase1', NULL),
+          ('task-knowledge-phase1', 'Knowledge task', '0 11 * * *', 'Asia/Shanghai', '',
+           '', '', '', '', 1, NULL, '2026-09-05T03:00:00.000Z',
+           '2026-09-04T00:00:00.000Z', '2026-09-04T00:00:00.000Z', 'system',
+           'knowledge-checkpoint', 'missing-repository', NULL);
+        INSERT INTO scheduled_task_runs (
+          id, task_id, scheduled_for, started_at, finished_at, status,
+          agent_session_id, conversation_id, error
+        ) VALUES
+          ('run-conversation-only', 'task-agent-phase1', '2026-09-04T09:00:00.000Z',
+           NULL, NULL, 'completed', NULL, 'session-general', NULL),
+          ('run-mismatch', 'task-agent-phase1', '2026-09-04T10:00:00.000Z',
+           NULL, NULL, 'completed', 'session-pr', 'session-issue', NULL),
+          ('run-orphan', 'task-agent-phase1', '2026-09-04T10:30:00.000Z',
+           NULL, NULL, 'completed', NULL, 'missing-conversation', NULL),
+          ('run-system', 'task-repository-phase1', '2026-09-04T11:00:00.000Z',
+           NULL, NULL, 'completed', NULL, NULL, NULL);
+        INSERT INTO worktree_slots (
+          id, repository_id, slot_name, path, pr_number, target_sha,
+          busy_session_id, last_used_at
+        ) VALUES (
+          'slot-phase1', 'repo-phase1', 'slot-01', '/worktrees/phase1/slot-01',
+          42, 'sha-42', 'session-general', '2026-09-04T00:00:00.000Z'
+        );
+      `);
+
+      runMigrations(database);
+
+      const columns = (table: string): string[] =>
+        database
+          .prepare(`PRAGMA table_info(${table})`)
+          .all()
+          .map((row) => (row as { name: string }).name);
+
+      expect(columns("agent_sessions")).toEqual([
+        "id",
+        "origin_kind",
+        "repository_id",
+        "pr_number",
+        "issue_number",
+        "target_sha",
+        "knowledge_document_id",
+        "domain_id",
+        "origin_route",
+        "title",
+        "title_source",
+        "dsh_session_id",
+        "dsh_home_path",
+        "workspace_path",
+        "provider",
+        "model",
+        "reasoning_effort",
+        "status",
+        "created_at",
+        "last_used_at",
+      ]);
+      expect(
+        database
+          .prepare("PRAGMA table_info(agent_sessions)")
+          .all()
+          .find((row) => (row as { name: string }).name === "origin_kind"),
+      ).toEqual(expect.objectContaining({ notnull: 1 }));
+      expect(database.prepare(
+        "SELECT id, origin_kind FROM agent_sessions ORDER BY id",
+      ).all()).toEqual([
+        { id: "session-domain", origin_kind: "domain" },
+        { id: "session-general", origin_kind: "general" },
+        { id: "session-issue", origin_kind: "issue" },
+        { id: "session-knowledge", origin_kind: "knowledge" },
+        { id: "session-pr", origin_kind: "pr" },
+        { id: "session-repository", origin_kind: "repository" },
+      ]);
+      expect(database.prepare(
+        "SELECT default_session_id FROM knowledge_documents WHERE id = 'doc-phase1'",
+      ).get()).toEqual({ default_session_id: "session-knowledge" });
+      expect(database.prepare(
+        "SELECT session_id, content_markdown FROM agent_messages WHERE id = 'message-phase1'",
+      ).get()).toEqual({ session_id: "session-general", content_markdown: "hello" });
+      expect(database.prepare(
+        "SELECT document_id, version_number FROM document_versions WHERE id = 'version-phase1'",
+      ).get()).toEqual({ document_id: "doc-phase1", version_number: 1 });
+
+      expect(columns("scheduled_tasks")).toEqual([
+        "id",
+        "name",
+        "cron_expression",
+        "timezone",
+        "prompt",
+        "workspace_path",
+        "provider",
+        "model",
+        "reasoning_effort",
+        "kind",
+        "action",
+        "repository_id",
+        "enabled",
+        "last_run_at",
+        "next_run_at",
+        "created_at",
+        "updated_at",
+      ]);
+      expect(database.prepare(
+        "SELECT id, prompt, workspace_path, provider, model, reasoning_effort, kind, action, repository_id FROM scheduled_tasks ORDER BY id",
+      ).all()).toEqual([
+        {
+          id: "task-agent-phase1",
+          prompt: "agent prompt",
+          workspace_path: "/workspace/phase1",
+          provider: "provider",
+          model: "model",
+          reasoning_effort: "high",
+          kind: "agent",
+          action: null,
+          repository_id: "repo-phase1",
+        },
+        {
+          id: "task-knowledge-phase1",
+          prompt: null,
+          workspace_path: null,
+          provider: null,
+          model: null,
+          reasoning_effort: null,
+          kind: "system",
+          action: "knowledge.checkpoint",
+          repository_id: null,
+        },
+        {
+          id: "task-repository-phase1",
+          prompt: null,
+          workspace_path: null,
+          provider: null,
+          model: null,
+          reasoning_effort: null,
+          kind: "system",
+          action: "repository.sync",
+          repository_id: "repo-phase1",
+        },
+      ]);
+      expect(columns("scheduled_task_runs")).toEqual([
+        "id",
+        "task_id",
+        "scheduled_for",
+        "started_at",
+        "finished_at",
+        "status",
+        "agent_session_id",
+        "error",
+      ]);
+      expect(database.prepare(
+        "SELECT id, agent_session_id FROM scheduled_task_runs ORDER BY id",
+      ).all()).toEqual([
+        { id: "run-conversation-only", agent_session_id: "session-general" },
+        { id: "run-mismatch", agent_session_id: "session-pr" },
+        { id: "run-orphan", agent_session_id: null },
+        { id: "run-system", agent_session_id: null },
+      ]);
+      expect(columns("worktree_slots")).toEqual([
+        "id",
+        "repository_id",
+        "slot_name",
+        "path",
+        "pr_number",
+        "target_sha",
+        "last_used_at",
+      ]);
+      expect(database.prepare(
+        "SELECT repository_id, slot_name, pr_number, target_sha FROM worktree_slots WHERE id = 'slot-phase1'",
+      ).get()).toEqual({
+        repository_id: "repo-phase1",
+        slot_name: "slot-01",
+        pr_number: 42,
+        target_sha: "sha-42",
+      });
+
+      expect(readIndexColumns(database, "agent_sessions_origin_idx")).toEqual([
+        { name: "origin_kind", descending: 0 },
+        { name: "repository_id", descending: 0 },
+        { name: "last_used_at", descending: 1 },
+      ]);
+      expect(readIndexColumns(database, "scheduled_tasks_next_run_idx")).toEqual([
+        { name: "enabled", descending: 0 },
+        { name: "next_run_at", descending: 0 },
+      ]);
+      expect(readIndexColumns(database, "scheduled_task_runs_task_idx")).toEqual([
+        { name: "task_id", descending: 0 },
+        { name: "scheduled_for", descending: 1 },
+      ]);
+      expect(database.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'scheduled_tasks_conversation_idx'",
+      ).get()).toBeUndefined();
+      expect(database.pragma("foreign_key_check")).toEqual([]);
+
+      const insertTask = database.prepare(`
+        INSERT INTO scheduled_tasks (
+          id, name, cron_expression, timezone, prompt, workspace_path, provider,
+          model, reasoning_effort, kind, action, repository_id, enabled,
+          created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      expect(() => insertTask.run(
+        "invalid-agent-task", "Invalid agent", "* * * * *", "UTC", null,
+        "/workspace", "provider", "model", "high", "agent", null, null, 1,
+        "2026-09-04T00:00:00.000Z", "2026-09-04T00:00:00.000Z",
+      )).toThrow();
+      expect(() => insertTask.run(
+        "invalid-system-task", "Invalid system", "* * * * *", "UTC", null,
+        null, null, null, null, "system", null, null, 1,
+        "2026-09-04T00:00:00.000Z", "2026-09-04T00:00:00.000Z",
+      )).toThrow();
+    } finally {
+      database.close();
+    }
+  });
+
+  it("fails migration with task ids when repository-scoped tasks are unbound", () => {
+    const database = createVersion013Database(createDatabasePath());
+
+    try {
+      database.exec(`
+        INSERT INTO scheduled_tasks (
+          id, name, cron_expression, timezone, prompt, workspace_path,
+          provider, model, reasoning_effort, enabled, created_at, updated_at,
+          kind, action, repository_id
+        ) VALUES
+          ('task-missing-repository', 'Missing repository', '* * * * *', 'UTC',
+           'prompt', '/workspace', 'provider', 'model', 'high', 0,
+           '2026-09-04T00:00:00.000Z', '2026-09-04T00:00:00.000Z',
+           'system', 'repository.sync', NULL),
+          ('task-orphan-repository', 'Orphan repository', '* * * * *', 'UTC',
+           'prompt', '/workspace', 'provider', 'model', 'high', 0,
+           '2026-09-04T00:00:00.000Z', '2026-09-04T00:00:00.000Z',
+           'system', 'repository.worktrees.cleanup', 'missing-repository');
+      `);
+
+      expect(() => runMigrations(database)).toThrow(
+        /repository_id.*task-missing-repository.*task-orphan-repository/,
+      );
     } finally {
       database.close();
     }
@@ -688,7 +1065,7 @@ describe("database migrations", () => {
         .run();
       const issueSession = {
         id: "issue-session-42",
-        scopeType: "issue" as const,
+        originKind: "issue" as const,
         repositoryId: "repo-issue",
         issueNumber: 42,
         dshHomePath: "/workspace/.loong/sessions/issue-session-42",

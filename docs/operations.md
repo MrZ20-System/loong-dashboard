@@ -62,7 +62,7 @@ SIGINT/SIGTERM 触发服务的有序退出。服务启动会把数据库中上�
 
 ### GitHub history 与 Merged 验收边界
 
-数据库启动会执行有序迁移至 013；010 删除旧 Daily/lifecycle/逐日 coverage 表并建立 Merged partial index，011 持久化 History rate-limit recovery，012 增加 metadata retention/maintenance runs，013 增加 Agent title source。History 保留每个实体的 cursor、recovery anchor、target date、最老 metadata 覆盖边界和 `resume_after`。非空 cursor 续跑不会重新套用 anchor cutoff，只有明确的 GitHub invalid/expired cursor 才进行一次 anchor-overlap 恢复；未知 GraphQL 错误应使本次 history 失败并保留原状态。History 是低优先级 admission，forward、`fetch_pr` 和 metadata maintenance 的 batch boundary 必须保留可用容量。
+数据库启动会执行有序迁移至 014；010 删除旧 Daily/lifecycle/逐日 coverage 表并建立 Merged partial index，011 持久化 History rate-limit recovery，012 增加 metadata retention/maintenance runs，013 增加 Agent title source，014 canonicalize Scheduler task/run、Agent session origin_kind 与 Worktree slot。History 保留每个实体的 cursor、recovery anchor、target date、最老 metadata 覆盖边界和 `resume_after`。非空 cursor 续跑不会重新套用 anchor cutoff，只有明确的 GitHub invalid/expired cursor 才进行一次 anchor-overlap 恢复；未知 GraphQL 错误应使本次 history 失败并保留原状态。History 是低优先级 admission，forward、`fetch_pr` 和 metadata maintenance 的 batch boundary 必须保留可用容量。
 
 单个 History run 仍有页预算并可显示 `partial`；这不是 2000 条总上限。只要 enabled、cursor 未结束且未触发 pause/error/rate-limit floor，Coordinator 会以新 run 继续，重启后也从持久 cursor/anchor 恢复。History 只 upsert metadata，不请求 lifecycle timeline、不构造 Daily Snapshot，也不对整批历史 PR 立即补 changed files。
 
@@ -82,7 +82,7 @@ SIGINT/SIGTERM 触发服务的有序退出。服务启动会把数据库中上�
 | GitHub 显示未配置 | Settings 的 credential source、`gh auth status`、环境变量和私有 credential 文件权限；不要打印 token |
 | 计划未执行 | enabled、timezone、nextRunAt、workspace busy、服务是否在线 |
 
-Repository metadata sync、metadata maintenance、Knowledge checkpoint、Knowledge push、Code backup 和 Agent Archive 共享 Scheduler。system task action 包括 `repository.sync`、`repository.metadata-maintenance`、`knowledge.checkpoint`、`knowledge.push`、`git.checkpoint`、`git.push`、`agent.archive.checkpoint`、`agent.archive.push`；调整 Settings 中的开关或频率会更新同一条持久任务，重启不会根据旧的 `settings.json` 重新启用已禁用任务。System task 不占用 Agent workspace lock；真正的同步、metadata maintenance、Knowledge 或 Archive subsystem 负责自己的资源协调。Agent scheduled task 每次 run 都新建独立 conversation，run history 保存 conversationId，可继续打开旧 run；旧 conversation 的人工模型修改不影响下一次 run。Runtime sync history 的 purge 策略固定为 30 天 cutoff + 保留最新 100 条，并保护 queued/running 和当前引用；它与 metadata archive 分开。Archive export checkpoint 只读取 normalized allowlist 并对现有 Git 仓库提交，Archive push 只执行显式 refspec；两者失败均保留 Scheduler history，不自动初始化或合并远端。
+Repository metadata sync、metadata maintenance、Knowledge checkpoint、Knowledge push、Code backup 和 Agent Archive 共享 Scheduler。system task action 包括 `repository.sync`、`repository.metadata-maintenance`、`knowledge.checkpoint`、`knowledge.push`、`git.checkpoint`、`git.push`、`agent.archive.checkpoint`、`agent.archive.push`；调整 Settings 中的开关或频率会更新同一条持久任务，重启不会根据旧的 `settings.json` 重新启用已禁用任务。System task 不占用 Agent workspace lock；真正的同步、metadata maintenance、Knowledge 或 Archive subsystem 负责自己的资源协调。Agent scheduled task 每次 run 都新建独立 session，run history 保存 `agentSessionId`，可继续打开旧 run；旧 session 的人工模型修改不影响下一次 run。Runtime sync history 的 purge 策略固定为 30 天 cutoff + 保留最新 100 条，并保护 queued/running 和当前引用；它与 metadata archive 分开。Archive export checkpoint 只读取 normalized allowlist 并对现有 Git 仓库提交，Archive push 只执行显式 refspec；两者失败均保留 Scheduler history，不自动初始化或合并远端。
 
 ## 本地密码锁
 

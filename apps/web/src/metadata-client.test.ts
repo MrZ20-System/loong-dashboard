@@ -49,14 +49,14 @@ describe("metadata client", () => {
   it("uses the shared query/status schemas while ignoring invalid URL filters", () => {
     const params = new URLSearchParams("date=2026-02-29&status=unknown");
     expect(readMetadataFilters("pulls", params)).toEqual({ from: null, to: null, status: null, search: "", domains: [] });
-    expect(readMetadataFilters("issues", new URLSearchParams("date=2026-09-03&status=closed"))).toEqual({ from: "2026-09-03", to: "2026-09-03", status: "closed", search: "", domains: [] });
+    expect(readMetadataFilters("issues", new URLSearchParams("date=2026-09-03&status=closed"))).toEqual({ from: null, to: null, status: "closed", search: "", domains: [] });
     const domainParams = new URLSearchParams("from=2026-09-03&to=2026-09-10&domain=dom_a&domain=dom_b&domain=");
     expect(readMetadataFilters("pulls", domainParams)).toEqual({ from: "2026-09-03", to: "2026-09-10", status: null, search: "", domains: ["dom_a", "dom_b"] });
     expect(buildListUrl("repo", "pulls", { domains: ["dom_a", "dom_b"] })).toBe("/api/repositories/repo/pulls?domain=dom_a&domain=dom_b");
   });
 
-  it("canonicalizes legacy date URLs and rejects reversed ranges", () => {
-    expect(readDateRange(new URLSearchParams("date=2026-09-03"), { from: "2026-09-01", to: "2026-09-30" })).toEqual({ from: "2026-09-03", to: "2026-09-03" });
+  it("ignores legacy date URLs and rejects reversed ranges", () => {
+    expect(readDateRange(new URLSearchParams("date=2026-09-03"), { from: "2026-09-01", to: "2026-09-30" })).toEqual({ from: "2026-09-01", to: "2026-09-30" });
     expect(readDateRange(new URLSearchParams("from=2026-09-10&to=2026-09-03"), { from: "2026-09-01", to: "2026-09-30" })).toEqual({ from: "2026-09-01", to: "2026-09-30" });
   });
 

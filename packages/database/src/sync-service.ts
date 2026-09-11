@@ -764,59 +764,6 @@ export function startSyncStream(
   return requireSyncState(database, input.repositoryId, input.entityKind);
 }
 
-/**
- * Start the two metadata streams as one repository sync. The transaction
- * makes the overlap check and both running transitions atomic.
- */
-export function startRepositorySync(
-  database: DatabaseClient,
-  repositoryId: string,
-  attemptStartedAt?: Date | string,
-  trigger: SyncRunTrigger = "manual",
-): SyncRun {
-  const startedAt = timestamp(attemptStartedAt);
-  requireRepository(database, repositoryId);
-  const syncRunId = randomUUID();
-
-  database.transaction(() => {
-    insertMissingSyncRows(database, repositoryId);
-    const running = database
-      .prepare(
-        `SELECT 1 FROM repository_sync_state
-         WHERE repository_id = ? AND status = 'running' LIMIT 1`,
-      )
-      .get(repositoryId);
-    if (running !== undefined) throw new SyncAlreadyRunningError(repositoryId);
-
-    database
-      .prepare(
-        `UPDATE repository_sync_state SET
-          status = 'running', last_attempt_at = ?, last_error = NULL
-         WHERE repository_id = ? AND entity_kind IN ('pull_request', 'issue')`,
-      )
-      .run(startedAt, repositoryId);
-
-    database
-      .prepare(
-        `INSERT INTO repository_sync_runs
-           (id, repository_id, kind, trigger, status, requested_at, started_at)
-         VALUES (?, ?, 'forward', ?, 'queued', ?, ?)` ,
-      )
-      .run(syncRunId, repositoryId, trigger, startedAt, startedAt);
-    const insertStream = database.prepare(
-      `INSERT INTO repository_sync_run_streams
-         (run_id, entity_kind, status, watermark_before)
-       VALUES (?, ?, 'queued', ?)`,
-    );
-    for (const entityKind of ENTITY_KINDS) {
-      const state = requireSyncState(database, repositoryId, entityKind);
-      insertStream.run(syncRunId, entityKind, state.watermarkUpdatedAt);
-    }
-  })();
-
-  return { repositoryId, syncRunId, startedAt };
-}
-
 export interface CompleteStreamInput extends SyncStreamUpdate {
   repositoryId: string;
   entityKind: EntityKind;

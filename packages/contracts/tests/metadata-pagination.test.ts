@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  decodeUpdatedCursor,
+  encodeUpdatedCursor,
   mergedPullRequestsQuerySchema,
   mergedPullRequestsResponseSchema,
+  issuesQuerySchema,
   pullRequestsQuerySchema,
   pullRequestsResponseSchema,
 } from "../src/index.js";
@@ -47,6 +50,30 @@ describe("metadata page pagination contracts", () => {
     expect(pullRequestsQuerySchema.safeParse({ page: "9007199254740992" }).success).toBe(false);
     expect(mergedPullRequestsQuerySchema.safeParse({ page: "9007199254740993" }).success).toBe(false);
     expect(mergedPullRequestsQuerySchema.safeParse({ cursor: "legacy" }).success).toBe(false);
+    expect(pullRequestsQuerySchema.safeParse({ date: "2026-09-03" }).success).toBe(false);
+    expect(issuesQuerySchema.safeParse({ date: "2026-09-03" }).success).toBe(false);
+  });
+
+  it("accepts canonical Issue date ranges without page controls", () => {
+    expect(issuesQuerySchema.parse({ from: "2026-09-01", to: "2026-09-03", limit: "25" })).toEqual({
+      from: "2026-09-01",
+      to: "2026-09-03",
+      limit: 25,
+    });
+  });
+
+  it("uses one updated cursor payload and rejects legacy sort payloads", () => {
+    const cursor = encodeUpdatedCursor({ updatedAt: "2026-09-10T00:00:00.000Z", number: 7 });
+    expect(decodeUpdatedCursor(cursor)).toEqual({
+      updatedAt: "2026-09-10T00:00:00.000Z",
+      number: 7,
+    });
+    const legacy = btoa(JSON.stringify({
+      version: 1,
+      sort: "number",
+      number: 7,
+    })).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "");
+    expect(() => decodeUpdatedCursor(legacy)).toThrow("Invalid list cursor");
   });
 
   it("requires page metadata in PR and Merged responses", () => {

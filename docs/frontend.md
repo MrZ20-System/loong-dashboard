@@ -55,6 +55,6 @@ Repository Settings 的 Worktrees 区域维护每 repository 的 maximum slots�
 
 Domains 页面提供 Rendered、JSON Source 和 Agent Update 三种视角。JSON 保存前只做必要的 JSON 解析校验并 pretty format，成功后刷新 rendered projection；解析失败时保留错误提示和最后有效投影。更新 prompt 存在可编辑 Markdown 文件中，Agent Update 通过同一个持久 Agent conversation 继续编辑 Domain JSON。
 
-Schedules 页面统一展示 Agent 和 system 任务的启用状态、next/last run、运行历史、Run now、编辑和删除。Agent 任务返回的 conversation ID 可直接跳到全局 Agent 页面继续对话；system 任务显示对应 action。
+Schedules 页面统一展示 Agent 和 system 任务的启用状态、next/last run、运行历史、Run now、编辑和删除。Agent 运行历史中的 `agentSessionId` 可直接跳到全局 Agent 页面继续对话；system 任务显示对应 action。
 
 共享样式在 [styles.css](../apps/web/src/styles.css)，PR 样式在 `components/pr/*.css`。全局 hover 保留颜色、背景和 focus 反馈，不给内部字符增加下划线。日常行为用相邻组件 UT 检查；视觉改动需在真实页面验收，构建通过不能证明布局正确。

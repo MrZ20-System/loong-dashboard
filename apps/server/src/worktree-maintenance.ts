@@ -44,7 +44,7 @@ export interface WorktreeMaintenanceServiceOptions {
   readonly database: DatabaseClient;
   readonly worktreesPath: string;
   readonly policyResolver: WorktreePolicyResolver;
-  /** In-process ownership from WorkspaceRunCoordinator, not busy_session_id. */
+  /** In-process ownership from WorkspaceRunCoordinator and running sessions. */
   readonly liveBusyWorkspacePaths?: (repositoryId: string) => readonly string[];
   readonly worktreePool?: WorktreePool;
 }

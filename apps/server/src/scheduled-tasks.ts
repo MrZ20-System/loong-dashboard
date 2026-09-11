@@ -16,6 +16,7 @@ import {
   scheduledTaskSchema,
   scheduledTasksResponseSchema,
   scheduledTaskUpdateSchema,
+  scheduledActionRequiresRepository,
   type ScheduledTaskCreate,
   type ScheduledTaskUpdate,
 } from "@loongboard/contracts";
@@ -43,6 +44,15 @@ function requireSupportedSystemAction(action: string | undefined): void {
   }
   if (!(SUPPORTED_SYSTEM_ACTIONS as readonly string[]).includes(action)) {
     throw new InvalidRequestError(`Unsupported system scheduled action: ${action}`);
+  }
+}
+
+function requireRepositoryForSystemAction(
+  action: string | null | undefined,
+  repositoryId: string | null | undefined,
+): void {
+  if (scheduledActionRequiresRepository(action) && !repositoryId) {
+    throw new InvalidRequestError(`System action ${action} requires a repositoryId`);
   }
 }
 
@@ -74,7 +84,6 @@ export function taskInput(
     kind: body.kind ?? existing?.kind ?? "agent",
     action: body.action ?? existing?.action ?? null,
     repositoryId: body.repositoryId ?? existing?.repositoryId ?? null,
-    conversationId: body.conversationId ?? existing?.conversationId ?? null,
     enabled: body.enabled ?? existing?.enabled ?? true,
   };
 }
@@ -94,6 +103,7 @@ export function registerScheduledTaskRoutes(
     const body = parseRequest(scheduledTaskCreateSchema, request.body);
     if (body.kind === "system") requireSupportedSystemAction(body.action);
     const input = taskInput(body, defaults);
+    requireRepositoryForSystemAction(input.action, input.repositoryId);
     const task = createScheduledTask(database, input);
     const scheduled = engine.refresh(task.id);
     return sendParsed(reply, 201, scheduledTaskSchema, scheduled);
@@ -110,6 +120,7 @@ export function registerScheduledTaskRoutes(
     }
     const existing = requireScheduledTask(database, id);
     const input = taskInput(body as ScheduledTaskCreate, defaults, existing);
+    requireRepositoryForSystemAction(input.action, input.repositoryId);
     const nextRun =
       body.enabled === undefined || body.enabled
         ? input.nextRunAt

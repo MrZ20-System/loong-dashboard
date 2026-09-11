@@ -25,7 +25,7 @@
 | `/knowledge/tree`、`/assets` | GET 树和图片资产 | [knowledge](../packages/contracts/src/knowledge.ts) / [knowledge route](../apps/server/src/knowledge.ts) |
 | `/knowledge/documents`、`/:id` | GET、POST 集合创建、PUT 保存、DELETE 单项 | knowledge / knowledge route |
 | `/knowledge/documents/:id/move`、`/versions`、`/versions/:versionId/restore`、`/chat` | POST 移动、GET 历史、POST 恢复/默认聊天 | knowledge / knowledge route |
-| `/scheduled-tasks`、`/:id`、`/:id/run`、`/:id/runs` | GET/POST 集合，PUT/DELETE 单项，POST 运行，GET 历史 | [scheduler](../packages/contracts/src/scheduler.ts) / [scheduled-tasks](../apps/server/src/scheduled-tasks.ts) |
+| `/scheduled-tasks`、`/:id`、`/:id/run`、`/:id/runs` | GET/POST 集合，PUT/DELETE 单项，POST 运行，GET 历史；run 只通过 `agentSessionId` 关联 Agent session | [scheduler](../packages/contracts/src/scheduler.ts) / [scheduled-tasks](../apps/server/src/scheduled-tasks.ts) |
 
 控制中心新增以下路径，精确字段由 [settings contracts](../packages/contracts/src/settings.ts) 与模块路由定义：
 

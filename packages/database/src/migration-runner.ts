@@ -13,6 +13,7 @@ import { removeDailyProjectionsMigration } from "./migrations/010-remove-daily-p
 import { historyRateLimitRecoveryMigration } from "./migrations/011-history-rate-limit-recovery.js";
 import { metadataRetentionMigration } from "./migrations/012-metadata-retention.js";
 import { agentSessionTitleSourceMigration } from "./migrations/013-agent-session-title-source.js";
+import { phase1SchemaCanonicalizationMigration } from "./migrations/014-phase1-schema-canonicalization.js";
 import {
   recoverInterruptedSyncRuns,
   recoverInterruptedSyncStates,
@@ -37,6 +38,7 @@ const migrations: readonly Migration[] = [
   historyRateLimitRecoveryMigration,
   metadataRetentionMigration,
   agentSessionTitleSourceMigration,
+  phase1SchemaCanonicalizationMigration,
 ];
 
 function orderedMigrations(items: readonly Migration[]): readonly Migration[] {

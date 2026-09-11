@@ -255,7 +255,6 @@ export const agentParamsSchema = z.object({
  */
 export const agentSessionsQuerySchema = z
   .object({
-    scopeType: agentScopeKindSchema.optional(),
     originKind: agentOriginKindSchema.optional(),
     repositoryId: z.string().trim().min(1).optional(),
     prNumber: z.preprocess(
