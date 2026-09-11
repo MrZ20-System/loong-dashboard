@@ -20,6 +20,8 @@ import { AgentChatPanel } from "../../agent-chat";
 import { ensureAgentSession, sendAgentMessage } from "../../agent-chat-client";
 import { useAgentSessionSelection } from "../agent/agent-session-context";
 import { SettingsSwitch } from "./SettingsSwitch";
+import { useI18n, type LocalizedMessage, type MessageValues } from "../../i18n";
+import { DOMAIN_UPDATE_PROMPT } from "./domain-prompts";
 
 const defaultDomainColor = "#5b8def";
 
@@ -30,6 +32,8 @@ type DomainFormState = {
   exclude: string;
   enabled: boolean;
 };
+
+type Feedback = { message: LocalizedMessage; values?: MessageValues; tone: "alert" | "status" };
 
 const emptyDomainForm: DomainFormState = {
   name: "",
@@ -57,6 +61,7 @@ function parsePatterns(text: string): string[] {
 }
 
 export function DomainsSettingsPage() {
+  const { t, formatDateTime, formatNumber } = useI18n();
   const client = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
   const repositories = useRepositories();
@@ -65,7 +70,11 @@ export function DomainsSettingsPage() {
   const domains = useDomains(repositoryId);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<DomainFormState>(emptyDomainForm);
-  const [message, setMessage] = useState<string | null>(null);
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
+  const setMessage = (message: LocalizedMessage | null, values?: MessageValues, tone: "alert" | "status" = "status") => {
+    setFeedback(message === null ? null : { message, values, tone });
+  };
+  const message = feedback === null ? null : t(feedback.message, feedback.values);
   const [view, setView] = useState<"rendered" | "json" | "agent">("rendered");
   const [jsonText, setJsonText] = useState("");
   const [promptText, setPromptText] = useState("");
@@ -90,9 +99,9 @@ export function DomainsSettingsPage() {
     mutationFn: () => {
       const includePatterns = parsePatterns(form.include);
       const excludePatterns = parsePatterns(form.exclude);
-      if (form.name.trim().length === 0) throw new Error("Rule name is required.");
+      if (form.name.trim().length === 0) throw new Error(t({ en: "Rule name is required.", "zh-CN": "规则名称为必填项。" }));
       if (includePatterns.length === 0)
-        throw new Error("At least one include pattern is required.");
+        throw new Error(t({ en: "At least one include pattern is required.", "zh-CN": "至少需要一个包含模式。" }));
       const body = {
         name: form.name,
         color: form.color,
@@ -106,18 +115,19 @@ export function DomainsSettingsPage() {
     },
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: ["domains", repositoryId] });
-      setMessage(editingId === null ? "Rule created." : "Rule updated.");
+      setMessage(editingId === null ? { en: "Rule created.", "zh-CN": "规则已创建。" } : { en: "Rule updated.", "zh-CN": "规则已更新。" });
       resetForm();
     },
-    onError: (error: Error) => setMessage(`Save failed: ${error.message}`),
+    onError: (error: Error) => setMessage({ en: "Save failed: {detail}", "zh-CN": "保存失败：{detail}" }, { detail: error.message }, "alert"),
   });
   const remove = useMutation({
     mutationFn: (rule: DomainRule) => deleteDomainRule(repositoryId, rule.id),
     onSuccess: () => {
       void client.invalidateQueries({ queryKey: ["domains", repositoryId] });
       if (editingId !== null) resetForm();
+      setMessage({ en: "Rule deleted.", "zh-CN": "规则已删除。" });
     },
-    onError: (error: Error) => setMessage(`Delete failed: ${error.message}`),
+    onError: (error: Error) => setMessage({ en: "Delete failed: {detail}", "zh-CN": "删除失败：{detail}" }, { detail: error.message }, "alert"),
   });
   const selectRepository = (id: string) => {
     const next = new URLSearchParams(searchParams);
@@ -129,21 +139,21 @@ export function DomainsSettingsPage() {
   const saveJson = useMutation({
     mutationFn: () => {
       let parsed: unknown;
-      try { parsed = JSON.parse(jsonText) as unknown; } catch { throw new Error("Domain JSON is invalid. Fix the syntax before saving."); }
+      try { parsed = JSON.parse(jsonText) as unknown; } catch { throw new Error(t({ en: "Domain JSON is invalid. Fix the syntax before saving.", "zh-CN": "领域 JSON 无效。请修复语法后再保存。" })); }
       return saveDomainSource(repositoryId, JSON.stringify(parsed, null, 2));
     },
-    onSuccess: (saved) => { setJsonText(saved.content); setMessage("Domain JSON saved and rendered data will refresh."); void client.invalidateQueries({ queryKey: ["domains", repositoryId] }); void client.invalidateQueries({ queryKey: ["domain-source", repositoryId] }); },
-    onError: (error: Error) => setMessage(`Save failed: ${error.message}`),
+    onSuccess: (saved) => { setJsonText(saved.content); setMessage({ en: "Domain JSON saved and rendered data will refresh.", "zh-CN": "领域 JSON 已保存，渲染数据将刷新。" }); void client.invalidateQueries({ queryKey: ["domains", repositoryId] }); void client.invalidateQueries({ queryKey: ["domain-source", repositoryId] }); },
+    onError: (error: Error) => setMessage({ en: "Save failed: {detail}", "zh-CN": "保存失败：{detail}" }, { detail: error.message }, "alert"),
   });
   const restoreJson = useMutation({
     mutationFn: (versionId: string) => restoreDomainSourceVersion(repositoryId, versionId),
-    onSuccess: (saved) => { setJsonText(saved.content); setMessage("Domain JSON version restored."); void client.invalidateQueries({ queryKey: ["domains", repositoryId] }); void client.invalidateQueries({ queryKey: ["domain-source", repositoryId] }); void client.invalidateQueries({ queryKey: ["domain-source-versions", repositoryId] }); },
-    onError: (error: Error) => setMessage(`Restore failed: ${error.message}`),
+    onSuccess: (saved) => { setJsonText(saved.content); setMessage({ en: "Domain JSON version restored.", "zh-CN": "领域 JSON 版本已恢复。" }); void client.invalidateQueries({ queryKey: ["domains", repositoryId] }); void client.invalidateQueries({ queryKey: ["domain-source", repositoryId] }); void client.invalidateQueries({ queryKey: ["domain-source-versions", repositoryId] }); },
+    onError: (error: Error) => setMessage({ en: "Restore failed: {detail}", "zh-CN": "恢复失败：{detail}" }, { detail: error.message }, "alert"),
   });
-  const savePrompt = useMutation({ mutationFn: () => saveDomainPrompt(repositoryId, promptText), onSuccess: (saved) => { setPromptText(saved.content); setMessage("Update prompt saved."); void client.invalidateQueries({ queryKey: ["domain-prompt", repositoryId] }); }, onError: (error: Error) => setMessage(`Save failed: ${error.message}`) });
+  const savePrompt = useMutation({ mutationFn: () => saveDomainPrompt(repositoryId, promptText), onSuccess: (saved) => { setPromptText(saved.content); setMessage({ en: "Update prompt saved.", "zh-CN": "更新提示词已保存。" }); void client.invalidateQueries({ queryKey: ["domain-prompt", repositoryId] }); }, onError: (error: Error) => setMessage({ en: "Save failed: {detail}", "zh-CN": "保存失败：{detail}" }, { detail: error.message }, "alert") });
   const usePrompt = useMutation({
     mutationFn: async () => {
-      if (repositoryId.length === 0) throw new Error("Choose a repository before opening Agent.");
+      if (repositoryId.length === 0) throw new Error(t({ en: "Choose a repository before opening Agent.", "zh-CN": "打开智能代理前请选择仓库。" }));
       const saved = await saveDomainPrompt(repositoryId, promptText);
       let sessionId = domainSelection.sessionId;
       if (sessionId === undefined) {
@@ -153,36 +163,47 @@ export function DomainsSettingsPage() {
       }
       const repository = repositories.data?.items.find((item) => item.id === repositoryId);
       const filePath = source.data?.path ?? `domains/${repositoryId}.json`;
-      const context = `Domain update context\nRepository: ${repository?.displayName ?? repositoryId} (${repositoryId})\nLocal repository path: ${repository?.localPath ?? "available from the workspace"}\nDomain JSON file: ${filePath}\n\nSaved update prompt:\n`;
+      const context = `${t({ en: "Domain update context", "zh-CN": "领域更新上下文" })}\n${t({ en: "Repository:", "zh-CN": "仓库：" })} ${repository?.displayName ?? repositoryId} (${repositoryId})\n${t({ en: "Local repository path:", "zh-CN": "本地仓库路径：" })} ${repository?.localPath ?? t({ en: "available from the workspace", "zh-CN": "可从工作区获取" })}\n${t({ en: "Domain JSON file:", "zh-CN": "领域 JSON 文件：" })} ${filePath}\n\n${t({ en: "Saved update prompt:", "zh-CN": "已保存的更新提示词：" })}\n`;
       await sendAgentMessage(sessionId, `${context}${saved.content}`);
       return { sessionId, content: saved.content };
     },
-    onSuccess: ({ sessionId, content }) => { setPromptText(content); setMessage("Prompt sent to the persistent Agent conversation."); void client.invalidateQueries({ queryKey: ["domain-prompt", repositoryId] }); void client.invalidateQueries({ queryKey: ["agent-messages", sessionId] }); },
-    onError: (error: Error) => setMessage(`Agent update failed: ${error.message}`),
+    onSuccess: ({ sessionId, content }) => { setPromptText(content); setMessage({ en: "Prompt sent to the persistent Agent conversation.", "zh-CN": "提示词已发送到持久智能代理对话。" }); void client.invalidateQueries({ queryKey: ["domain-prompt", repositoryId] }); void client.invalidateQueries({ queryKey: ["agent-messages", sessionId] }); },
+    onError: (error: Error) => setMessage({ en: "Agent update failed: {detail}", "zh-CN": "智能代理更新失败：{detail}" }, { detail: error.message }, "alert"),
   });
+  const applyBuiltinPrompt = (language: "en" | "zh-CN") => {
+    const sourcePrompt = prompt.data?.content ?? "";
+    const hasUnsavedDraft = promptText.length > 0 && promptText !== sourcePrompt;
+    const languageLabel = language === "en" ? t({ en: "English", "zh-CN": "英文" }) : t({ en: "Chinese", "zh-CN": "中文" });
+    if (hasUnsavedDraft && !window.confirm(t({
+      en: `Replace the current unsaved prompt with the ${languageLabel} built-in template?`,
+      "zh-CN": `要用${languageLabel}内置模板替换当前未保存的提示词吗？`,
+    }))) return;
+    setPromptText(DOMAIN_UPDATE_PROMPT[language]);
+    setMessage({ en: "Built-in template loaded into the draft.", "zh-CN": "内置模板已载入草稿。" });
+  };
   useEffect(() => { if (source.data !== undefined) setJsonText(source.data.content); }, [source.data]);
   useEffect(() => { if (prompt.data !== undefined) setPromptText(prompt.data.content); }, [prompt.data]);
-  if (repositories.isPending) return <p role="status">Loading repositories…</p>;
+  if (repositories.isPending) return <p role="status">{t({ en: "Loading repositories…", "zh-CN": "正在加载仓库…" })}</p>;
   if (repositories.isError)
-    return <p role="alert">Unable to load repositories: {repositories.error.message}</p>;
+    return <p role="alert">{t({ en: "Unable to load repositories:", "zh-CN": "无法加载仓库：" })} {repositories.error.message}</p>;
   if (repositories.data.items.length === 0)
-    return <p role="status">No configured repositories.</p>;
+    return <p role="status">{t({ en: "No configured repositories.", "zh-CN": "没有已配置的仓库。" })}</p>;
   return (
     <section className="domain-settings plain-page" aria-labelledby="domains-heading">
       <div className="page-heading">
         <div>
-          <p className="eyebrow">Configuration</p>
-          <h2 id="domains-heading">Domain rules</h2>
+          <p className="eyebrow">{t({ en: "Configuration", "zh-CN": "配置" })}</p>
+          <h2 id="domains-heading">{t({ en: "Domain rules", "zh-CN": "领域规则" })}</h2>
         </div>
         <Link className="text-link" to="/">
-          Change repository
+          {t({ en: "Change repository", "zh-CN": "切换仓库" })}
         </Link>
       </div>
       <div className="domain-settings-toolbar">
         <label className="repository-selector">
-          Repository
+          {t({ en: "Repository", "zh-CN": "仓库" })}
           <select
-            aria-label="Rule repository"
+            aria-label={t({ en: "Rule repository", "zh-CN": "规则仓库" })}
             value={repositoryId}
             onChange={(event) => selectRepository(event.target.value)}
           >
@@ -195,20 +216,20 @@ export function DomainsSettingsPage() {
         </label>
         {reclassification?.running && (
           <p role="status" className="reclassify-hint">
-            重新分类中… (pending: {reclassification.pendingCount ?? 0})
+            {t({ en: "Reclassifying…", "zh-CN": "重新分类中…" })} ({t({ en: "pending", "zh-CN": "待处理" })}: {formatNumber(reclassification.pendingCount ?? 0)})
           </p>
         )}
       </div>
-      <div className="domain-view-tabs" role="tablist" aria-label="Domain views">
-        {([ ["rendered", "Rendered"], ["json", "JSON source"], ["agent", "Agent update"] ] as const).map(([key, label]) => <button key={key} type="button" role="tab" aria-selected={view === key} className={view === key ? "domain-view-tab active" : "domain-view-tab"} onClick={() => { setView(key); setMessage(null); }}>{label}</button>)}
+      <div className="domain-view-tabs" role="tablist" aria-label={t({ en: "Domain views", "zh-CN": "领域视图" })}>
+        {([ ["rendered", { en: "Rendered", "zh-CN": "渲染结果" }], ["json", { en: "JSON source", "zh-CN": "JSON 源文件" }], ["agent", { en: "Agent update", "zh-CN": "智能代理更新" }] ] as const).map(([key, label]) => <button key={key} type="button" role="tab" aria-selected={view === key} className={view === key ? "domain-view-tab active" : "domain-view-tab"} onClick={() => { setView(key); setMessage(null); }}>{t(label)}</button>)}
       </div>
-      {view === "json" && <section className="domain-source-editor" aria-label="Domain JSON source"><div className="domain-source-editor__header"><div><h3>JSON source</h3><p>Edit the file directly. Save validates and pretty formats JSON.</p></div><span>{source.data?.path ?? "Loading source…"}{source.data?.version !== undefined && source.data.version !== null ? ` · v${source.data.version}` : ""}{source.data?.hash ? ` · ${source.data.hash.slice(0, 10)}` : ""}</span></div>{source.isError && <p role="alert">{source.error.message}</p>}{source.data?.parseError && <p role="alert">This source file is readable but invalid: {source.data.parseError}. Repair it below; the last valid rendered projection remains active.</p>}<textarea aria-label="Domain JSON" value={jsonText} onChange={(event) => setJsonText(event.target.value)} rows={22} placeholder="{\n  &quot;domains&quot;: []\n}" /><div className="domain-form-actions"><button type="button" className="button-primary" onClick={() => saveJson.mutate()} disabled={saveJson.isPending || source.isPending}>{saveJson.isPending ? "Saving…" : "Save JSON"}</button><button type="button" onClick={() => setJsonText(source.data?.content ?? "")}>Reload</button></div><details className="domain-version-history"><summary>Version history</summary>{sourceVersions.isPending && <p role="status">Loading versions…</p>}{sourceVersions.isError && <p role="alert">{sourceVersions.error.message}</p>}{sourceVersions.data?.items.length === 0 && <p role="status">No saved versions.</p>}<ul>{sourceVersions.data?.items.slice().reverse().map((version) => <li key={version.id}><span>v{version.version} · {version.source} · {new Date(version.createdAt).toLocaleString()}</span><button type="button" onClick={() => { if (window.confirm(`Restore domain JSON version ${version.version}?`)) restoreJson.mutate(version.id); }} disabled={restoreJson.isPending}>Restore</button></li>)}</ul></details>{message && <p role={message.startsWith("Save failed") || message.startsWith("Restore failed") ? "alert" : "status"}>{message}</p>}</section>}
-      {view === "agent" && <section className="domain-agent-editor" aria-label="Agent domain update"><div className="domain-source-editor__header"><div><h3>Agent update</h3><p>Save the prompt and send it to a persistent conversation. The Agent can edit this JSON file and you can continue the same session.</p></div><span>{prompt.data?.path ?? "Loading prompt…"}{prompt.data?.version !== undefined && prompt.data.version !== null ? ` · v${prompt.data.version}` : ""}{prompt.data?.hash ? ` · ${prompt.data.hash.slice(0, 10)}` : ""}</span></div>{prompt.isError && <p role="alert">{prompt.error.message}</p>}<div className="domain-agent-layout"><div className="domain-agent-editor__controls"><textarea aria-label="Domain update prompt" value={promptText} onChange={(event) => setPromptText(event.target.value)} rows={12} placeholder="Describe how the Agent should update domains…" /><div className="domain-form-actions"><button type="button" className="button-primary" onClick={() => savePrompt.mutate()} disabled={savePrompt.isPending || prompt.isPending}>Save prompt</button><button type="button" className="button-primary" onClick={() => usePrompt.mutate()} disabled={usePrompt.isPending || prompt.isPending}>{usePrompt.isPending ? "Opening Agent…" : domainSelection.sessionId ? "Send prompt to Agent" : "Use prompt in Agent"}</button><Link className="button-link" to={`/agent?repository=${encodeURIComponent(repositoryId)}&origin=domain${domainSelection.sessionId ? `&session=${encodeURIComponent(domainSelection.sessionId)}` : ""}`}>Open full conversation</Link></div>{message && <p role={message.startsWith("Save failed") || message.startsWith("Agent update failed") ? "alert" : "status"}>{message}</p>}</div><div className="domain-agent-preview"><h4>Current JSON file</h4>{source.isError && <p role="alert">{source.error.message}</p>}<pre>{source.data?.content ?? "Loading source…"}</pre><button type="button" onClick={() => void client.invalidateQueries({ queryKey: ["domain-source", repositoryId] })}>Refresh preview</button></div>{domainSelection.sessionId && <AgentChatPanel scope={domainScope} initialSessionId={domainSelection.sessionId} heading="Domain Agent" panelId="domain-agent-chat" showCollapseControl={false} />}</div></section>}
+      {view === "json" && <section className="domain-source-editor" aria-label={t({ en: "Domain JSON source", "zh-CN": "领域 JSON 源文件" })}><div className="domain-source-editor__header"><div><h3>{t({ en: "JSON source", "zh-CN": "JSON 源文件" })}</h3><p>{t({ en: "Edit the file directly. Save validates and pretty formats JSON.", "zh-CN": "直接编辑文件。保存时会校验并格式化 JSON。" })}</p></div><span>{source.data?.path ?? t({ en: "Loading source…", "zh-CN": "正在加载源文件…" })}{source.data?.version !== undefined && source.data.version !== null ? ` · v${formatNumber(source.data.version)}` : ""}{source.data?.hash ? ` · ${source.data.hash.slice(0, 10)}` : ""}</span></div>{source.isError && <p role="alert">{source.error.message}</p>}{source.data?.parseError && <p role="alert">{t({ en: "This source file is readable but invalid:", "zh-CN": "源文件可读取但无效：" })} {source.data.parseError}. {t({ en: "Repair it below; the last valid rendered projection remains active.", "zh-CN": "请在下方修复；上一次有效的渲染投影仍然生效。" })}</p>}<textarea aria-label={t({ en: "Domain JSON", "zh-CN": "领域 JSON" })} value={jsonText} onChange={(event) => setJsonText(event.target.value)} rows={22} placeholder="{\n  &quot;domains&quot;: []\n}" /><div className="domain-form-actions"><button type="button" className="button-primary" onClick={() => saveJson.mutate()} disabled={saveJson.isPending || source.isPending}>{saveJson.isPending ? t({ en: "Saving…", "zh-CN": "保存中…" }) : t({ en: "Save JSON", "zh-CN": "保存 JSON" })}</button><button type="button" onClick={() => setJsonText(source.data?.content ?? "")}>{t({ en: "Reload", "zh-CN": "重新加载" })}</button></div><details className="domain-version-history"><summary>{t({ en: "Version history", "zh-CN": "版本历史" })}</summary>{sourceVersions.isPending && <p role="status">{t({ en: "Loading versions…", "zh-CN": "正在加载版本…" })}</p>}{sourceVersions.isError && <p role="alert">{sourceVersions.error.message}</p>}{sourceVersions.data?.items.length === 0 && <p role="status">{t({ en: "No saved versions.", "zh-CN": "没有已保存的版本。" })}</p>}<ul>{sourceVersions.data?.items.slice().reverse().map((version) => <li key={version.id}><span>v{formatNumber(version.version)} · {version.source} · {formatDateTime(version.createdAt)}</span><button type="button" onClick={() => { if (window.confirm(t({ en: `Restore domain JSON version ${formatNumber(version.version)}?`, "zh-CN": `恢复领域 JSON 版本 ${formatNumber(version.version)}？` }))) restoreJson.mutate(version.id); }} disabled={restoreJson.isPending}>{t({ en: "Restore", "zh-CN": "恢复" })}</button></li>)}</ul></details>{message && <p role={feedback?.tone ?? "status"}>{message}</p>}</section>}
+      {view === "agent" && <section className="domain-agent-editor" aria-label={t({ en: "Agent domain update", "zh-CN": "智能代理领域更新" })}><div className="domain-source-editor__header"><div><h3>{t({ en: "Agent update", "zh-CN": "智能代理更新" })}</h3><p>{t({ en: "Save the prompt and send it to a persistent conversation. The Agent can edit this JSON file and you can continue the same session.", "zh-CN": "保存提示词并发送到持久对话。智能代理可以编辑此 JSON 文件，你可以继续使用同一会话。" })}</p></div><span>{prompt.data?.path ?? t({ en: "Loading prompt…", "zh-CN": "正在加载提示词…" })}{prompt.data?.version !== undefined && prompt.data.version !== null ? ` · v${formatNumber(prompt.data.version)}` : ""}{prompt.data?.hash ? ` · ${prompt.data.hash.slice(0, 10)}` : ""}</span></div>{prompt.isError && <p role="alert">{prompt.error.message}</p>}<div className="domain-agent-layout"><div className="domain-agent-editor__controls"><textarea aria-label={t({ en: "Domain update prompt", "zh-CN": "领域更新提示词" })} value={promptText} onChange={(event) => setPromptText(event.target.value)} rows={12} placeholder={t({ en: "Describe how the Agent should update domains…", "zh-CN": "描述智能代理应如何更新领域…" })} /><div className="domain-form-actions"><button type="button" className="button-primary" onClick={() => savePrompt.mutate()} disabled={savePrompt.isPending || prompt.isPending}>{t({ en: "Save prompt", "zh-CN": "保存提示词" })}</button><button type="button" onClick={() => applyBuiltinPrompt("en")}>{t({ en: "Use English built-in template", "zh-CN": "使用英文内置模板" })}</button><button type="button" onClick={() => applyBuiltinPrompt("zh-CN")}>{t({ en: "Use Chinese built-in template", "zh-CN": "使用中文内置模板" })}</button><button type="button" className="button-primary" onClick={() => usePrompt.mutate()} disabled={usePrompt.isPending || prompt.isPending}>{usePrompt.isPending ? t({ en: "Opening Agent…", "zh-CN": "正在打开智能代理…" }) : domainSelection.sessionId ? t({ en: "Send prompt to Agent", "zh-CN": "发送提示词给智能代理" }) : t({ en: "Use prompt in Agent", "zh-CN": "在智能代理中使用提示词" })}</button><Link className="button-link" to={`/agent?repository=${encodeURIComponent(repositoryId)}&origin=domain${domainSelection.sessionId ? `&session=${encodeURIComponent(domainSelection.sessionId)}` : ""}`}>{t({ en: "Open full conversation", "zh-CN": "打开完整对话" })}</Link></div>{message && <p role={feedback?.tone ?? "status"}>{message}</p>}</div><div className="domain-agent-preview"><h4>{t({ en: "Current JSON file", "zh-CN": "当前 JSON 文件" })}</h4>{source.isError && <p role="alert">{source.error.message}</p>}<pre>{source.data?.content ?? t({ en: "Loading source…", "zh-CN": "正在加载源文件…" })}</pre><button type="button" onClick={() => void client.invalidateQueries({ queryKey: ["domain-source", repositoryId] })}>{t({ en: "Refresh preview", "zh-CN": "刷新预览" })}</button></div>{domainSelection.sessionId && <AgentChatPanel scope={domainScope} initialSessionId={domainSelection.sessionId} heading={t({ en: "Domain Agent", "zh-CN": "领域智能代理" })} panelId="domain-agent-chat" showCollapseControl={false} />}</div></section>}
       {view === "rendered" && <>
       <div className="domain-settings-layout">
-        <div className="domain-rules" aria-label="Domain rules">
+        <div className="domain-rules" aria-label={t({ en: "Domain rules", "zh-CN": "领域规则" })}>
           {rules.length === 0 && (
-            <p role="status">No domain rules yet. Create the first rule on the right.</p>
+            <p role="status">{t({ en: "No domain rules yet. Create the first rule on the right.", "zh-CN": "还没有领域规则。请在右侧创建第一条规则。" })}</p>
           )}
           {rules.map((rule) => (
             <article
@@ -220,33 +241,33 @@ export function DomainsSettingsPage() {
                   {rule.name}
                 </span>
                 <span className="domain-rule-meta">
-                  #{rule.position}
-                  {rule.enabled ? "" : " · disabled"}
+                  #{formatNumber(rule.position)}
+                  {rule.enabled ? "" : ` · ${t({ en: "disabled", "zh-CN": "已禁用" })}`}
                 </span>
               </header>
               <p>
-                <strong>Include:</strong>{" "}
+                <strong>{t({ en: "Include:", "zh-CN": "包含：" })}</strong>{" "}
                 <code>{rule.includePatterns.join(", ")}</code>
               </p>
               {rule.excludePatterns.length > 0 && (
                 <p>
-                  <strong>Exclude:</strong>{" "}
+                  <strong>{t({ en: "Exclude:", "zh-CN": "排除：" })}</strong>{" "}
                   <code>{rule.excludePatterns.join(", ")}</code>
                 </p>
               )}
               <div className="domain-rule-actions">
                 <button type="button" onClick={() => startEdit(rule)}>
-                  Edit
+                  {t({ en: "Edit", "zh-CN": "编辑" })}
                 </button>
                 <button
                   type="button"
                   onClick={() => {
-                    if (window.confirm(`Delete domain rule "${rule.name}"?`))
+                    if (window.confirm(t({ en: `Delete domain rule "${rule.name}"?`, "zh-CN": `删除领域规则“${rule.name}”吗？` })))
                       remove.mutate(rule);
                   }}
                   disabled={remove.isPending}
                 >
-                  Delete
+                  {t({ en: "Delete", "zh-CN": "删除" })}
                 </button>
               </div>
             </article>
@@ -254,36 +275,36 @@ export function DomainsSettingsPage() {
         </div>
         <form
           className="domain-form"
-          aria-label={editingId === null ? "Create domain rule" : "Edit domain rule"}
+          aria-label={editingId === null ? t({ en: "Create domain rule", "zh-CN": "创建领域规则" }) : t({ en: "Edit domain rule", "zh-CN": "编辑领域规则" })}
           onSubmit={(event) => {
             event.preventDefault();
             submit.mutate();
           }}
         >
-          <h3>{editingId === null ? "New rule" : "Edit rule"}</h3>
+          <h3>{editingId === null ? t({ en: "New rule", "zh-CN": "新规则" }) : t({ en: "Edit rule", "zh-CN": "编辑规则" })}</h3>
           <label>
-            Name
+            {t({ en: "Name", "zh-CN": "名称" })}
             <input
-              aria-label="Rule name"
+              aria-label={t({ en: "Rule name", "zh-CN": "规则名称" })}
               value={form.name}
-              placeholder="Documentation"
+              placeholder={t({ en: "Documentation", "zh-CN": "文档" })}
               maxLength={40}
               onChange={(event) => setForm({ ...form, name: event.target.value })}
             />
           </label>
           <label>
-            Color
+            {t({ en: "Color", "zh-CN": "颜色" })}
             <input
-              aria-label="Rule color"
+              aria-label={t({ en: "Rule color", "zh-CN": "规则颜色" })}
               type="color"
               value={form.color}
               onChange={(event) => setForm({ ...form, color: event.target.value })}
             />
           </label>
           <label>
-            Include patterns (one pattern per line)
+            {t({ en: "Include patterns (one pattern per line)", "zh-CN": "包含模式（每行一个）" })}
             <textarea
-              aria-label="Include patterns"
+              aria-label={t({ en: "Include patterns", "zh-CN": "包含模式" })}
               rows={4}
               value={form.include}
               placeholder={"docs/**\nREADME.md"}
@@ -291,9 +312,9 @@ export function DomainsSettingsPage() {
             />
           </label>
           <label>
-            Exclude patterns (one pattern per line)
+            {t({ en: "Exclude patterns (one pattern per line)", "zh-CN": "排除模式（每行一个）" })}
             <textarea
-              aria-label="Exclude patterns"
+              aria-label={t({ en: "Exclude patterns", "zh-CN": "排除模式" })}
               rows={3}
               value={form.exclude}
               placeholder={"docs/generated/**\n**/*.snap"}
@@ -301,28 +322,24 @@ export function DomainsSettingsPage() {
             />
           </label>
           <SettingsSwitch
-            label="Rule enabled"
-            description="Include this rule in the rendered domain projection."
+            label={t({ en: "Rule enabled", "zh-CN": "启用规则" })}
+            description={t({ en: "Include this rule in the rendered domain projection.", "zh-CN": "在渲染的领域投影中包含此规则。" })}
             checked={form.enabled}
             onChange={(enabled) => setForm({ ...form, enabled })}
           />
           <div className="domain-form-actions">
             <button type="submit" disabled={submit.isPending}>
-              {editingId === null ? "Create rule" : "Save changes"}
+              {editingId === null ? t({ en: "Create rule", "zh-CN": "创建规则" }) : t({ en: "Save changes", "zh-CN": "保存更改" })}
             </button>
             {editingId !== null && (
               <button type="button" onClick={resetForm}>
-                Cancel
+                {t({ en: "Cancel", "zh-CN": "取消" })}
               </button>
             )}
           </div>
           {message && (
             <p
-              role={
-                message.startsWith("Save") || message.startsWith("Delete")
-                  ? "alert"
-                  : "status"
-              }
+              role={feedback?.tone ?? "status"}
             >
               {message}
             </p>

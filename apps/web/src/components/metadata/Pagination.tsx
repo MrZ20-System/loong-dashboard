@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
+import { useI18n, type LocalizedMessage } from "../../i18n";
+import { metadataMessages } from "./messages";
 
 export type PaginationItem = number | "ellipsis";
 
@@ -25,7 +27,7 @@ export function Pagination({
   totalPages,
   onPageChange,
   disabled = false,
-  label = "Pagination",
+  label = metadataMessages.pagination,
 }: {
   page: number;
   pageSize: number;
@@ -33,8 +35,11 @@ export function Pagination({
   totalPages: number;
   onPageChange: (page: number) => void;
   disabled?: boolean;
-  label?: string;
+  label?: string | LocalizedMessage;
 }) {
+  const { t, formatNumber } = useI18n();
+  const labelText = typeof label === "string" ? label : t(label);
+  const inputId = useId();
   const safeTotalPages = Math.max(1, Math.floor(totalPages));
   const safePage = Math.min(safeTotalPages, Math.max(1, Math.floor(page)));
   const [input, setInput] = useState(String(safePage));
@@ -56,13 +61,19 @@ export function Pagination({
   const lastItem = totalCount === 0 ? 0 : Math.min(totalCount, safePage * pageSize);
 
   return (
-    <nav className="metadata-pagination" aria-label={label}>
+    <nav className="metadata-pagination" aria-label={labelText}>
       <span className="metadata-pagination__summary">
-        Page {safePage} of {safeTotalPages} · {firstItem}–{lastItem} of {totalCount}
+        {t(metadataMessages.pageSummary, {
+          page: formatNumber(safePage),
+          totalPages: formatNumber(safeTotalPages),
+          firstItem: formatNumber(firstItem),
+          lastItem: formatNumber(lastItem),
+          totalCount: formatNumber(totalCount),
+        })}
       </span>
-      <div className="metadata-pagination__pages" aria-label="Page index">
+      <div className="metadata-pagination__pages" aria-label={t(metadataMessages.pageIndex)}>
         <button type="button" onClick={() => onPageChange(safePage - 1)} disabled={disabled || safePage <= 1}>
-          Previous
+          {t(metadataMessages.previous)}
         </button>
         {getPaginationItems(safePage, safeTotalPages).map((item, index) =>
           item === "ellipsis" ? (
@@ -72,23 +83,23 @@ export function Pagination({
               type="button"
               className="metadata-pagination__page"
               key={item}
-              aria-label={`Go to page ${item}`}
+              aria-label={t(metadataMessages.goToPage, { page: formatNumber(item) })}
               aria-current={item === safePage ? "page" : undefined}
               onClick={() => onPageChange(item)}
               disabled={disabled || item === safePage}
             >
-              {item}
+              {formatNumber(item)}
             </button>
           ),
         )}
         <button type="button" onClick={() => onPageChange(safePage + 1)} disabled={disabled || safePage >= safeTotalPages}>
-          Next
+          {t(metadataMessages.next)}
         </button>
       </div>
       <form className="metadata-pagination__goto" onSubmit={(event) => { event.preventDefault(); submitPage(); }}>
-        <label htmlFor={`${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-input`}>Go to page</label>
+        <label htmlFor={inputId}>{t(metadataMessages.goToPageLabel)}</label>
         <input
-          id={`${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-input`}
+          id={inputId}
           type="number"
           min={1}
           max={safeTotalPages}
@@ -96,9 +107,9 @@ export function Pagination({
           value={input}
           onChange={(event) => setInput(event.target.value)}
           disabled={disabled}
-          aria-label="Go to page"
+          aria-label={t(metadataMessages.goToPageLabel)}
         />
-        <button type="submit" disabled={disabled}>Go</button>
+        <button type="submit" disabled={disabled}>{t(metadataMessages.go)}</button>
       </form>
     </nav>
   );

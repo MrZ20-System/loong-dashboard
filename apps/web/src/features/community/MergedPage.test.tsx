@@ -2,7 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { MergedPage } from "./MergedPage";
+import { formatMergedDay, mergedCalendarDay, MergedPage } from "./MergedPage";
+import { formatDate } from "../../i18n";
 
 const repository = { id: "repo", key: "repo", displayName: "Example", githubOwner: "acme", githubName: "project", localPath: "/tmp/project", remoteName: "origin", defaultBranch: "main", worktreeSlots: 1, enabled: true, mergedPullRequestCount: 4 };
 const merged = (number: number, mergedAt: string, title = `Merged ${number}`) => ({ repositoryId: "repo", number, title, url: `https://github.com/acme/project/pull/${number}`, authorLogin: "author", status: "merged" as const, updatedAt: "2026-09-12T00:00:00.000Z", mergedAt, changedFilesCount: 2, additions: 10, deletions: 3, domains: [] });
@@ -14,6 +15,31 @@ function LocationProbe() {
 }
 
 describe("MergedPage", () => {
+  it("preserves invalid mergedAt values and localizes valid day headings", () => {
+    expect(mergedCalendarDay("not-a-date", "Asia/Shanghai")).toBe("not-a-date");
+    expect(
+      formatMergedDay(
+        "not-a-date",
+        (value, options, timeZone) => formatDate("en", value, options, timeZone),
+        "Asia/Shanghai",
+      ),
+    ).toBe("not-a-date");
+    expect(
+      formatMergedDay(
+        "2026-09-10",
+        (value, options, timeZone) => formatDate("en", value, options, timeZone),
+        "Asia/Shanghai",
+      ),
+    ).toBe("Sep 10, 2026");
+    expect(
+      formatMergedDay(
+        "2026-09-10",
+        (value, options, timeZone) => formatDate("zh-CN", value, options, timeZone),
+        "Asia/Shanghai",
+      ),
+    ).toBe("2026年9月10日");
+  });
+
   it("groups current-page mergedAt values by configured timezone and uses page pagination", async () => {
     const calls: URL[] = [];
     vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {

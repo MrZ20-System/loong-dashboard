@@ -1,11 +1,12 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { MemoryRouter, useLocation } from "react-router-dom";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   matchesMetadataSearch,
   MetadataFeed,
 } from "./MetadataList";
 import { FilterBar } from "../../features/community/MetadataPage";
+import { LocaleProvider, LOCALE_STORAGE_KEY } from "../../i18n";
 import type {
   IssueListItem,
   PullRequestListItem,
@@ -43,6 +44,24 @@ function LocationProbe() {
 }
 
 describe("metadata list controls", () => {
+  beforeEach(() => {
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
+      clear: () => values.clear(),
+      key: (index: number) => [...values.keys()][index] ?? null,
+      get length() { return values.size; },
+    } as Storage;
+    Object.defineProperty(window, "localStorage", { configurable: true, value: storage });
+  });
+
+  afterEach(() => {
+    cleanup();
+    window.localStorage.removeItem(LOCALE_STORAGE_KEY);
+  });
+
   it("keeps date range, search, and status in one metadata toolbar contract", () => {
     render(
       <MemoryRouter>
@@ -136,5 +155,43 @@ describe("metadata list controls", () => {
     expect(screen.getByTestId("location-path")).toHaveTextContent(
       "/repositories/repo/pulls/53906",
     );
+  });
+
+  it("translates product labels without translating external metadata", () => {
+    window.localStorage.setItem(LOCALE_STORAGE_KEY, "zh-CN");
+    render(
+      <LocaleProvider>
+        <MemoryRouter>
+          <MetadataFeed kind="pulls" items={[pull()]} />
+        </MemoryRouter>
+      </LocaleProvider>,
+    );
+
+    expect(screen.getByRole("list", { name: "拉取请求列表" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "拉取请求 #53906：Add scheduler observability" })).toBeInTheDocument();
+    expect(screen.getByText("Add scheduler observability")).toBeInTheDocument();
+    expect(screen.getByText("AliceBuilder")).toBeInTheDocument();
+  });
+
+  it("formats valid date dividers while preserving invalid provider values", () => {
+    window.localStorage.setItem(LOCALE_STORAGE_KEY, "en");
+    render(
+      <LocaleProvider>
+        <MemoryRouter>
+          <MetadataFeed
+            kind="pulls"
+            groupByUpdatedDay
+            items={[
+              pull({ number: 1, updatedAt: "not-a-date" }),
+              pull({ number: 2, updatedAt: "2026-09-03T02:03:04.000Z" }),
+            ]}
+          />
+        </MemoryRouter>
+      </LocaleProvider>,
+    );
+
+    expect(screen.getByText("not-a-date")).toBeInTheDocument();
+    expect(screen.queryByText("not-a-datT12:00:00Z")).not.toBeInTheDocument();
+    expect(screen.getByText("Sep 3, 2026")).toBeInTheDocument();
   });
 });

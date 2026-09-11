@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
+import { useI18n } from "../../i18n";
 import {
   calendarDays,
-  monthLabel,
   monthStart,
   shiftMonth,
   todayValue,
 } from "./date-utils";
+import { filterMessages } from "./messages";
 
-const weekdays = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+const weekdayAnchor = new Date("2021-08-01T12:00:00Z");
 
 export type DateRangeValue = {
   from: string | null;
@@ -27,6 +28,7 @@ export function DateDayFilter({
   calendarTimeZone?: string;
   today?: string;
 }) {
+  const { locale, t, formatDate, formatNumber } = useI18n();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const [open, setOpen] = useState(false);
   const [cursor, setCursor] = useState(() => monthStart(from ?? today));
@@ -35,6 +37,21 @@ export function DateDayFilter({
   const activeTo = pendingFrom === null ? to : null;
   const selectionFrom = pendingFrom ?? (to === null ? from : null);
   const days = calendarDays(cursor, null, today);
+  const localizedDate = (value: string) =>
+    formatDate(`${value}T12:00:00Z`, {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    }, "UTC");
+  const weekdays = Array.from({ length: 7 }, (_, index) => {
+    const date = new Date(weekdayAnchor);
+    date.setUTCDate(weekdayAnchor.getUTCDate() + index);
+    return new Intl.DateTimeFormat(locale, { weekday: "short", timeZone: "UTC" }).format(date);
+  });
+  const monthHeading = formatDate(`${cursor.slice(0, 7)}-01T12:00:00Z`, {
+    year: "numeric",
+    month: "long",
+  }, "UTC");
 
   useEffect(() => {
     if (!open) return;
@@ -55,12 +72,18 @@ export function DateDayFilter({
   }, [from, open, today, to]);
 
   const label = pendingFrom !== null
-    ? `Choose end after ${pendingFrom}`
+    ? t(filterMessages.chooseEndAfter, { date: localizedDate(pendingFrom) })
+    : from !== null && to !== null
+      ? t(filterMessages.between, { from: localizedDate(from), to: localizedDate(to) })
+      : from !== null
+        ? t(filterMessages.from, { date: localizedDate(from) })
+        : t(filterMessages.allDates);
+  const rawLabel = pendingFrom !== null
+    ? pendingFrom
     : from !== null && to !== null
       ? `${from} – ${to}`
-      : from !== null
-        ? `From ${from}`
-        : "All dates";
+      : from ?? "";
+  const accessibleLabel = rawLabel.length > 0 ? `${label} (${rawLabel})` : label;
 
   const selectDay = (value: string) => {
     if (selectionFrom === null) {
@@ -89,14 +112,14 @@ export function DateDayFilter({
         className="date-day-filter__trigger"
         aria-haspopup="dialog"
         aria-expanded={open}
-        aria-label={`Date range: ${label}. Timezone: ${calendarTimeZone}`}
+        aria-label={t(filterMessages.dateRangeAria, { label: accessibleLabel, timeZone: calendarTimeZone })}
         onClick={() => setOpen((current) => !current)}
       >
         <span className="date-day-filter__icon" aria-hidden="true">
           ◷
         </span>
         <span className="date-day-filter__copy">
-          <small>Date range · {calendarTimeZone}</small>
+          <small>{t(filterMessages.dateRangeTimezone, { timeZone: calendarTimeZone })}</small>
           <strong>{label}</strong>
         </span>
         <span aria-hidden="true">{open ? "⌃" : "⌄"}</span>
@@ -105,26 +128,26 @@ export function DateDayFilter({
         <div
           className="date-day-filter__panel"
           role="dialog"
-          aria-label="Select date range"
+          aria-label={t(filterMessages.selectDateRange)}
         >
           <header>
             <div className="date-day-filter__panel-heading">
-              <strong>{monthLabel(cursor)}</strong>
+              <strong>{monthHeading}</strong>
               <small>
-                {selectionFrom === null ? "Choose a start date" : "Choose an end date"}
+                {selectionFrom === null ? t(filterMessages.chooseStartDate) : t(filterMessages.chooseEndDate)}
               </small>
             </div>
             <div className="date-day-filter__month-navigation">
               <button
                 type="button"
-                aria-label="Previous month"
+                aria-label={t(filterMessages.previousMonth)}
                 onClick={() => setCursor((current) => shiftMonth(current, -1))}
               >
                 ‹
               </button>
               <button
                 type="button"
-                aria-label="Next month"
+                aria-label={t(filterMessages.nextMonth)}
                 onClick={() => setCursor((current) => shiftMonth(current, 1))}
               >
                 ›
@@ -164,7 +187,7 @@ export function DateDayFilter({
                     aria-current={day.today ? "date" : undefined}
                     onClick={() => selectDay(day.value)}
                   >
-                    {day.day}
+                    {formatNumber(day.day)}
                   </button>
                 );
               })()
@@ -176,7 +199,7 @@ export function DateDayFilter({
               disabled={from === null && to === null && pendingFrom === null}
               onClick={clear}
             >
-              Clear
+              {t(filterMessages.clear)}
             </button>
           </footer>
         </div>

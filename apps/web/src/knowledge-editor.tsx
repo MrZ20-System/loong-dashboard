@@ -1,8 +1,13 @@
 import { createContext, useContext, useEffect, useRef } from "react";
 import EditorWorker from "../node_modules/monaco-editor/esm/vs/editor/editor.worker.js?worker";
 import type { editor } from "monaco-editor";
+import { message, useI18n } from "./i18n";
 
 export type AppTheme = "light" | "dark";
+
+const knowledgeEditorMessages = {
+  markdownSource: message("Markdown source", "Markdown 源码"),
+} as const;
 
 /** Theme value supplied by the app shell so Monaco follows the shell toggle. */
 export const AppThemeContext = createContext<AppTheme>("light");
@@ -23,6 +28,7 @@ export function KnowledgeEditor({
   value: string;
   onChange: (value: string) => void;
 }) {
+  const { t } = useI18n();
   const hostRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<editor.IStandaloneCodeEditor | null>(null);
   const theme = useContext(AppThemeContext);
@@ -80,7 +86,7 @@ export function KnowledgeEditor({
   }, [value]);
 
   return (
-    <div className="knowledge-editor-host" ref={hostRef} aria-label="Markdown source" role="textbox" aria-multiline="true" />
+    <div className="knowledge-editor-host" ref={hostRef} aria-label={t(knowledgeEditorMessages.markdownSource)} role="textbox" aria-multiline="true" />
   );
 }
 

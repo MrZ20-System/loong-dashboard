@@ -3,6 +3,8 @@ import { useLocation } from "react-router-dom";
 import { AgentChatPanel } from "../../agent-chat";
 import type { AgentScope } from "@loongboard/contracts";
 import { useAgentSessionSelection } from "./agent-session-context";
+import { useI18n } from "../../i18n";
+import { agentMessages } from "./messages";
 
 function pageScope(pathname: string): AgentScope {
   const match = pathname.match(/^\/repositories\/([^/]+)/);
@@ -18,16 +20,18 @@ function pageScope(pathname: string): AgentScope {
 
 export function GlobalAgentDock() {
   const location = useLocation();
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const scope = pageScope(location.pathname);
   const scopeKey = JSON.stringify(scope);
   const { sessionId: existingSessionId } = useAgentSessionSelection(scopeKey);
   if (location.pathname.startsWith("/agent") || location.pathname.match(/\/pulls\/\d+$/) !== null) return null;
+  const agentLabel = t(agentMessages.agent);
   return <div className={`global-agent-dock${open ? " global-agent-dock--open" : ""}`}>
-    {!open && <button type="button" className="global-agent-launcher" onClick={() => setOpen(true)} aria-label="Open Agent dock" aria-expanded={false}><span aria-hidden="true">✦</span><span>Agent</span></button>}
+    {!open && <button type="button" className="global-agent-launcher" onClick={() => setOpen(true)} aria-label={t(agentMessages.openDock)} aria-expanded={false}><span aria-hidden="true">✦</span><span>{agentLabel}</span></button>}
     {open && <div className="global-agent-dock__panel">
-      <button type="button" className="global-agent-dock__close" onClick={() => setOpen(false)} aria-label="Close Agent dock">×</button>
-      <AgentChatPanel scope={scope} initialSessionId={existingSessionId} heading="Agent" panelId="global-agent-dock" showCollapseControl={false} />
+      <button type="button" className="global-agent-dock__close" onClick={() => setOpen(false)} aria-label={t(agentMessages.closeDock)}>×</button>
+      <AgentChatPanel scope={scope} initialSessionId={existingSessionId} heading={agentLabel} panelId="global-agent-dock" showCollapseControl={false} />
     </div>}
   </div>;
 }

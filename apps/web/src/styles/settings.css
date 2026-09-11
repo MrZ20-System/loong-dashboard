@@ -117,6 +117,15 @@
 .domain-form-actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.domain-form-actions > button,
+.domain-form-actions > .button-link {
+  flex: 0 0 auto;
+  max-width: 100%;
+  white-space: nowrap;
 }
 
 .domain-form-actions button[type="submit"] {
@@ -316,19 +325,23 @@
 
 .settings-tabs {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 4px;
   margin: -6px 0 18px;
   padding: 4px;
   border: 1px solid var(--border);
   border-radius: 11px;
   background: var(--surface-muted);
-  width: max-content;
+  width: 100%;
   max-width: 100%;
+  overflow-x: auto;
+  scroll-padding-inline: 4px;
+  scrollbar-width: thin;
 }
 
 .settings-tabs__item {
   display: inline-flex;
+  flex: 0 0 auto;
   min-height: 32px;
   align-items: center;
   padding: 0 14px;

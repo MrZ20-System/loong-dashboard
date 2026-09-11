@@ -1,5 +1,11 @@
 import { useDomains } from "../../app/hooks";
+import { message } from "../../i18n";
 import { FilterDropdown } from "../filters/FilterDropdown";
+
+const domainMessages = {
+  label: message("Domains", "领域"),
+  emptyLabel: message("All domains", "全部领域"),
+} as const;
 
 export function DomainFilter({
   repositoryId,
@@ -15,8 +21,8 @@ export function DomainFilter({
   if (domains.isPending || domains.isError || items.length === 0) return null;
   return (
     <FilterDropdown
-      label="Domains"
-      emptyLabel="All domains"
+      label={domainMessages.label}
+      emptyLabel={domainMessages.emptyLabel}
       multiple
       selected={selected}
       onChange={onChange}

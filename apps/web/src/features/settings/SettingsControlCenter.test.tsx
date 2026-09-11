@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { useEffect } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -21,6 +22,7 @@ const settingsMocks = vi.hoisted(() => ({
 vi.mock("../../settings-client", () => settingsMocks);
 
 import { CodeBackupSettingsPage, KnowledgeCheckpointSettingsPage } from "./SettingsControlCenter";
+import { LocaleProvider, useI18n } from "../../i18n";
 
 function renderPage() {
   const queryClient = new QueryClient({
@@ -45,6 +47,28 @@ function renderCodeBackupPage() {
         <CodeBackupSettingsPage />
       </MemoryRouter>
     </QueryClientProvider>,
+  );
+}
+
+function ForceChineseLocale() {
+  const { setLocale } = useI18n();
+  useEffect(() => setLocale("zh-CN"), [setLocale]);
+  return null;
+}
+
+function renderChineseCodeBackupPage() {
+  const queryClient = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  });
+  return render(
+    <LocaleProvider>
+      <ForceChineseLocale />
+      <QueryClientProvider client={queryClient}>
+        <MemoryRouter>
+          <CodeBackupSettingsPage />
+        </MemoryRouter>
+      </QueryClientProvider>
+    </LocaleProvider>,
   );
 }
 
@@ -93,6 +117,12 @@ function mockAgentArchiveSettings() {
 
 afterEach(() => {
   vi.clearAllMocks();
+  document.documentElement.lang = "en";
+  try {
+    window.localStorage?.removeItem("loongboard.locale");
+  } catch {
+    // Storage can be unavailable in the test environment.
+  }
 });
 
 describe("Knowledge checkpoint settings", () => {
@@ -177,5 +207,16 @@ describe("Code backup settings", () => {
       expect(settingsMocks.runCodeBackupCheckpoint).toHaveBeenCalledTimes(1);
       expect(settingsMocks.pushCodeBackup).toHaveBeenCalledTimes(1);
     });
+  });
+
+  it("localizes the availability notice while preserving the repository path", async () => {
+    settingsMocks.fetchCodeBackupSettings.mockResolvedValue(codeBackupSettings(false));
+    mockAgentArchiveSettings();
+
+    renderChineseCodeBackupPage();
+
+    expect(await screen.findByDisplayValue("/workspace/loong-dashboard")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "代码备份" })).toBeInTheDocument();
+    expect(await screen.findByText("容器镜像部署中不可用代码备份。")).toBeInTheDocument();
   });
 });

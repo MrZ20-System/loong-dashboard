@@ -1,18 +1,21 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
+import { useI18n, type LocalizedMessage, type MessageValues } from "../../i18n";
 import {
   fetchSyncStatus,
   startSync,
 } from "../../metadata-client";
 import { fetchRepositorySettings } from "../../settings-client";
+import { repositoryMessages } from "./messages";
 
 function SyncControl({ repositoryId, lookbackDays }: { repositoryId: string; lookbackDays: 7 | 30 }) {
+  const { t } = useI18n();
   const client = useQueryClient();
-  const [message, setMessage] = useState<string | null>(null);
+  const [message, setMessage] = useState<{ message: LocalizedMessage; values?: MessageValues } | null>(null);
   const sync = useMutation({
     mutationFn: () => startSync(repositoryId),
     onSuccess: (accepted) => {
-      setMessage("Sync started.");
+      setMessage({ message: repositoryMessages.syncStarted });
       const statusKey = ["sync", repositoryId] as const;
       const attemptKey = ["sync-attempt", repositoryId] as const;
       const statusState = client.getQueryState(statusKey);
@@ -24,7 +27,7 @@ function SyncControl({ repositoryId, lookbackDays }: { repositoryId: string; loo
         statusRefreshRequestedAt: null,
       });
     },
-    onError: (error: Error) => setMessage(`Sync failed: ${error.message}`),
+    onError: (error: Error) => setMessage({ message: repositoryMessages.syncFailed, values: { detail: error.message } }),
   });
   return (
     <div className="sync-control">
@@ -36,14 +39,15 @@ function SyncControl({ repositoryId, lookbackDays }: { repositoryId: string; loo
         }}
         disabled={sync.isPending}
       >
-        {sync.isPending ? "Starting sync…" : "Sync now"}
+        {sync.isPending ? t(repositoryMessages.startingSync) : t(repositoryMessages.syncNow)}
       </button>
-      {message && <p role={sync.isError ? "alert" : "status"}>{message}</p>}
+      {message && <p role={sync.isError ? "alert" : "status"}>{t(message.message, message.values)}</p>}
     </div>
   );
 }
 
 function SyncStatus({ repositoryId, lookbackDays }: { repositoryId: string; lookbackDays: 7 | 30 }) {
+  const { t, formatNumber } = useI18n();
   const client = useQueryClient();
   const status = useQuery({
     queryKey: ["sync", repositoryId],
@@ -170,9 +174,9 @@ function SyncStatus({ repositoryId, lookbackDays }: { repositoryId: string; look
     status.data,
     status.dataUpdatedAt,
   ]);
-  if (status.isPending) return <span role="status">Checking sync status…</span>;
+  if (status.isPending) return <span role="status">{t(repositoryMessages.checkingSyncStatus)}</span>;
   if (status.isError)
-    return <span role="alert">Sync status unavailable: {status.error.message}</span>;
+    return <span role="alert">{t(repositoryMessages.syncStatusUnavailable, { detail: status.error.message })}</span>;
   const pull = status.data.pullRequests;
   const issues = status.data.issues;
   const pullNeedsBootstrap = pull.watermarkUpdatedAt === null;
@@ -180,10 +184,10 @@ function SyncStatus({ repositoryId, lookbackDays }: { repositoryId: string; look
   const needsBootstrap = pullNeedsBootstrap || issuesNeedsBootstrap;
   if (status.data.status === "running") {
     const runningLabel = pullNeedsBootstrap && issuesNeedsBootstrap
-      ? `Initial sync · last ${lookbackDays} days`
+      ? t(repositoryMessages.initialSyncLastDays, { days: formatNumber(lookbackDays) })
       : needsBootstrap
-        ? "Syncing repository updates…"
-        : "Syncing latest updates…";
+        ? t(repositoryMessages.syncingRepositoryUpdates)
+        : t(repositoryMessages.syncingLatestUpdates);
     return <span role="status">{runningLabel}</span>;
   }
   const complete = pull.status === "idle" && issues.status === "idle" && pull.lastSuccessAt !== null && issues.lastSuccessAt !== null;
@@ -193,18 +197,19 @@ function SyncStatus({ repositoryId, lookbackDays }: { repositoryId: string; look
   const age = completeAt === null ? null : Math.max(0, Math.round((Date.now() - completeAt.getTime()) / 60_000));
   const partialError = pull.lastError ?? issues.lastError;
   if (partialError !== null && partialError !== undefined)
-    return <span role="alert" title={partialError}><span>{needsBootstrap ? `Initial sync failed · last ${lookbackDays} days` : "Last sync failed"}</span><small> · {completeAt ? `last complete ${age === 0 ? "just now" : `${age}m ago`}` : "no complete sync"}</small></span>;
-  return <span role="status"><span>{needsBootstrap ? `Initial sync · last ${lookbackDays} days` : "Sync idle"}</span><small> · {completeAt ? `Synced ${age === 0 ? "just now" : `${age}m ago`}` : "Awaiting first complete sync"}</small></span>;
+    return <span role="alert" title={partialError}><span>{needsBootstrap ? t(repositoryMessages.initialSyncFailedLastDays, { days: formatNumber(lookbackDays) }) : t(repositoryMessages.lastSyncFailed)}</span><small> · {completeAt ? t(repositoryMessages.lastComplete, { value: age === 0 ? t(repositoryMessages.justNow) : t(repositoryMessages.minutesAgo, { minutes: formatNumber(age ?? 0) }) }) : t(repositoryMessages.noCompleteSync)}</small></span>;
+  return <span role="status"><span>{needsBootstrap ? t(repositoryMessages.initialSyncLastDays, { days: formatNumber(lookbackDays) }) : t(repositoryMessages.syncIdle)}</span><small> · {completeAt ? t(repositoryMessages.synced, { value: age === 0 ? t(repositoryMessages.justNow) : t(repositoryMessages.minutesAgo, { minutes: formatNumber(age ?? 0) }) }) : t(repositoryMessages.awaitingFirstComplete)}</small></span>;
 }
 
 export function RepositorySyncStatus({ repositoryId }: { repositoryId: string }) {
+  const { t } = useI18n();
   const settings = useQuery({
     queryKey: ["repository-settings", repositoryId],
     queryFn: () => fetchRepositorySettings(repositoryId),
   });
   const lookbackDays = settings.data?.syncLookbackDays ?? 30;
   return (
-    <div className="topbar-sync" aria-label={`${repositoryId} sync status`}>
+    <div className="topbar-sync" aria-label={t(repositoryMessages.syncStatus, { repositoryId })}>
       <span className="status-dot" aria-hidden="true" />
       <div className="sync-status">
         <SyncStatus repositoryId={repositoryId} lookbackDays={lookbackDays} />

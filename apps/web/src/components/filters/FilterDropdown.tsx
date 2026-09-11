@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState } from "react";
+import { useI18n, type LocalizedMessage } from "../../i18n";
+import { filterMessages } from "./messages";
+
+type LocalizedText = string | LocalizedMessage;
 
 export interface FilterDropdownOption {
   value: string;
-  label: string;
-  description?: string;
+  label: LocalizedText;
+  description?: LocalizedText;
   icon?: string;
   tone?: "accent" | "blue" | "green" | "neutral" | "orange" | "purple" | "red";
 }
@@ -13,17 +17,22 @@ function summaryLabel(
   options: FilterDropdownOption[],
   multiple: boolean,
   emptyLabel: string,
+  localize: (value: LocalizedText) => string,
+  formatNumber: (value: number) => string,
 ) {
   if (selected.length === 0) return emptyLabel;
   if (!multiple) {
-    return options.find((option) => option.value === selected[0])?.label ??
-      selected[0];
+    const option = options.find((item) => item.value === selected[0]);
+    return option === undefined ? selected[0] : localize(option.label);
   }
   if (selected.length === 1) {
-    return options.find((option) => option.value === selected[0])?.label ??
-      selected[0];
+    const option = options.find((item) => item.value === selected[0]);
+    return option === undefined ? selected[0] : localize(option.label);
   }
-  return `${selected.length} selected`;
+  return localize(filterMessages.selected).replace(
+    "{count}",
+    formatNumber(selected.length),
+  );
 }
 
 export function FilterDropdown({
@@ -34,13 +43,17 @@ export function FilterDropdown({
   onChange,
   multiple = false,
 }: {
-  label: string;
-  emptyLabel: string;
+  label: LocalizedText;
+  emptyLabel: LocalizedText;
   options: FilterDropdownOption[];
   selected: string[];
   onChange: (values: string[]) => void;
   multiple?: boolean;
 }) {
+  const { t, formatNumber } = useI18n();
+  const localize = (value: LocalizedText) => typeof value === "string" ? value : t(value);
+  const labelText = localize(label);
+  const emptyLabelText = localize(emptyLabel);
   const rootRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -49,7 +62,14 @@ export function FilterDropdown({
   const selectedIndexes = selected
     .map((value) => options.findIndex((option) => option.value === value))
     .filter((index) => index >= 0);
-  const summary = summaryLabel(selected, options, multiple, emptyLabel);
+  const summary = summaryLabel(
+    selected,
+    options,
+    multiple,
+    emptyLabelText,
+    localize,
+    formatNumber,
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -142,7 +162,7 @@ export function FilterDropdown({
       >
         {selectedOption?.icon && <span className={`filter-dropdown__icon tone-${selectedOption.tone ?? "neutral"}`} aria-hidden="true">{selectedOption.icon}</span>}
         <span className="filter-dropdown__trigger-copy">
-          <small>{label}</small>
+          <small>{labelText}</small>
           <strong>{summary}</strong>
         </span>
         <span className="filter-dropdown__chevron" aria-hidden="true">
@@ -153,13 +173,15 @@ export function FilterDropdown({
         <div
           className="filter-dropdown__menu"
           role="listbox"
-          aria-label={`${label} options`}
+          aria-label={t(filterMessages.options, { label: labelText })}
           aria-multiselectable={multiple || undefined}
         >
           <div className="filter-dropdown__menu-heading">
-            <strong>{label}</strong>
+            <strong>{labelText}</strong>
             <span>
-              {selected.length > 0 ? `${selected.length} selected` : "No selection"}
+              {selected.length > 0
+                ? t(filterMessages.selected, { count: formatNumber(selected.length) })
+                : t(filterMessages.noSelection)}
             </span>
           </div>
           <div className="filter-dropdown__options">
@@ -183,8 +205,8 @@ export function FilterDropdown({
                     {isSelected ? "✓" : ""}
                   </span>
                   <span className="filter-dropdown__option-copy">
-                    <strong>{option.label}</strong>
-                    {option.description && <small>{option.description}</small>}
+                    <strong>{localize(option.label)}</strong>
+                    {option.description && <small>{localize(option.description)}</small>}
                   </span>
                 </button>
               );
@@ -197,7 +219,7 @@ export function FilterDropdown({
                 disabled={selected.length === 0}
                 onClick={() => onChange([])}
               >
-                Clear
+                {t(filterMessages.clear)}
               </button>
             </div>
           )}

@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ChangedFileEntry } from "@loongboard/contracts";
+import { useI18n } from "../../i18n";
 import { Codicon } from "./codicon";
-import { ChangeFileIcon, changeFileLabel } from "./ChangeFileIcon";
+import { ChangeFileIcon } from "./ChangeFileIcon";
+import { changeFileMessage, prMessages } from "./messages";
 
 interface TreeFile extends ChangedFileEntry {
   readonly name: string;
@@ -117,7 +119,8 @@ function FileRow({
   const file = node.file;
   if (file === null) return null;
   const isSelected = selected === node.path;
-  const statusLabel = changeFileLabel(file.changeType);
+  const { t, formatNumber } = useI18n();
+  const statusLabel = t(changeFileMessage(file.changeType));
   return (
     <li
       className="pr-tree-item pr-tree-item--file"
@@ -140,8 +143,8 @@ function FileRow({
         <span className="pr-tree-name">{file.name}</span>
         {!file.binary && file.additions !== null && (
           <span className="pr-file-meta pr-tree-stats">
-            <span className="diff-stat-add">+{file.additions}</span>
-            <span className="diff-stat-del">−{file.deletions ?? 0}</span>
+            <span className="diff-stat-add">+{formatNumber(file.additions)}</span>
+            <span className="diff-stat-del">−{formatNumber(file.deletions ?? 0)}</span>
           </span>
         )}
       </button>
@@ -220,6 +223,7 @@ export function ChangedFilesTree({
   selected: string | null;
   onSelect: (path: string) => void;
 }) {
+  const { t, formatNumber } = useI18n();
   const [query, setQuery] = useState("");
   const [openPaths, setOpenPaths] = useState<Set<string>>(
     () => collectFolderPaths(buildTree(files)),
@@ -250,18 +254,18 @@ export function ChangedFilesTree({
   return (
     <section
       className="pr-file-tree"
-      aria-label="Changed files"
+      aria-label={t(prMessages.changedFiles)}
       id="pr-file-panel"
     >
       <header className="pr-file-tree-header">
-        <h3>Changed files ({files.length})</h3>
+        <h3>{t(prMessages.changedFilesCount, { count: formatNumber(files.length) })}</h3>
       </header>
       <div className="pr-file-filter">
         <Codicon name="search" className="pr-file-filter-icon" />
         <input
           type="search"
-          aria-label="Filter files"
-          placeholder="Filter by file path"
+          aria-label={t(prMessages.filterFiles)}
+          placeholder={t(prMessages.filterByFilePath)}
           autoComplete="off"
           spellCheck={false}
           value={query}
@@ -271,7 +275,7 @@ export function ChangedFilesTree({
           <button
             type="button"
             className="pr-file-filter-clear"
-            aria-label="Clear file filter"
+            aria-label={t(prMessages.clearFileFilter)}
             onClick={() => setQuery("")}
           >
             <Codicon name="close" className="pr-file-filter-clear-icon" />
@@ -280,10 +284,10 @@ export function ChangedFilesTree({
       </div>
       {visibleNodes.length === 0 ? (
         <p role="status" className="pr-tree-empty">
-          No files match “{query}”.
+          {t(prMessages.noFilesMatch, { query })}
         </p>
       ) : (
-        <ul className="pr-tree" role="tree" aria-label="Changed files">
+        <ul className="pr-tree" role="tree" aria-label={t(prMessages.changedFiles)}>
           {visibleNodes.map((node) => (
             <BranchRow
               key={node.path}

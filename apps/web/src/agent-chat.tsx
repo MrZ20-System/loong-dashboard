@@ -21,6 +21,8 @@ import type {
   AgentRuntimeModelCapability,
 } from "@loongboard/contracts";
 import { useAgentSessionSelection } from "./features/agent/agent-session-context";
+import { useI18n, type LocalizedMessage, type MessageValues } from "./i18n";
+import { agentMessages } from "./features/agent/messages";
 
 interface LiveTool {
   callId: string;
@@ -36,6 +38,11 @@ interface LiveTurn {
   activities: Array<{ id: string; kind: string; phase: string; title?: string; summary?: string }>;
   interactions: Array<{ requestId: string; title: string; description?: string; options: Array<{ id: string; label: string }>; resolved: boolean }>;
 }
+
+type Feedback = {
+  message: LocalizedMessage;
+  values?: MessageValues;
+};
 
 function emptyLive(): LiveTurn {
   return { text: "", tools: [], activities: [], interactions: [] };
@@ -65,13 +72,15 @@ export function AgentChatPanel({
   panelId?: string;
   showCollapseControl?: boolean;
 }) {
+  const { t } = useI18n();
+  const visibleHeading = heading === "Agent" ? t(agentMessages.agent) : heading;
   const queryClient = useQueryClient();
   const scopeKey = useMemo(() => JSON.stringify(scope), [scope]);
   const selection = useAgentSessionSelection(scopeKey);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [prompt, setPrompt] = useState("");
   const [live, setLive] = useState<LiveTurn | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
+  const [message, setMessage] = useState<Feedback | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [model, setModel] = useState("");
   const [reasoning, setReasoning] = useState("");
@@ -235,7 +244,7 @@ export function AgentChatPanel({
   });
   const reconfigure = useMutation({
     mutationFn: (patch: { provider?: string; model?: string; reasoningEffort?: string }) => updateAgentSession(currentSessionId as string, patch),
-    onSuccess: (view) => { queryClient.setQueryData(["agent-session", currentSessionId], view); setMessage("Session settings updated."); },
+    onSuccess: (view) => { queryClient.setQueryData(["agent-session", currentSessionId], view); setMessage({ message: agentMessages.sessionSettingsUpdated }); },
     onError: (failure: Error) => setError(failure.message),
   });
   const interaction = useMutation({
@@ -247,7 +256,7 @@ export function AgentChatPanel({
   const stop = useMutation({
     mutationFn: () => cancelAgentTurn(currentSessionId as string),
     onSuccess: (view) => {
-      setMessage("Turn stopped. Send a new message to continue.");
+      setMessage({ message: agentMessages.turnStopped });
       queryClient.setQueryData(["agent-session", currentSessionId], view);
       void queryClient.invalidateQueries({ queryKey: ["agent-messages", currentSessionId] });
     },
@@ -258,7 +267,7 @@ export function AgentChatPanel({
     mutationFn: () => syncAgentWorkspace(currentSessionId as string),
     onSuccess: (view) => {
       queryClient.setQueryData(["agent-session", currentSessionId], view);
-      setMessage("Workspace synchronized to the PR head revision.");
+      setMessage({ message: agentMessages.workspaceSynchronized });
     },
     onError: (failure: Error) => setError(failure.message),
   });
@@ -328,21 +337,21 @@ export function AgentChatPanel({
   return (
     <aside
       className={`agent-panel${isCollapsed ? " collapsed" : ""}`}
-      aria-label={heading}
+      aria-label={visibleHeading}
       id={resolvedPanelId}
     >
       <header className="agent-panel-header">
-        <h3>{heading}</h3>
+        <h3>{visibleHeading}</h3>
         <div className="agent-panel-actions">
           {running && (
             <button type="button" className="agent-stop" onClick={() => stop.mutate()} disabled={stop.isPending}>
-              Stop
+              {t(agentMessages.stop)}
             </button>
           )}
           {showCollapseControl && (
             <PanelCollapseButton
               panelId={resolvedPanelId}
-              label={heading}
+              label={visibleHeading}
               expanded={!isCollapsed}
               side="right"
               onToggle={toggleCollapsed}
@@ -357,20 +366,19 @@ export function AgentChatPanel({
             <div className="agent-session-meta">
               {session.data.targetRevision !== null && (
                 <div className="agent-revision" role="status">
-                  <span>Target: {session.data.targetRevision.slice(0, 12)}</span>
+                  <span>{t(agentMessages.target)}: {session.data.targetRevision.slice(0, 12)}</span>
                   <span>
-                    Workspace: {session.data.workspaceRevision !== null ? `${session.data.workspaceRevision.slice(0, 12)} ${revisionMismatch ? "⚠" : "✓"}` : "—"}
+                    {t(agentMessages.workspace)}: {session.data.workspaceRevision !== null ? `${session.data.workspaceRevision.slice(0, 12)} ${revisionMismatch ? "⚠" : "✓"}` : "—"}
                   </span>
                 </div>
               )}
               {session.data.targetRevision !== null && revisionMismatch && (
                 <>
                   <p role="alert" className="agent-note">
-                    Workspace does not match this PR revision. Sync the workspace
-                    before continuing this chat.
+                    {t(agentMessages.workspaceMismatch)}
                   </p>
                   <button type="button" disabled={running || syncWorkspace.isPending} onClick={() => syncWorkspace.mutate()}>
-                    {syncWorkspace.isPending ? "Syncing…" : "Sync workspace"}
+                    {syncWorkspace.isPending ? t(agentMessages.syncing) : t(agentMessages.syncWorkspace)}
                   </button>
                 </>
               )}
@@ -378,11 +386,11 @@ export function AgentChatPanel({
             </div>
           )}
           <div className="agent-messages" aria-live="polite">
-            {ensure.isPending && <p role="status">Opening session…</p>}
-            {error !== null && <p role="alert" className="agent-error">{error}</p>}
-            {message !== null && <p role="status" className="agent-note">{message}</p>}
+            {ensure.isPending && <p role="status">{t(agentMessages.openingSession)}</p>}
+            {error !== null && <p role="alert" className="agent-error">{t(agentMessages.agentError, { detail: error })}</p>}
+            {message !== null && <p role="status" className="agent-note">{t(message.message, message.values)}</p>}
             {!ensure.isPending && !error && items.length === 0 && live === null && (
-              <p role="status" className="agent-empty">Ask the agent about this workspace.</p>
+              <p role="status" className="agent-empty">{t(agentMessages.askWorkspace)}</p>
             )}
             {items.map((item) => (
               <article key={item.id} className={`agent-message agent-role-${item.role}`}>
@@ -400,7 +408,7 @@ export function AgentChatPanel({
                     ))}
                   </ul>
                 )}
-                {(() => { const interactions = [...live.interactions, ...persistedInteractions.filter((saved) => !live.interactions.some((item) => item.requestId === saved.requestId))]; return interactions.some((item) => !item.resolved) ? <ul className="agent-live-interactions" aria-label="Agent approval requests">{interactions.filter((item) => !item.resolved).map((item) => <li key={item.requestId}><strong>{item.title}</strong>{item.description && <p>{item.description}</p>}<div className="agent-interaction-options">{item.options.map((option) => <button type="button" key={option.id} disabled={!running || interaction.isPending} onClick={() => interaction.mutate({ requestId: item.requestId, value: option.id })}>{option.label}</button>)}</div></li>)}</ul> : null; })()}
+                {(() => { const interactions = [...live.interactions, ...persistedInteractions.filter((saved) => !live.interactions.some((item) => item.requestId === saved.requestId))]; return interactions.some((item) => !item.resolved) ? <ul className="agent-live-interactions" aria-label={t(agentMessages.approvalRequests)}>{interactions.filter((item) => !item.resolved).map((item) => <li key={item.requestId}><strong>{item.title}</strong>{item.description && <p>{item.description}</p>}<div className="agent-interaction-options">{item.options.map((option) => <button type="button" key={option.id} disabled={!running || interaction.isPending} onClick={() => interaction.mutate({ requestId: item.requestId, value: option.id })}>{option.label}</button>)}</div></li>)}</ul> : null; })()}
                 {live.activities.length > 0 && <ul className="agent-live-activities">{live.activities.map((activity) => <li key={activity.id}><span className="agent-activity-kind">{activity.kind}</span><strong>{activity.title ?? activity.phase}</strong>{activity.summary && <small>{activity.summary}</small>}</li>)}</ul>}
                 {live.text.length > 0 && (
                   <article className="agent-message agent-role-assistant">
@@ -408,14 +416,14 @@ export function AgentChatPanel({
                   </article>
                 )}
                 {live.text.length === 0 && live.tools.length === 0 && live.activities.length === 0 && live.interactions.every((item) => item.resolved) && (
-                  <p role="status" className="agent-note">Agent is working…</p>
+                  <p role="status" className="agent-note">{t(agentMessages.agentWorking)}</p>
                 )}
               </>
             )}
           </div>
           {historyItems.length > 0 && (
             <div className="agent-history">
-              <h4>Chats for this PR</h4>
+              <h4>{t(agentMessages.chatsForPr)}</h4>
               <ul>
                 {historyItems.map((item) => (
                   <li key={item.id}>
@@ -445,10 +453,10 @@ export function AgentChatPanel({
           >
             <div className="agent-composer__input">
               <textarea
-                aria-label="Message the agent"
+                aria-label={t(agentMessages.messageAgent)}
                 value={prompt}
                 rows={3}
-                placeholder="Ask the agent…"
+                placeholder={t(agentMessages.askAgentPlaceholder)}
                 onChange={(event) => {
                   setPrompt(event.target.value);
                   setCommandMenuDismissed(false);
@@ -479,13 +487,13 @@ export function AgentChatPanel({
                 }}
               />
               {commandMenuOpen && (
-                <div className="agent-command-menu" role="listbox" aria-label="Runtime commands">
+                <div className="agent-command-menu" role="listbox" aria-label={t(agentMessages.runtimeCommands)}>
                   {capabilities.isPending ? (
-                    <p className="agent-command-menu__empty" role="status">Loading runtime commands…</p>
+                    <p className="agent-command-menu__empty" role="status">{t(agentMessages.loadingRuntimeCommands)}</p>
                   ) : commands.length === 0 ? (
-                    <p className="agent-command-menu__empty" role="status">No runtime commands available.</p>
+                    <p className="agent-command-menu__empty" role="status">{t(agentMessages.noRuntimeCommands)}</p>
                   ) : commandMatches.length === 0 ? (
-                    <p className="agent-command-menu__empty" role="status">No matching runtime commands.</p>
+                    <p className="agent-command-menu__empty" role="status">{t(agentMessages.noMatchingRuntimeCommands)}</p>
                   ) : (
                     commandMatches.map((item: AgentRuntimeCommandCapability, index: number) => (
                       <button
@@ -507,12 +515,12 @@ export function AgentChatPanel({
               )}
             </div>
             <div className="agent-composer-actions">
-              <label className="agent-composer-select">Model<select aria-label="Agent model" value={model || currentSession?.model || ""} onChange={(event) => { const item = models.find((candidate: AgentRuntimeModelCapability) => candidate.id === event.target.value); setModel(event.target.value); setReasoning(""); if (currentSessionId !== null && item) reconfigure.mutate({ model: item.id, provider: item.provider, ...(item.reasoningEfforts[0] ? { reasoningEffort: item.reasoningEfforts[0] } : {}) }); }} disabled={running || reconfigure.isPending}><option value="">Runtime default</option>{models.map((item: AgentRuntimeModelCapability) => <option key={item.id} value={item.id}>{item.label ?? item.id} · {item.provider}</option>)}</select></label>
-              <label className="agent-composer-select">Reasoning<select aria-label="Agent reasoning" value={reasoning || currentSession?.reasoningEffort || ""} onChange={(event) => { setReasoning(event.target.value); if (currentSessionId !== null) reconfigure.mutate({ reasoningEffort: event.target.value }); }} disabled={running || reconfigure.isPending}><option value="">Runtime default</option>{reasonings.map((item: string) => <option key={item} value={item}>{item}</option>)}</select></label>
+              <label className="agent-composer-select">{t(agentMessages.model)}<select aria-label={t(agentMessages.agentModel)} value={model || currentSession?.model || ""} onChange={(event) => { const item = models.find((candidate: AgentRuntimeModelCapability) => candidate.id === event.target.value); setModel(event.target.value); setReasoning(""); if (currentSessionId !== null && item) reconfigure.mutate({ model: item.id, provider: item.provider, ...(item.reasoningEfforts[0] ? { reasoningEffort: item.reasoningEfforts[0] } : {}) }); }} disabled={running || reconfigure.isPending}><option value="">{t(agentMessages.runtimeDefault)}</option>{models.map((item: AgentRuntimeModelCapability) => <option key={item.id} value={item.id}>{item.label ?? item.id} · {item.provider}</option>)}</select></label>
+              <label className="agent-composer-select">{t(agentMessages.reasoning)}<select aria-label={t(agentMessages.agentReasoning)} value={reasoning || currentSession?.reasoningEffort || ""} onChange={(event) => { setReasoning(event.target.value); if (currentSessionId !== null) reconfigure.mutate({ reasoningEffort: event.target.value }); }} disabled={running || reconfigure.isPending}><option value="">{t(agentMessages.runtimeDefault)}</option>{reasonings.map((item: string) => <option key={item} value={item}>{item}</option>)}</select></label>
               <button type="submit" disabled={prompt.trim().length === 0 || currentSessionId === null || running || revisionMismatch || submit.isPending}>
-                {submit.isPending ? "Sending…" : "Send"}
+                {submit.isPending ? t(agentMessages.sending) : t(agentMessages.send)}
               </button>
-              <span className="agent-composer-hint">Ctrl/⌘ + Enter to send</span>
+              <span className="agent-composer-hint">{t(agentMessages.ctrlEnterHint)}</span>
             </div>
           </form>
         </>

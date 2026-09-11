@@ -313,6 +313,39 @@
   gap: 8px;
 }
 
+/* PR chat rails can be only a few hundred pixels wide. Keep the model and
+ * reasoning controls usable and give Send a full row so it cannot be clipped
+ * by a narrow flex line. */
+.pr-resize-panel .agent-composer-actions,
+.issue-layout > .agent-panel .agent-composer-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: end;
+  justify-content: initial;
+}
+
+.pr-resize-panel .agent-composer-select,
+.pr-resize-panel .agent-composer-select select,
+.issue-layout > .agent-panel .agent-composer-select,
+.issue-layout > .agent-panel .agent-composer-select select {
+  min-width: 0;
+  width: 100%;
+  max-width: none;
+}
+
+.pr-resize-panel .agent-composer-actions > button,
+.pr-resize-panel .agent-composer-hint,
+.issue-layout > .agent-panel .agent-composer-actions > button,
+.issue-layout > .agent-panel .agent-composer-hint {
+  grid-column: 1 / -1;
+}
+
+.pr-resize-panel .agent-composer-actions > button,
+.issue-layout > .agent-panel .agent-composer-actions > button {
+  width: 100%;
+  min-width: 0;
+}
+
 .agent-composer-actions button {
   min-width: 84px;
   border-color: var(--accent);

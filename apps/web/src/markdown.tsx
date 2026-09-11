@@ -2,6 +2,15 @@ import { Children, isValidElement, useEffect, useRef, useState, type ReactNode }
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import mermaid from "mermaid";
+import { message, useI18n } from "./i18n";
+
+const markdownMessages = {
+  mermaidFailed: message(
+    "Mermaid diagram failed: {detail}",
+    "Mermaid 图表渲染失败：{detail}",
+  ),
+  mermaidDiagram: message("Mermaid diagram", "Mermaid 图表"),
+} as const;
 
 /**
  * Markdown renderer for chat messages, issue bodies, and Knowledge previews
@@ -145,6 +154,7 @@ function MarkdownImage({
 }
 
 function MermaidBlock({ code }: { code: string }): ReactNode {
+  const { t } = useI18n();
   const hostRef = useRef<HTMLDivElement>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -174,7 +184,7 @@ function MermaidBlock({ code }: { code: string }): ReactNode {
     return (
       <>
         <p role="alert" className="markdown-mermaid-error">
-          Mermaid diagram failed: {error}
+          {t(markdownMessages.mermaidFailed, { detail: error })}
         </p>
         <pre className="markdown-fallback-code">
           <code>{code}</code>
@@ -182,7 +192,7 @@ function MermaidBlock({ code }: { code: string }): ReactNode {
       </>
     );
   }
-  return <div ref={hostRef} className="markdown-mermaid" aria-label="Mermaid diagram" />;
+  return <div ref={hostRef} className="markdown-mermaid" aria-label={t(markdownMessages.mermaidDiagram)} />;
 }
 
 function MarkdownPre({ children }: { children?: ReactNode }): ReactNode {

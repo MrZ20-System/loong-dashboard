@@ -18,6 +18,7 @@ import type {
   DomainTag,
   PullRequestDetail,
 } from "@loongboard/contracts";
+import { useI18n } from "./i18n";
 import { AgentChatPanel } from "./agent-chat";
 import { ChangedFilesTree } from "./components/pr/ChangedFilesTree";
 import {
@@ -47,6 +48,7 @@ import {
   prFileQueryOptions,
   PR_FILE_CACHE_TIME_MS,
 } from "./pr-file-cache";
+import { prMessages } from "./components/pr/messages";
 
 const DiffViewer = lazy(() =>
   import("./diff-viewer").then((module) => ({ default: module.DiffViewer })),
@@ -57,6 +59,27 @@ type WorkbenchMode = "changes" | "full";
 const DEFAULT_CODE_FONT_SIZE = 13;
 const MIN_CODE_FONT_SIZE = 10;
 const MAX_CODE_FONT_SIZE = 20;
+const PR_DUAL_PANEL_BREAKPOINT = 1280;
+
+function isNarrowPrViewport(): boolean {
+  // Keep the narrow, single-rail layout as the safe server/test default. The
+  // browser effect below upgrades it when the real viewport is wide enough.
+  return typeof window === "undefined" || window.innerWidth <= PR_DUAL_PANEL_BREAKPOINT;
+}
+
+function useNarrowPrViewport(): boolean {
+  const [narrow, setNarrow] = useState(isNarrowPrViewport);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const update = () => setNarrow(isNarrowPrViewport());
+    update();
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
+
+  return narrow;
+}
 
 function usePullRequestPage(
   repositoryId: string,
@@ -154,6 +177,7 @@ function DiffCardContent({
   viewMode?: ChangesViewMode;
   fontSize: number;
 }) {
+  const { t } = useI18n();
   const hasBase = file.changeType !== "added";
   const hasHead = file.changeType !== "removed";
   const basePath = file.previousPath ?? file.path;
@@ -196,11 +220,11 @@ function DiffCardContent({
       {degraded !== null && (
         <p role="status" className="file-degraded-notice">
           {degraded === "binary"
-            ? "Binary file — open it locally to inspect."
-            : "File too large for the editor — open it locally."}
+            ? t(prMessages.binaryFile)
+            : t(prMessages.tooLargeFile)}
         </p>
       )}
-      <Suspense fallback={<p role="status">Loading editor…</p>}>
+      <Suspense fallback={<p role="status">{t(prMessages.loadingEditor)}</p>}>
         <DiffViewer
           original={baseSide.kind === "text" ? baseSide.text : ""}
           modified={headSide.kind === "text" ? headSide.text : ""}
@@ -231,6 +255,7 @@ function FullChangedFilePane({
   headSha: string;
   fontSize: number;
 }) {
+  const { t, formatNumber } = useI18n();
   const label = labelForFile(file);
   return (
     <div className="pr-diff-card pr-diff-card--full">
@@ -247,12 +272,12 @@ function FullChangedFilePane({
         </span>
         <span className="pr-diff-card-stats">
           {file.binary ? (
-            <span className="pr-file-meta">binary</span>
+            <span className="pr-file-meta">{t(prMessages.binary)}</span>
           ) : (
             file.additions !== null && (
               <>
-                <span className="diff-stat-add">+{file.additions}</span>
-                <span className="diff-stat-del">−{file.deletions ?? 0}</span>
+                <span className="diff-stat-add">+{formatNumber(file.additions)}</span>
+                <span className="diff-stat-del">−{formatNumber(file.deletions ?? 0)}</span>
               </>
             )
           )}
@@ -290,6 +315,7 @@ function FullHeadFilePane({
   headSha: string;
   fontSize: number;
 }) {
+  const { t } = useI18n();
   const head = useQuery({
     ...prFileQueryOptions(repositoryId, number, path, headSha),
     placeholderData: keepPreviousData,
@@ -316,17 +342,19 @@ function FullHeadFilePane({
           </span>
           <FilePathCopyButton path={path} />
         </span>
-        <span className="pr-diff-card-stats pr-file-meta">head file</span>
+        <span className="pr-diff-card-stats pr-file-meta">
+          {t(prMessages.headFile)}
+        </span>
       </header>
       <div className="pr-diff-card-body">
         {degraded !== null && (
           <p role="status" className="file-degraded-notice">
-            {degraded === "binary"
-              ? "Binary file — open it locally to inspect."
-              : "File too large for the editor — open it locally."}
+          {degraded === "binary"
+            ? t(prMessages.binaryFile)
+            : t(prMessages.tooLargeFile)}
           </p>
         )}
-        <Suspense fallback={<p role="status">Loading editor…</p>}>
+        <Suspense fallback={<p role="status">{t(prMessages.loadingEditor)}</p>}>
           <DiffViewer
             original={text}
             modified={text}
@@ -347,21 +375,33 @@ function CopyLocalCommand({
   repositoryId: string;
   number: number;
 }) {
+  const { t } = useI18n();
   const [copied, setCopied] = useState(false);
+  const [failed, setFailed] = useState(false);
   const copy = async () => {
-    const { command } = await fetchLocalCommand(repositoryId, number);
-    await navigator.clipboard.writeText(command);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
+    setFailed(false);
+    try {
+      const { command } = await fetchLocalCommand(repositoryId, number);
+      await navigator.clipboard.writeText(command);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      setFailed(true);
+    }
   };
   return (
     <span className="copy-command">
       <button type="button" onClick={() => void copy()}>
-        Copy local command
+        {t(prMessages.copyLocalCommand)}
       </button>
       {copied && (
         <span role="status" className="copied-hint">
-          Copied
+          {t(prMessages.copied)}
+        </span>
+      )}
+      {failed && (
+        <span role="alert" className="copied-hint">
+          {t(prMessages.copyFailed)}
         </span>
       )}
     </span>
@@ -369,6 +409,7 @@ function CopyLocalCommand({
 }
 
 export function PullRequestDetailPage() {
+  const { t, formatDateTime } = useI18n();
   const { repositoryId = "", number: rawNumber = "" } = useParams();
   const number = Number(rawNumber);
   const enabled =
@@ -422,12 +463,31 @@ export function PullRequestDetailPage() {
   const [fullSelectedPath, setFullSelectedPath] = useState<string | null>(
     null,
   );
+  const narrowViewport = useNarrowPrViewport();
   const [filesOpen, setFilesOpen] = useState(true);
-  const [chatOpen, setChatOpen] = useState(true);
+  const [chatOpen, setChatOpen] = useState(() => !isNarrowPrViewport());
   const [bulkExpansion, setBulkExpansion] = useState<{
     id: number;
     expanded: boolean;
   } | null>(null);
+
+  useEffect(() => {
+    // Preserve the file tree as the useful default when a wide workbench is
+    // resized into a viewport that cannot support both rails.
+    if (narrowViewport && filesOpen && chatOpen) setChatOpen(false);
+  }, [chatOpen, filesOpen, narrowViewport]);
+
+  const toggleFiles = () => {
+    const next = !filesOpen;
+    setFilesOpen(next);
+    if (next && narrowViewport) setChatOpen(false);
+  };
+
+  const toggleChat = () => {
+    const next = !chatOpen;
+    setChatOpen(next);
+    if (next && narrowViewport) setFilesOpen(false);
+  };
 
   const files = prepare.data?.files ?? [];
   useEffect(() => {
@@ -513,8 +573,8 @@ export function PullRequestDetailPage() {
     return (
       <section className="pr-detail pr-detail--focus pr-detail--unavailable" aria-labelledby="pr-unavailable-title">
         <div className="pr-unavailable-card">
-          <h2 id="pr-unavailable-title">Pull request unavailable</h2>
-          <p role="alert">Invalid pull request number.</p>
+          <h2 id="pr-unavailable-title">{t(prMessages.pullRequestUnavailable)}</h2>
+          <p role="alert">{t(prMessages.invalidPullRequestNumber)}</p>
         </div>
       </section>
     );
@@ -523,8 +583,8 @@ export function PullRequestDetailPage() {
     return (
       <section className="pr-detail pr-detail--focus pr-detail--unavailable" aria-labelledby="pr-unavailable-title">
         <div className="pr-unavailable-card">
-          <h2 id="pr-unavailable-title">Pull request</h2>
-          <p role="status">Loading pull request…</p>
+          <h2 id="pr-unavailable-title">{t(prMessages.pullRequest)}</h2>
+          <p role="status">{t(prMessages.loadingPullRequest)}</p>
         </div>
       </section>
     );
@@ -538,23 +598,23 @@ export function PullRequestDetailPage() {
     return (
       <section className="pr-detail pr-detail--focus pr-detail--unavailable" aria-labelledby="pr-unavailable-title">
         <div className="pr-unavailable-card">
-        <h2 id="pr-unavailable-title">Pull request unavailable</h2>
-        {notFound ? <p role="alert">PR #{number} isn&apos;t available locally.</p> : <p role="alert">{detail.error.message}</p>}
+        <h2 id="pr-unavailable-title">{t(prMessages.pullRequestUnavailable)}</h2>
+        {notFound ? <p role="alert">{t(prMessages.prNotAvailableLocally, { number })}</p> : <p role="alert">{t(prMessages.unableLoadPullRequest, { detail: detail.error.message })}</p>}
         {notFound && (
           <div className="pr-fetch-missing">
             <button type="button" className="button-primary" onClick={() => fetchPullRequest.mutate()} disabled={fetchPullRequest.isPending || activeFetch}>
-              {fetchPullRequest.isPending || activeFetch ? "Fetching PR…" : "Fetch PR"}
+              {fetchPullRequest.isPending || activeFetch ? t(prMessages.fetchingPr) : t(prMessages.fetchPr)}
             </button>
-            {fetchPullRequest.isError && <p role="alert">Unable to fetch PR: {fetchPullRequest.error.message}</p>}
-            {fetchRun.isError && <p role="alert">Unable to check fetch run: {fetchRun.error.message}</p>}
-            {activeFetch && <p role="status">Fetching PR from GitHub…</p>}
-            {fetchRun.data?.status === "completed" && <p role="status">PR fetched. Refreshing local details…</p>}
-            {fetchFailed && <p role="alert">Fetch PR failed: {fetchRun.data?.error ?? `run ${fetchRun.data?.status}`}</p>}
+            {fetchPullRequest.isError && <p role="alert">{t(prMessages.unableFetchPr)} {fetchPullRequest.error.message}</p>}
+            {fetchRun.isError && <p role="alert">{t(prMessages.unableCheckFetchRun)} {fetchRun.error.message}</p>}
+            {activeFetch && <p role="status">{t(prMessages.fetchingPrFromGithub)}</p>}
+            {fetchRun.data?.status === "completed" && <p role="status">{t(prMessages.prFetchedRefreshing)}</p>}
+            {fetchFailed && <p role="alert">{t(prMessages.fetchPrFailed, { detail: fetchRun.data?.error ?? `run ${fetchRun.data?.status}` })}</p>}
           </div>
         )}
         {notFound && (
           <Link to={`/repositories/${encodeURIComponent(repositoryId)}/pulls`}>
-            Back to pull requests
+            {t(prMessages.backToPullRequests)}
           </Link>
         )}
         </div>
@@ -565,7 +625,7 @@ export function PullRequestDetailPage() {
   const isArchived = pr.archivedAt != null;
   const isPayloadPruned = pr.payloadPrunedAt != null;
   const fileTreeLabel =
-    mode === "changes" ? "changed files" : "repository files";
+    t(mode === "changes" ? prMessages.changedFilesPanel : prMessages.repositoryFilesPanel);
   const selectChangedFile = (path: string) => {
     setChangesSelectedPath(path);
     scrollToDiffFile(path);
@@ -583,7 +643,7 @@ export function PullRequestDetailPage() {
               href={pr.url}
               target="_blank"
               rel="noreferrer"
-              aria-label={`Open pull request #${pr.number} on GitHub`}
+              aria-label={t(prMessages.openPullRequestOnGithub, { number: pr.number })}
             >
               #{pr.number}
             </a>
@@ -592,50 +652,50 @@ export function PullRequestDetailPage() {
             <span className={`pr-status-pill pr-status-pill--${pr.status}`}>
               {pr.status}
             </span>
-            <strong>{pr.authorLogin ?? "unknown"}</strong>
-            <span>wants to merge into</span>
+            <strong>{pr.authorLogin ?? t(prMessages.unknown)}</strong>
+            <span>{t(prMessages.wantsToMergeInto)}</span>
             <span className="pr-ref-chip">{pr.baseRefName}</span>
-            <span>from</span>
+            <span>{t(prMessages.from)}</span>
             <span className="pr-ref-chip">{pr.headRefName}</span>
-            <span className="pr-updated">updated {pr.updatedAt}</span>
+            <span className="pr-updated">{t(prMessages.updated, { value: formatDateTime(pr.updatedAt) })}</span>
           </p>
           <DomainChips domains={pr.domains} />
         </div>
         <div className="pr-heading-actions">
           <CopyLocalCommand repositoryId={repositoryId} number={pr.number} />
           <Link to={`/repositories/${encodeURIComponent(repositoryId)}/pulls`}>
-            Back to list
+            {t(prMessages.backToList)}
           </Link>
         </div>
       </div>
       {isArchived && (
         <aside className="metadata-archive-banner" role="status">
-          <strong>Archived</strong>
+          <strong>{t(prMessages.archived)}</strong>
           <button type="button" onClick={() => restore.mutate()} disabled={restore.isPending}>
-            {restore.isPending ? "Restoring…" : "Restore"}
+            {restore.isPending ? t(prMessages.restoring) : t(prMessages.restore)}
           </button>
-          {restore.isError && <span role="alert">Unable to restore: {restore.error.message}</span>}
+          {restore.isError && <span role="alert">{t(prMessages.unableRestore)} {restore.error.message}</span>}
         </aside>
       )}
       {isPayloadPruned && (
         <aside className="metadata-archive-banner" role="status">
-          <strong>Cached details cleaned</strong>
+          <strong>{t(prMessages.cachedDetailsCleaned)}</strong>
           <button type="button" onClick={() => fetchPullRequest.mutate()} disabled={refreshActive}>
-            {refreshActive ? "Refreshing…" : "Refresh from GitHub"}
+            {refreshActive ? t(prMessages.refreshing) : t(prMessages.refreshFromGithub)}
           </button>
-          {fetchPullRequest.isError && <span role="alert">Unable to refresh: {fetchPullRequest.error.message}</span>}
-          {fetchRun.isError && <span role="alert">Unable to check refresh run: {fetchRun.error.message}</span>}
-          {refreshFailed && <span role="alert">Unable to refresh: {fetchRun.data.error ?? `fetch run ${fetchRun.data.status}`}</span>}
+          {fetchPullRequest.isError && <span role="alert">{t(prMessages.unableRefresh)} {fetchPullRequest.error.message}</span>}
+          {fetchRun.isError && <span role="alert">{t(prMessages.unableCheckRefreshRun)} {fetchRun.error.message}</span>}
+          {refreshFailed && <span role="alert">{t(prMessages.unableRefresh)} {fetchRun.data.error ?? `fetch run ${fetchRun.data.status}`}</span>}
         </aside>
       )}
       {prepare.isPending && (
         <p role="status" className="pr-workbench-status">
-          Preparing local Git objects…
+          {t(prMessages.preparingLocalObjects)}
         </p>
       )}
       {prepare.isError && (
         <p role="alert" className="pr-workbench-status">
-          Unable to prepare diff: {prepare.error.message}
+          {t(prMessages.unablePrepareDiff)} {prepare.error.message}
         </p>
       )}
       {!prepare.isPending && !prepare.isError && prepare.data !== undefined && (
@@ -644,43 +704,43 @@ export function PullRequestDetailPage() {
             <div className="pr-workbench-toolbar__status">
               {prepare.data.fetched && (
                 <span role="status" className="pr-workbench-fetch-hint">
-                  Fetched missing Git objects
+                  {t(prMessages.fetchedMissingObjects)}
                 </span>
               )}
             </div>
             <div
               className="pr-workbench-toolbar__controls"
               role="group"
-              aria-label="Workbench controls"
+              aria-label={t(prMessages.workbenchControls)}
             >
               <PanelCollapseButton
                 panelId="pr-file-panel"
                 label={fileTreeLabel}
                 expanded={filesOpen}
                 side="left"
-                onToggle={() => setFilesOpen((open) => !open)}
+                onToggle={toggleFiles}
               />
               <PanelCollapseButton
                 panelId="pr-chat-panel"
-                label="PR chat"
+                label={t(prMessages.prChat)}
                 expanded={chatOpen}
                 side="right"
-                onToggle={() => setChatOpen((open) => !open)}
+                onToggle={toggleChat}
               />
               <details className="pr-diff-settings">
-                <summary aria-label="Diff settings" title="Diff settings">
+                <summary aria-label={t(prMessages.diffSettings)} title={t(prMessages.diffSettings)}>
                   <Codicon name="settings-gear" />
                 </summary>
                 <div className="pr-diff-settings__menu">
                   <section>
-                    <h3>Layout</h3>
+                    <h3>{t(prMessages.layout)}</h3>
                     <button
                       type="button"
                       disabled={mode !== "changes"}
                       aria-pressed={changesViewMode === "unified"}
                       onClick={() => setChangesViewMode("unified")}
                     >
-                      <Codicon name="check" /> Unified
+                      <Codicon name="check" /> {t(prMessages.unified)}
                     </button>
                     <button
                       type="button"
@@ -688,11 +748,11 @@ export function PullRequestDetailPage() {
                       aria-pressed={changesViewMode === "split"}
                       onClick={() => setChangesViewMode("split")}
                     >
-                      <Codicon name="check" /> Split
+                      <Codicon name="check" /> {t(prMessages.split)}
                     </button>
                   </section>
                   <section>
-                    <h3>Changed files</h3>
+                    <h3>{t(prMessages.changedFiles)}</h3>
                     <button
                       type="button"
                       disabled={mode !== "changes"}
@@ -703,7 +763,7 @@ export function PullRequestDetailPage() {
                         }))
                       }
                     >
-                      Expand all
+                      {t(prMessages.expandAll)}
                     </button>
                     <button
                       type="button"
@@ -715,19 +775,19 @@ export function PullRequestDetailPage() {
                         }))
                       }
                     >
-                      Collapse all
+                      {t(prMessages.collapseAll)}
                     </button>
                   </section>
                   <section>
-                    <h3>Code font size</h3>
+                    <h3>{t(prMessages.codeFontSize)}</h3>
                     <div
                       className="pr-diff-settings__font-size"
                       role="group"
-                      aria-label="Code font size controls"
+                      aria-label={t(prMessages.codeFontSizeControls)}
                     >
                       <button
                         type="button"
-                        aria-label="Decrease code font size"
+                        aria-label={t(prMessages.decreaseCodeFontSize)}
                         disabled={codeFontSize <= MIN_CODE_FONT_SIZE}
                         onClick={() =>
                           setCodeFontSize((size) =>
@@ -737,12 +797,12 @@ export function PullRequestDetailPage() {
                       >
                         −
                       </button>
-                      <output aria-label="Code font size">
+                      <output aria-label={t(prMessages.codeFontSize)}>
                         {codeFontSize} px
                       </output>
                       <button
                         type="button"
-                        aria-label="Increase code font size"
+                        aria-label={t(prMessages.increaseCodeFontSize)}
                         disabled={codeFontSize >= MAX_CODE_FONT_SIZE}
                         onClick={() =>
                           setCodeFontSize((size) =>
@@ -755,20 +815,20 @@ export function PullRequestDetailPage() {
                     </div>
                   </section>
                   <section>
-                    <h3>View</h3>
+                    <h3>{t(prMessages.view)}</h3>
                     <button
                       type="button"
                       aria-pressed={mode === "changes"}
                       onClick={() => setMode("changes")}
                     >
-                      <Codicon name="check" /> Changes
+                      <Codicon name="check" /> {t(prMessages.changes)}
                     </button>
                     <button
                       type="button"
                       aria-pressed={mode === "full"}
                       onClick={() => setMode("full")}
                     >
-                      <Codicon name="check" /> Full File
+                      <Codicon name="check" /> {t(prMessages.fullFile)}
                     </button>
                   </section>
                 </div>
@@ -811,11 +871,11 @@ export function PullRequestDetailPage() {
                 />
               ) : repositoryTree.isError ? (
                 <p role="alert" className="pr-workbench-main-status">
-                  Unable to load repository files: {repositoryTree.error.message}
+                  {t(prMessages.unableLoadRepositoryFiles)} {repositoryTree.error.message}
                 </p>
               ) : repositoryTree.isPending || repositoryTree.data === undefined ? (
                 <p role="status" className="pr-workbench-main-status">
-                  Loading repository files…
+                  {t(prMessages.loadingRepositoryFiles)}
                 </p>
               ) : fullChangedFile !== null ? (
                 <FullChangedFilePane
@@ -836,7 +896,7 @@ export function PullRequestDetailPage() {
                 />
               ) : (
                 <p role="status" className="pr-workbench-main-status">
-                  No files at this revision.
+                  {t(prMessages.noFilesAtRevision)}
                 </p>
               )}
             </div>
@@ -844,7 +904,7 @@ export function PullRequestDetailPage() {
               panelId="pr-chat-panel"
               side="right"
               open={chatOpen}
-              label="PR chat"
+              label={t(prMessages.prChat)}
               defaultWidth={360}
               minWidth={260}
               maxWidth={560}
@@ -857,14 +917,14 @@ export function PullRequestDetailPage() {
                     prNumber: pr.number,
                     targetSha: pr.headSha,
                   }}
-                  heading="PR chat"
+                  heading={t(prMessages.prChat)}
                   collapsed={false}
                   panelId="pr-chat-panel"
                   showCollapseControl={false}
                 />
               ) : (
                 <p role="status" className="pr-workbench-panel-status">
-                  Opening PR workspace…
+                  {t(prMessages.openingPrWorkspace)}
                 </p>
               )}
             </ResizableSidePanel>
@@ -901,6 +961,7 @@ function ResizableFilePanel({
   onChangedSelect: (path: string) => void;
   onFullSelect: (path: string) => void;
 }) {
+  const { t } = useI18n();
   let content: ReactNode;
   if (mode === "changes") {
     content = (
@@ -913,13 +974,13 @@ function ResizableFilePanel({
   } else if (treeState.isError) {
     content = (
       <p role="alert" className="pr-workbench-panel-status">
-        {treeState.error?.message ?? "Unable to load repository files."}
+        {t(prMessages.unableLoadRepositoryFiles)} {treeState.error?.message ?? ""}
       </p>
     );
   } else if (treeState.isPending || treeState.data === undefined) {
     content = (
       <p role="status" className="pr-workbench-panel-status">
-        Loading repository files…
+        {t(prMessages.loadingRepositoryFiles)}
       </p>
     );
   } else {
@@ -939,7 +1000,7 @@ function ResizableFilePanel({
       panelId="pr-file-panel"
       side="left"
       open={open}
-      label={mode === "changes" ? "Changed files" : "Repository files"}
+      label={t(mode === "changes" ? prMessages.changedFiles : prMessages.repositoryFiles)}
       defaultWidth={290}
       minWidth={220}
       maxWidth={560}

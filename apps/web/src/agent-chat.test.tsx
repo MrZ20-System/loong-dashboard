@@ -146,6 +146,10 @@ describe("AgentChatPanel PR revision gating", () => {
     const panel = await screen.findByRole("complementary", { name: "PR chat" });
     expect(panel.querySelector(".agent-messages")).toHaveClass("agent-messages");
     expect(panel.querySelector(".agent-composer")).toHaveClass("agent-composer");
+    const composerActions = panel.querySelector(".agent-composer-actions");
+    expect(composerActions).toHaveClass("agent-composer-actions");
+    expect(composerActions?.querySelectorAll(".agent-composer-select")).toHaveLength(2);
+    expect(composerActions?.querySelector(".agent-composer-hint")).toBeInTheDocument();
     const send = await screen.findByRole("button", { name: "Send" });
     fireEvent.change(screen.getByLabelText("Message the agent"), {
       target: { value: "right revision" },

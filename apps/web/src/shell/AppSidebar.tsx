@@ -2,12 +2,14 @@ import { useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { useRepositories } from "../app/hooks";
 import type { RepositorySummary } from "../metadata-client";
+import { useI18n } from "../i18n";
+import { shellMessages } from "./messages";
 import "./app-sidebar-refinements.css";
 
 const workspaceLinks = [
-  { to: "/", label: "Board", icon: "home", end: true },
-  { to: "/agent", label: "Agent", icon: "sparkle", end: false },
-  { to: "/knowledge", label: "Knowledge", icon: "book", end: false },
+  { to: "/", label: shellMessages.board, icon: "home", end: true },
+  { to: "/agent", label: shellMessages.agent, icon: "sparkle", end: false },
+  { to: "/knowledge", label: shellMessages.knowledge, icon: "book", end: false },
 ] as const;
 
 function activeRepositoryId(pathname: string): string | null {
@@ -25,6 +27,7 @@ function RepositoryGroup({
   onExpandSidebar: () => void;
 }) {
   const repositoryId = repository.id;
+  const { t, formatNumber } = useI18n();
   const location = useLocation();
   const activeId = activeRepositoryId(location.pathname);
   const isActive = activeId === repositoryId;
@@ -40,7 +43,7 @@ function RepositoryGroup({
         type="button"
         className="sidebar-repo__switcher"
         aria-expanded={expanded}
-        aria-label={compact ? `Expand navigation for ${repository.displayName}` : undefined}
+        aria-label={compact ? t(shellMessages.expandNavigationFor, { repository: repository.displayName }) : undefined}
         title={compact ? repository.displayName : undefined}
         onClick={() => {
           if (compact) onExpandSidebar();
@@ -63,23 +66,23 @@ function RepositoryGroup({
       {expanded && !compact && (
         <nav
           className="sidebar-repo__subnav"
-          aria-label={`${repository.displayName} sections`}
+          aria-label={t(shellMessages.repositorySections, { repository: repository.displayName })}
         >
           <NavLink to={`/repositories/${encodeURIComponent(repositoryId)}`} end>
-            Activity
+            {t(shellMessages.activity)}
           </NavLink>
           <NavLink
             to={`/repositories/${encodeURIComponent(repositoryId)}/pulls`}
           >
-            Pull requests{typeof counts.pullRequestCount === "number" && <span className="sidebar-count">{counts.pullRequestCount}</span>}
+            {t(shellMessages.pullRequests)}{typeof counts.pullRequestCount === "number" && <span className="sidebar-count">{formatNumber(counts.pullRequestCount)}</span>}
           </NavLink>
           <NavLink to={`/repositories/${encodeURIComponent(repositoryId)}/merged`}>
-            Merged{typeof counts.mergedPullRequestCount === "number" && <span className="sidebar-count">{counts.mergedPullRequestCount}</span>}
+            {t(shellMessages.merged)}{typeof counts.mergedPullRequestCount === "number" && <span className="sidebar-count">{formatNumber(counts.mergedPullRequestCount)}</span>}
           </NavLink>
           <NavLink
             to={`/repositories/${encodeURIComponent(repositoryId)}/issues`}
           >
-            Issues{typeof counts.issueCount === "number" && <span className="sidebar-count">{counts.issueCount}</span>}
+            {t(shellMessages.issues)}{typeof counts.issueCount === "number" && <span className="sidebar-count">{formatNumber(counts.issueCount)}</span>}
           </NavLink>
         </nav>
       )}
@@ -98,6 +101,7 @@ export function AppSidebar({
   compact?: boolean;
   onToggleCompact?: () => void;
 }) {
+  const { t } = useI18n();
   const repositories = useRepositories();
   const location = useLocation();
   const settingsActive =
@@ -108,7 +112,7 @@ export function AppSidebar({
     <aside
       className={`sidebar${open ? " sidebar--open" : ""}${compact ? " sidebar--compact" : ""}`}
       id="app-sidebar"
-      aria-label="Primary"
+      aria-label={t(shellMessages.primary)}
     >
       <div className="sidebar__brand">
         <span className="brand-mark" aria-hidden="true">
@@ -116,22 +120,22 @@ export function AppSidebar({
         </span>
         <div className="sidebar__brand-copy">
           <strong>LoongBoard</strong>
-          <span>Local engineering board</span>
+          <span>{t(shellMessages.localEngineeringBoard)}</span>
         </div>
         <button
           type="button"
           className="sidebar__close"
-          aria-label="Close navigation menu"
+          aria-label={t(shellMessages.closeNavigationMenu)}
           onClick={onClose}
         >
-          Close
+          {t(shellMessages.closeNavigation)}
         </button>
       </div>
-      <nav className="sidebar__nav" aria-label="Primary navigation">
-        <p className="sidebar__eyebrow">Workspace</p>
+      <nav className="sidebar__nav" aria-label={t(shellMessages.primaryNavigation)}>
+        <p className="sidebar__eyebrow">{t(shellMessages.workspace)}</p>
         <ul className="sidebar-nav-list">
           {workspaceLinks.map(({ to, label, icon, end }) => (
-            <li key={label}>
+            <li key={to}>
               <NavLink
                 to={to}
                 end={end}
@@ -143,25 +147,25 @@ export function AppSidebar({
                 }
               >
                 <span className={`sidebar-nav__icon codicon codicon-${icon}`} aria-hidden="true">{icon === "sparkle" ? "✦" : null}</span>
-                <span className="sidebar-nav__label">{label}</span>
+                <span className="sidebar-nav__label">{t(label)}</span>
               </NavLink>
             </li>
           ))}
         </ul>
         {repositories.isPending && (
           <p role="status" className="sidebar-note">
-            Loading repositories…
+            {t(shellMessages.loadingRepositories)}
           </p>
         )}
         {repositories.isError && (
           <p role="alert" className="sidebar-note">
-            {repositories.error.message}
+            {t(shellMessages.unableLoadRepositories, { detail: repositories.error.message })}
           </p>
         )}
         {repositories.data !== undefined && repositories.data.items.length > 0 && (
           <>
             <p className="sidebar__eyebrow sidebar__eyebrow--repositories">
-              Repositories
+              {t(shellMessages.repositories)}
             </p>
             {repositories.data.items.map((repository) => (
               <RepositoryGroup
@@ -184,22 +188,22 @@ export function AppSidebar({
                 : "sidebar-settings__trigger"
             }
             onClick={onClose}
-            title={compact ? "Settings" : undefined}
+            title={compact ? t(shellMessages.settings) : undefined}
           >
             <span
               className="sidebar-settings__icon codicon codicon-settings-gear"
               aria-hidden="true"
             />
-            <span className="sidebar-settings__label">Settings</span>
+            <span className="sidebar-settings__label">{t(shellMessages.settings)}</span>
           </NavLink>
         </div>
         <button
           type="button"
           className="sidebar__compact-toggle"
-          aria-label={compact ? "Expand sidebar" : "Collapse sidebar"}
+          aria-label={compact ? t(shellMessages.expandSidebar) : t(shellMessages.collapseSidebar)}
           aria-pressed={compact}
           onClick={onToggleCompact}
-          title={compact ? "Expand sidebar" : "Collapse sidebar"}
+          title={compact ? t(shellMessages.expandSidebar) : t(shellMessages.collapseSidebar)}
         >
           <span
             className={`codicon ${compact ? "codicon-layout-sidebar-left" : "codicon-layout-sidebar-left-off"}`}

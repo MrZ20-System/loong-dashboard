@@ -21,4 +21,20 @@ describe("Pagination", () => {
     fireEvent.click(screen.getByRole("button", { name: "Go to page 9" }));
     expect(onPageChange).toHaveBeenLastCalledWith(9);
   });
+
+  it("gives each page input a locale-independent unique id", () => {
+    render(
+      <>
+        <Pagination page={1} pageSize={10} totalCount={10} totalPages={1} onPageChange={() => undefined} />
+        <Pagination page={1} pageSize={10} totalCount={10} totalPages={1} onPageChange={() => undefined} />
+      </>,
+    );
+
+    const inputs = screen.getAllByRole("spinbutton", { name: "Go to page" });
+    expect(inputs).toHaveLength(2);
+    expect(inputs[0]).toHaveAttribute("id");
+    expect(inputs[1]).toHaveAttribute("id");
+    expect(inputs[0].id).not.toBe(inputs[1].id);
+    expect(inputs[0].id).not.toContain("pagination");
+  });
 });

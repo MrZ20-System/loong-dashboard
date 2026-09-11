@@ -1,10 +1,14 @@
 import { useLocation } from "react-router-dom";
 import { useRepositories } from "../app/hooks";
 import { RepositorySyncStatus } from "../components/repository/RepositorySyncStatus";
+import { useI18n, type LocalizedMessage, type MessageValues } from "../i18n";
+import { AppearanceControls } from "./AppearanceControls";
+import { shellMessages } from "./messages";
 
 interface HeaderContext {
-  eyebrow: string;
-  title: string;
+  eyebrow: LocalizedMessage;
+  title: LocalizedMessage;
+  titleValues?: MessageValues;
   repositoryId: string | null;
 }
 
@@ -17,60 +21,38 @@ function repositorySection(
   const repositoryId = decodeURIComponent(match[1] ?? "");
   const kind = match[2] ?? null;
   const number = match[3] ?? null;
-  let title = "Activity";
-  if (kind === "pulls") title = number ? `Pull request #${number}` : "Pull requests";
-  if (kind === "merged") title = "Merged";
-  if (kind === "issues") title = number ? `Issue #${number}` : "Issues";
-  return { eyebrow: "Repository", title, repositoryId };
+  let title = shellMessages.activity;
+  let titleValues: MessageValues | undefined;
+  if (kind === "pulls") {
+    title = number ? shellMessages.pullRequestNumber : shellMessages.pullRequests;
+    titleValues = number ? { number } : undefined;
+  }
+  if (kind === "merged") title = shellMessages.merged;
+  if (kind === "issues") {
+    title = number ? shellMessages.issueNumber : shellMessages.issues;
+    titleValues = number ? { number } : undefined;
+  }
+  return { eyebrow: shellMessages.repository, title, titleValues, repositoryId };
 }
 
 function globalContext(pathname: string): HeaderContext {
   if (pathname.startsWith("/agent"))
-    return { eyebrow: "Workspace", title: "Agent", repositoryId: null };
+    return { eyebrow: shellMessages.workspace, title: shellMessages.agent, repositoryId: null };
   if (pathname.startsWith("/knowledge"))
-    return { eyebrow: "Workspace", title: "Knowledge", repositoryId: null };
+    return { eyebrow: shellMessages.workspace, title: shellMessages.knowledge, repositoryId: null };
   if (pathname.startsWith("/settings/schedules") || pathname.startsWith("/scheduled-tasks"))
-    return { eyebrow: "Settings", title: "Schedules", repositoryId: null };
+    return { eyebrow: shellMessages.settings, title: shellMessages.schedules, repositoryId: null };
   if (pathname.startsWith("/settings/domains"))
-    return { eyebrow: "Settings", title: "Domains", repositoryId: null };
+    return { eyebrow: shellMessages.settings, title: shellMessages.domains, repositoryId: null };
   if (pathname.startsWith("/settings/health") || pathname.startsWith("/health"))
-    return { eyebrow: "Settings", title: "Health", repositoryId: null };
+    return { eyebrow: shellMessages.settings, title: shellMessages.health, repositoryId: null };
   if (pathname.startsWith("/settings/security"))
-    return { eyebrow: "Settings", title: "Security", repositoryId: null };
+    return { eyebrow: shellMessages.settings, title: shellMessages.security, repositoryId: null };
   if (pathname.startsWith("/settings"))
-    return { eyebrow: "Settings", title: "Settings", repositoryId: null };
+    return { eyebrow: shellMessages.settings, title: shellMessages.settings, repositoryId: null };
   if (pathname === "/")
-    return { eyebrow: "Workspace", title: "Board", repositoryId: null };
-  return { eyebrow: "Workspace", title: "LoongBoard", repositoryId: null };
-}
-
-function ThemeToggle({
-  theme,
-  onChange,
-}: {
-  theme: "light" | "dark";
-  onChange: (theme: "light" | "dark") => void;
-}) {
-  return (
-    <div className="theme-toggle" role="group" aria-label="Color theme">
-      <button
-        type="button"
-        className={theme === "light" ? "theme-toggle__item theme-toggle__item--active" : "theme-toggle__item"}
-        aria-pressed={theme === "light"}
-        onClick={() => onChange("light")}
-      >
-        Light
-      </button>
-      <button
-        type="button"
-        className={theme === "dark" ? "theme-toggle__item theme-toggle__item--active" : "theme-toggle__item"}
-        aria-pressed={theme === "dark"}
-        onClick={() => onChange("dark")}
-      >
-        Dark
-      </button>
-    </div>
-  );
+    return { eyebrow: shellMessages.workspace, title: shellMessages.board, repositoryId: null };
+  return { eyebrow: shellMessages.workspace, title: shellMessages.loongBoard, repositoryId: null };
 }
 
 export function ContextHeader({
@@ -84,6 +66,7 @@ export function ContextHeader({
   theme: "light" | "dark";
   onThemeChange: (theme: "light" | "dark") => void;
 }) {
+  const { t } = useI18n();
   const location = useLocation();
   const repositories = useRepositories();
   const repoContext = repositorySection(location.pathname.match(repositoryPath));
@@ -94,13 +77,13 @@ export function ContextHeader({
   const eyebrow = repository
     ? `${repository.githubOwner}/${repository.githubName}`
     : repoContext !== null
-      ? "Repository"
-      : fallback.eyebrow;
+      ? t(shellMessages.repository)
+      : t(fallback.eyebrow);
   const title = repository
-    ? `${repository.displayName} · ${repoContext?.title ?? "Repository"}`
+    ? `${repository.displayName} · ${t(repoContext?.title ?? shellMessages.repository, repoContext?.titleValues)}`
     : repoContext !== null
-      ? repoContext.title
-      : fallback.title;
+      ? t(repoContext.title, repoContext.titleValues)
+      : t(fallback.title);
 
   return (
     <header className="topbar topbar--context">
@@ -109,16 +92,16 @@ export function ContextHeader({
         className="topbar__menu"
         aria-expanded={sidebarOpen}
         aria-controls="app-sidebar"
-        aria-label={sidebarOpen ? "Close navigation" : "Open navigation"}
+        aria-label={sidebarOpen ? t(shellMessages.closeNavigation) : t(shellMessages.openNavigation)}
         onClick={onMenuClick}
       >
         <span aria-hidden="true">≡</span>
-        <span>Menu</span>
+        <span>{t(shellMessages.menu)}</span>
       </button>
       <span className="topbar__context-mark" aria-hidden="true">
         {repository
           ? repository.displayName.slice(0, 1).toUpperCase()
-          : fallback.eyebrow === "Settings"
+          : fallback.eyebrow === shellMessages.settings
             ? "S"
             : "LB"}
       </span>
@@ -130,7 +113,7 @@ export function ContextHeader({
       {repoContext?.repositoryId && repository !== undefined && (
         <RepositorySyncStatus repositoryId={repoContext.repositoryId} />
       )}
-      <ThemeToggle theme={theme} onChange={onThemeChange} />
+      <AppearanceControls theme={theme} onThemeChange={onThemeChange} />
     </header>
   );
 }

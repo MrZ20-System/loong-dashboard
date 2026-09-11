@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useState } from "react";
 import type { ChangedFileEntry } from "@loongboard/contracts";
+import { useI18n } from "../../i18n";
 import { Codicon } from "./codicon";
-import { ChangeFileIcon, changeFileLabel } from "./ChangeFileIcon";
+import { ChangeFileIcon } from "./ChangeFileIcon";
+import { changeFileMessage, prMessages } from "./messages";
 import "./repository-tree.css";
 
 /** VS Code Explorer-like compact indentation for one tree level. */
@@ -203,10 +205,11 @@ function FileRow({
 }) {
   const change = node.change;
   const label = change === null ? node.path : fileLabel(change);
+  const { t, formatNumber } = useI18n();
   const accessibleName =
     change === null
       ? node.path
-      : `${changeFileLabel(change.changeType)} ${label}`;
+      : `${t(changeFileMessage(change.changeType))} ${label}`;
   const isSelected = selected === node.path;
   return (
     <li
@@ -239,8 +242,8 @@ function FileRow({
         <span className="repository-tree__name">{node.name}</span>
         {change !== null && !change.binary && change.additions !== null && (
           <span className="repository-tree__stats">
-            <span className="diff-stat-add">+{change.additions}</span>
-            <span className="diff-stat-del">−{change.deletions ?? 0}</span>
+            <span className="diff-stat-add">+{formatNumber(change.additions)}</span>
+            <span className="diff-stat-del">−{formatNumber(change.deletions ?? 0)}</span>
           </span>
         )}
       </button>
@@ -342,6 +345,7 @@ export function RepositoryTree({
   defaultExpandedPaths,
   panelId,
 }: RepositoryTreeProps) {
+  const { t } = useI18n();
   const [query, setQuery] = useState("");
   const [openPaths, setOpenPaths] = useState<Set<string>>(() => {
     const tree = buildRepositoryTree(headFiles, changedFiles);
@@ -383,15 +387,15 @@ export function RepositoryTree({
   return (
     <section
       className="repository-tree"
-      aria-label="Repository files"
+      aria-label={t(prMessages.repositoryFiles)}
       {...(panelId !== undefined ? { id: panelId } : {})}
     >
       <div className="repository-tree__filter">
         <Codicon name="search" className="repository-tree__filter-icon" />
         <input
           type="search"
-          aria-label="Filter repository files"
-          placeholder="Filter by file path"
+          aria-label={t(prMessages.filterRepositoryFiles)}
+          placeholder={t(prMessages.filterByFilePath)}
           autoComplete="off"
           spellCheck={false}
           value={query}
@@ -401,7 +405,7 @@ export function RepositoryTree({
           <button
             type="button"
             className="repository-tree__filter-clear"
-            aria-label="Clear repository file filter"
+            aria-label={t(prMessages.clearRepositoryFileFilter)}
             onClick={() => setQuery("")}
           >
             <Codicon name="close" className="repository-tree__filter-clear-icon" />
@@ -411,11 +415,11 @@ export function RepositoryTree({
       {visibleNodes.length === 0 ? (
         <p role="status" className="repository-tree__empty">
           {headFiles.length === 0 && !filtering
-            ? "No files at this revision."
-            : `No files match “${query}”.`}
+            ? t(prMessages.noFilesAtRevision)
+            : t(prMessages.noFilesMatch, { query })}
         </p>
       ) : (
-        <ul className="repository-tree__list" role="tree" aria-label="Repository files">
+        <ul className="repository-tree__list" role="tree" aria-label={t(prMessages.repositoryFiles)}>
           {visibleNodes.map((node) => (
             <BranchRow
               key={node.path}

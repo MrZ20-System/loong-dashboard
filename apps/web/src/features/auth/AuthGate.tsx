@@ -4,8 +4,10 @@ import type { AuthStatus } from "@loongboard/contracts";
 
 import { fetchAuthStatus, unlockAuth } from "../../auth-client";
 import { AUTH_REQUIRED_EVENT } from "../../auth-required-event";
+import { LocaleToggle, useI18n } from "../../i18n";
 
 export function AuthGate({ children }: { children: ReactNode }) {
+  const { t } = useI18n();
   const [status, setStatus] = useState<AuthStatus | null>(null);
   const [error, setError] = useState<Error | null>(null);
   const refresh = useCallback(() => {
@@ -35,10 +37,11 @@ export function AuthGate({ children }: { children: ReactNode }) {
     return (
       <main className="auth-screen">
         <section className="auth-card" aria-labelledby="auth-error-heading">
+          <LocaleToggle />
           <h1 id="auth-error-heading">LoongBoard</h1>
-          <p role="alert">Unable to check the password lock: {error.message}</p>
+          <p role="alert">{t({ en: "Unable to check the password lock:", "zh-CN": "无法检查密码锁：" })} {error.message}</p>
           <button type="button" className="button-primary" onClick={() => { setStatus(null); refresh(); }}>
-            Try again
+            {t({ en: "Try again", "zh-CN": "重试" })}
           </button>
         </section>
       </main>
@@ -46,7 +49,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }
 
   if (status === null) {
-    return <main className="auth-screen"><p role="status">Checking password lock…</p></main>;
+    return <main className="auth-screen"><div className="auth-card"><LocaleToggle /><p role="status">{t({ en: "Checking password lock…", "zh-CN": "正在检查密码锁…" })}</p></div></main>;
   }
 
   if (!status.unlocked) {
@@ -57,6 +60,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
 }
 
 function UnlockScreen({ onUnlocked }: { onUnlocked: (status: AuthStatus) => void }) {
+  const { t } = useI18n();
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -71,7 +75,7 @@ function UnlockScreen({ onUnlocked }: { onUnlocked: (status: AuthStatus) => void
       setPassword("");
       onUnlocked(status);
     } catch (cause: unknown) {
-      setError(cause instanceof Error ? cause.message : "Unable to unlock LoongBoard");
+      setError(cause instanceof Error ? cause.message : t({ en: "Unable to unlock LoongBoard", "zh-CN": "无法解锁 LoongBoard" }));
     } finally {
       setPending(false);
     }
@@ -80,15 +84,16 @@ function UnlockScreen({ onUnlocked }: { onUnlocked: (status: AuthStatus) => void
   return (
     <main className="auth-screen">
       <section className="auth-card" aria-labelledby="unlock-heading">
+        <LocaleToggle />
         <div className="brand-mark" aria-hidden="true">LB</div>
-        <p className="eyebrow">Local engineering workspace</p>
+        <p className="eyebrow">{t({ en: "Local engineering workspace", "zh-CN": "本地工程工作区" })}</p>
         <h1 id="unlock-heading">LoongBoard</h1>
-        <p className="auth-card__hint">Enter your local password to continue.</p>
+        <p className="auth-card__hint">{t({ en: "Enter your local password to continue.", "zh-CN": "请输入本地密码继续。" })}</p>
         <form onSubmit={submit}>
           <label>
-            Password
+            {t({ en: "Password", "zh-CN": "密码" })}
             <input
-              aria-label="Password"
+              aria-label={t({ en: "Password", "zh-CN": "密码" })}
               autoComplete="current-password"
               autoFocus
               type="password"
@@ -98,7 +103,7 @@ function UnlockScreen({ onUnlocked }: { onUnlocked: (status: AuthStatus) => void
           </label>
           {error !== null && <p role="alert" className="settings-error">{error}</p>}
           <button type="submit" className="button-primary" disabled={pending || password.length === 0}>
-            {pending ? "Unlocking…" : "Unlock"}
+            {pending ? t({ en: "Unlocking…", "zh-CN": "解锁中…" }) : t({ en: "Unlock", "zh-CN": "解锁" })}
           </button>
         </form>
       </section>

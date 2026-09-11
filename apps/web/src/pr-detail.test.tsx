@@ -8,6 +8,7 @@ import {
 } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChangedFileEntry } from "@loongboard/contracts";
 import { App, appQueryClient } from "./App";
 import { diffAnchorId } from "./components/pr/ContinuousChanges";
 
@@ -60,7 +61,7 @@ const detail = {
   detailBody: null,
 };
 
-const files = [
+const files: ChangedFileEntry[] = [
   { path: "src/a.ts", previousPath: null, changeType: "modified", additions: 3, deletions: 1, binary: false },
   { path: "src/new.ts", previousPath: null, changeType: "added", additions: 1, deletions: 0, binary: false },
   { path: "src/components/pr/badge.tsx", previousPath: null, changeType: "added", additions: 2, deletions: 0, binary: false },
@@ -132,7 +133,7 @@ class NoopIntersectionObserver {
   disconnect(): void {}
 }
 
-function mockApi(options: { prepare?: Promise<unknown>; detail?: unknown } = {}) {
+function mockApi(options: { prepare?: Promise<unknown>; detail?: unknown; files?: ChangedFileEntry[] } = {}) {
   const calls: string[] = [];
   const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
     const url = new URL(String(input), "http://localhost");
@@ -147,7 +148,7 @@ function mockApi(options: { prepare?: Promise<unknown>; detail?: unknown } = {})
         headSha,
         mergeBase: baseSha,
         fetched: false,
-        files,
+        files: options.files ?? files,
       });
     }
     if (url.pathname.endsWith("/pulls/5/tree")) {
@@ -240,7 +241,11 @@ function mockApi(options: { prepare?: Promise<unknown>; detail?: unknown } = {})
   return { fetchMock, calls };
 }
 
-function renderDetail(path = "/repositories/repo/pulls/5") {
+function renderDetail(
+  path = "/repositories/repo/pulls/5",
+  width = 1440,
+) {
+  stubInnerWidth(width);
   stubScrollIntoView();
   return render(
     <MemoryRouter initialEntries={[path]}>
@@ -366,6 +371,24 @@ describe("PR detail workbench", () => {
     expect(screen.getByRole("button", { name: "Refresh from GitHub" })).toBeInTheDocument();
   });
 
+  it("formats large PR diff statistics while preserving the PR identity", async () => {
+    mockApi({
+      files: files.map((file, index) =>
+        index === 0
+          ? { ...file, additions: 1_234_567, deletions: 2_345_678 }
+          : file,
+      ),
+    });
+    renderDetail();
+
+    expect(await screen.findByTestId("mock-diff")).toBeInTheDocument();
+    expect(screen.getAllByText("+1,234,567")).toHaveLength(2);
+    expect(screen.getAllByText("−2,345,678")).toHaveLength(2);
+    expect(
+      screen.getByRole("link", { name: "Open pull request #5 on GitHub" }),
+    ).toBeInTheDocument();
+  });
+
   it("shows the cleaned-payload marker without an archive banner", async () => {
     mockApi({
       detail: {
@@ -384,9 +407,8 @@ describe("PR detail workbench", () => {
   });
 
   it("passes the Changes Split control through as split without narrow-width degradation", async () => {
-    stubInnerWidth(665);
     const { calls } = mockApi();
-    renderDetail();
+    renderDetail("/repositories/repo/pulls/5", 665);
 
     await screen.findByTestId("mock-diff");
     const settings = diffSettings();
@@ -620,6 +642,26 @@ describe("PR detail workbench", () => {
     expect(
       screen.getAllByRole("button", { name: "Collapse PR chat" }),
     ).toHaveLength(1);
+  });
+
+  it("keeps one usable rail at medium widths and swaps rails on demand", async () => {
+    mockApi();
+    renderDetail("/repositories/repo/pulls/5", 1082);
+
+    expect(await screen.findByRole("heading", { name: /Add diff workspace/ })).toBeInTheDocument();
+    const toolbar = workbenchToolbar();
+    expect(within(toolbar).getByRole("button", { name: "Collapse changed files" })).toBeInTheDocument();
+    expect(within(toolbar).getByRole("button", { name: "Expand PR chat" })).toBeInTheDocument();
+    expect(document.querySelector(".pr-resize-panel--left")).not.toBeNull();
+    expect(document.querySelector(".pr-resize-panel--right")).toBeNull();
+
+    fireEvent.click(within(toolbar).getByRole("button", { name: "Expand PR chat" }));
+    await waitFor(() => {
+      expect(within(toolbar).getByRole("button", { name: "Collapse PR chat" })).toBeInTheDocument();
+      expect(within(toolbar).getByRole("button", { name: "Expand changed files" })).toBeInTheDocument();
+    });
+    expect(document.querySelector(".pr-resize-panel--left")).toBeNull();
+    expect(document.querySelector(".pr-resize-panel--right")).not.toBeNull();
   });
 
   it("keeps prepare-before-chat ordering", async () => {

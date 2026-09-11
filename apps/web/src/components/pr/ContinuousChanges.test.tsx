@@ -126,6 +126,24 @@ describe("ContinuousChanges", () => {
     expect(within(binary).getByText("binary")).toBeInTheDocument();
   });
 
+  it("formats large change statistics in the diff cards", () => {
+    render(
+      <ContinuousChanges
+        files={[
+          file("src/large.ts", {
+            additions: 1_234_567,
+            deletions: 2_345_678,
+          }),
+        ]}
+      />,
+    );
+
+    const card = document.getElementById(diffAnchorId("src/large.ts"));
+    expect(card).not.toBeNull();
+    expect(within(card as HTMLElement).getByText("+1,234,567")).toBeInTheDocument();
+    expect(within(card as HTMLElement).getByText("−2,345,678")).toBeInTheDocument();
+  });
+
   it("collapses deleted and high-change files by default", () => {
     const deleted = file("src/deleted.ts", {
       changeType: "removed",

@@ -89,6 +89,26 @@ describe("RepositoryTree", () => {
     ).toBeInTheDocument();
   });
 
+  it("formats large changed-file statistics in the repository tree", () => {
+    const large = changedFile({
+      path: "src/large.ts",
+      additions: 1_234_567,
+      deletions: 2_345_678,
+    });
+    render(
+      <RepositoryTree
+        headFiles={[large.path]}
+        changedFiles={[large]}
+        selectedPath={null}
+        onSelect={() => undefined}
+      />,
+    );
+
+    const row = screen.getByRole("button", { name: "Modified src/large.ts" });
+    expect(row).toHaveTextContent("+1,234,567");
+    expect(row).toHaveTextContent("−2,345,678");
+  });
+
   it("filters the full tree and expands matching branches", async () => {
     render(
       <RepositoryTree

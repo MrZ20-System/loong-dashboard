@@ -660,6 +660,8 @@ button:hover:not(:disabled) {
 /* ---- Markdown, issue detail, agent chat ---- */
 
 .markdown-view {
+  min-width: 0;
+  max-width: 100%;
   color: var(--text);
   line-height: 1.55;
   overflow-wrap: anywhere;
@@ -674,6 +676,8 @@ button:hover:not(:disabled) {
 }
 
 .markdown-view pre {
+  min-width: 0;
+  max-width: 100%;
   padding: 10px 12px;
   overflow-x: auto;
   border: 1px solid var(--border);
@@ -755,7 +759,10 @@ button:hover:not(:disabled) {
 }
 
 .markdown-view table {
+  display: block;
+  width: max-content;
   max-width: 100%;
+  overflow-x: auto;
   margin: 0.5rem 0;
   border-collapse: collapse;
   background: var(--surface);
@@ -800,10 +807,53 @@ button:hover:not(:disabled) {
 
 .issue-layout {
   display: grid;
+  min-width: 0;
   grid-template-columns: minmax(0, 1fr) 360px;
   gap: 16px;
   margin-top: 4px;
   align-items: start;
+}
+
+.issue-layout > div,
+.issue-body,
+.issue-comments,
+.issue-comment {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.issue-body,
+.issue-comments {
+  overflow: hidden;
+}
+
+.issue-detail--focus {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.issue-detail--focus .issue-heading h2 {
+  overflow-wrap: anywhere;
+}
+
+/* Issue details are reading-first pages. They use the full canvas without
+ * inheriting the PR workbench's fixed viewport and clipped scrolling. */
+.app-shell--issue-focus .main-canvas {
+  min-height: 100vh;
+  margin-left: 0;
+}
+
+.app-shell--issue-focus .app-content {
+  width: 100%;
+  max-width: none;
+  min-height: 100vh;
+  margin: 0;
+  padding: 28px clamp(18px, 4vw, 48px) 56px;
+}
+
+.app-shell--issue-focus .app-content > .issue-detail--focus {
+  width: min(100%, 1440px);
+  margin: 0 auto;
 }
 
 .issue-body,
@@ -858,6 +908,25 @@ button:hover:not(:disabled) {
 }
 
 /* ---- PR detail: full-viewport diff workbench ---- */
+
+.focus-appearance-bar {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.app-shell--issue-focus .focus-appearance-bar {
+  width: min(100%, 1440px);
+  margin: 0 auto;
+  padding: 10px clamp(18px, 4vw, 48px) 0;
+  border-bottom: 0;
+  background: var(--canvas);
+}
 
 .app-shell--pr-focus {
   height: 100vh;

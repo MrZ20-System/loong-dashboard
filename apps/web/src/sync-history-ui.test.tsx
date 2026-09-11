@@ -72,7 +72,7 @@ describe("sync history UI", () => {
     const client = queryClient();
     render(<QueryClientProvider client={client}><HistorySyncSection repositoryId="repo" /></QueryClientProvider>);
     expect(await screen.findByRole("heading", { name: "Recent syncs" })).toBeInTheDocument();
-    expect(await screen.findByText(/target 2026-08-01/)).toBeInTheDocument();
+    expect(await screen.findByText(/target Aug 1, 2026/)).toBeInTheDocument();
     expect(await screen.findByText(/started .* finished .* 1s/)).toBeInTheDocument();
     expect(await screen.findByRole("button", { name: "Continue" })).toBeInTheDocument();
     expect(calls.some((call) => call.path.endsWith("/sync-runs/accepted-run"))).toBe(false);

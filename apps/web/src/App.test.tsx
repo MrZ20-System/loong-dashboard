@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactNode } from "react";
 
@@ -7,6 +7,7 @@ import { fetchAuthStatus, unlockAuth } from "./auth-client";
 import { AUTH_REQUIRED_EVENT } from "./auth-required-event";
 import { App, appQueryClient } from "./App";
 import { useRepositories } from "./app/hooks";
+import { LOCALE_STORAGE_KEY } from "./i18n";
 import type { RepositorySummary } from "./metadata-client";
 
 vi.mock("./auth-client", () => ({
@@ -112,12 +113,35 @@ const repositoriesQuery = {
 
 const unlockedStatus = { enabled: false, unlocked: true };
 
+function installStorage() {
+  const values = new Map<string, string>();
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
+      clear: () => values.clear(),
+      key: (index: number) => [...values.keys()][index] ?? null,
+      get length() { return values.size; },
+    } as Storage,
+  });
+}
+
+beforeEach(() => {
+  installStorage();
+});
+
 function renderApp(path: string) {
   return render(
     <MemoryRouter initialEntries={[path]}>
       <App />
     </MemoryRouter>,
   );
+}
+
+function LocationProbe() {
+  return <output data-testid="location-path">{useLocation().pathname}</output>;
 }
 
 describe("App AuthGate integration", () => {
@@ -187,6 +211,59 @@ describe("App shell", () => {
     fireEvent.click(screen.getByRole("button", { name: "Dark" }));
     expect(shell).toHaveAttribute("data-theme", "dark");
     expect(screen.getByRole("button", { name: "Dark" })).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("localizes the shared footer while keeping the product name unchanged", async () => {
+    localStorage.setItem(LOCALE_STORAGE_KEY, "zh-CN");
+    renderApp("/");
+
+    expect(await screen.findByRole("heading", { name: "Board route" })).toBeInTheDocument();
+    expect(screen.getByText("LoongBoard · 本地优先的工程工作空间")).toBeInTheDocument();
+  });
+
+  it("restores persisted theme and compact sidebar preferences", async () => {
+    const previousTheme = localStorage.getItem("loongboard.theme");
+    const previousCompact = localStorage.getItem("loongboard.sidebar-compact");
+    localStorage.setItem("loongboard.theme", "dark");
+    localStorage.setItem("loongboard.sidebar-compact", "true");
+
+    try {
+      renderApp("/");
+
+      expect(await screen.findByRole("heading", { name: "Board route" })).toBeInTheDocument();
+      expect(document.querySelector(".app-shell")).toHaveAttribute("data-theme", "dark");
+      expect(screen.getByRole("complementary", { name: "Primary" })).toHaveClass("sidebar--compact");
+    } finally {
+      cleanup();
+      if (previousTheme === null) localStorage.removeItem("loongboard.theme");
+      else localStorage.setItem("loongboard.theme", previousTheme);
+      if (previousCompact === null) localStorage.removeItem("loongboard.sidebar-compact");
+      else localStorage.setItem("loongboard.sidebar-compact", previousCompact);
+    }
+  });
+
+  it.each([
+    ["/repositories/repo/pulls/5", "Pull request detail route"],
+    ["/repositories/repo/issues/7", "Issue detail route"],
+  ])("keeps fullscreen %s routes equipped with appearance controls", async (path, heading) => {
+    render(
+      <MemoryRouter initialEntries={[path]}>
+        <App />
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: heading })).toBeInTheDocument();
+    expect(screen.queryByRole("navigation", { name: "Primary navigation" })).not.toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Color theme" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Language" })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Dark" }));
+    expect(document.querySelector(".app-shell")).toHaveAttribute("data-theme", "dark");
+    fireEvent.click(screen.getByRole("button", { name: "Chinese" }));
+    expect(screen.getByTestId("location-path")).toHaveTextContent(path);
+    expect(screen.getByRole("group", { name: "配色主题" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "深色" })).toHaveAttribute("aria-pressed", "true");
   });
 });
 

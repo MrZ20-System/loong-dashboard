@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   Navigate,
   Route,
@@ -21,28 +21,77 @@ import { HealthPage } from "../features/system/HealthPage";
 import { SecuritySettings } from "../features/settings/SecuritySettings";
 import { AppSidebar } from "./AppSidebar";
 import { ContextHeader } from "./ContextHeader";
+import { AppearanceControls } from "./AppearanceControls";
 import { NotFoundPage } from "./NotFoundPage";
 import { AgentPage } from "../features/agent/AgentPage";
 import { GlobalAgentDock } from "../features/agent/GlobalAgentDock";
 import { AgentSessionSelectionProvider } from "../features/agent/agent-session-context";
+import { useI18n } from "../i18n";
+import { shellMessages } from "./messages";
+
+const THEME_STORAGE_KEY = "loongboard.theme";
+const SIDEBAR_COMPACT_STORAGE_KEY = "loongboard.sidebar-compact";
+
+function readStoredTheme(): "light" | "dark" {
+  if (typeof window === "undefined") return "light";
+  try {
+    return window.localStorage.getItem(THEME_STORAGE_KEY) === "dark"
+      ? "dark"
+      : "light";
+  } catch {
+    return "light";
+  }
+}
+
+function readStoredSidebarCompact(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(SIDEBAR_COMPACT_STORAGE_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
 
 export function AppShell() {
+  const { t } = useI18n();
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [sidebarCompact, setSidebarCompact] = useState(false);
-  const [theme, setTheme] = useState<"light" | "dark">("light");
+  const [sidebarCompact, setSidebarCompact] = useState(readStoredSidebarCompact);
+  const [theme, setTheme] = useState<"light" | "dark">(readStoredTheme);
   const location = useLocation();
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+    } catch {
+      // Persistence is best-effort; the current session remains usable.
+    }
+  }, [theme]);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      window.localStorage.setItem(
+        SIDEBAR_COMPACT_STORAGE_KEY,
+        String(sidebarCompact),
+      );
+    } catch {
+      // Persistence is best-effort; the current session remains usable.
+    }
+  }, [sidebarCompact]);
   // PR detail is a dedicated full-viewport diff workbench: keep the route but
   // remove the app chrome so the diff owns the whole viewport.
   const prFocus =
     location.pathname.match(/^\/repositories\/[^/]+\/pulls\/\d+\/?$/) !== null;
+  const issueFocus =
+    location.pathname.match(/^\/repositories\/[^/]+\/issues\/\d+\/?$/) !== null;
+  const focusRoute = prFocus || issueFocus;
   return (
     <AppThemeContext.Provider value={theme}>
       <AgentSessionSelectionProvider>
       <div
-        className={`app-shell${prFocus ? " app-shell--pr-focus" : ""}`}
+        className={`app-shell${prFocus ? " app-shell--pr-focus" : ""}${issueFocus ? " app-shell--issue-focus" : ""}`}
         data-theme={theme}
       >
-        {!prFocus && (
+        {!focusRoute && (
           <AppSidebar
             open={sidebarOpen}
             onClose={() => setSidebarOpen(false)}
@@ -50,7 +99,7 @@ export function AppShell() {
             onToggleCompact={() => setSidebarCompact((compact) => !compact)}
           />
         )}
-        {!prFocus && sidebarOpen && (
+        {!focusRoute && sidebarOpen && (
           <div
             className="sidebar-backdrop"
             role="presentation"
@@ -58,9 +107,14 @@ export function AppShell() {
           />
         )}
         <div
-          className={`main-canvas${prFocus ? " main-canvas--pr-focus" : ""}${!prFocus && sidebarCompact ? " main-canvas--sidebar-compact" : ""}`}
+          className={`main-canvas${prFocus ? " main-canvas--pr-focus" : ""}${issueFocus ? " main-canvas--issue-focus" : ""}${!focusRoute && sidebarCompact ? " main-canvas--sidebar-compact" : ""}`}
         >
-          {!prFocus && (
+          {focusRoute && (
+            <div className="focus-appearance-bar">
+              <AppearanceControls theme={theme} onThemeChange={setTheme} />
+            </div>
+          )}
+          {!focusRoute && (
             <ContextHeader
               sidebarOpen={sidebarOpen}
               onMenuClick={() => setSidebarOpen((open) => !open)}
@@ -69,7 +123,7 @@ export function AppShell() {
             />
           )}
           <main
-            className={`app-content${prFocus ? " app-content--pr-focus" : ""}`}
+            className={`app-content${prFocus ? " app-content--pr-focus" : ""}${issueFocus ? " app-content--issue-focus" : ""}`}
           >
             <Routes>
               <Route path="/" element={<BoardPage />} />
@@ -146,10 +200,10 @@ export function AppShell() {
               <Route path="*" element={<NotFoundPage />} />
             </Routes>
           </main>
-          {!prFocus && <GlobalAgentDock />}
-          {!prFocus && (
+          {!focusRoute && <GlobalAgentDock />}
+          {!focusRoute && (
             <footer className="app-footer">
-              LoongBoard · local-first engineering workspace
+              {t(shellMessages.localFirstEngineeringWorkspace)}
             </footer>
           )}
         </div>

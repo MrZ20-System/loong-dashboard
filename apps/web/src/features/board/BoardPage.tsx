@@ -1,7 +1,9 @@
 import { useNavigate } from "react-router-dom";
 import { useRepositories } from "../../app/hooks";
 import type { RepositorySummary } from "../../metadata-client";
+import { useI18n } from "../../i18n";
 import { HealthStatus } from "../system/HealthStatus";
+import { boardMessages } from "./messages";
 
 function RepositorySelector({
   repositories,
@@ -10,13 +12,14 @@ function RepositorySelector({
   repositories: RepositorySummary[];
   selectedId?: string;
 }) {
+  const { t } = useI18n();
   const navigate = useNavigate();
   const selected = selectedId ?? repositories[0]?.id;
   return (
     <label className="repository-selector">
-      Repository
+      {t(boardMessages.repository)}
       <select
-        aria-label="Repository"
+        aria-label={t(boardMessages.repository)}
         value={selected ?? ""}
         onChange={(event) =>
           navigate(`/repositories/${encodeURIComponent(event.target.value)}`)
@@ -33,26 +36,28 @@ function RepositorySelector({
 }
 
 function RepositoryPicker() {
+  const { t } = useI18n();
   const repositories = useRepositories();
-  if (repositories.isPending) return <p role="status">Loading repositories…</p>;
+  if (repositories.isPending) return <p role="status">{t(boardMessages.loadingRepositories)}</p>;
   if (repositories.isError)
-    return <p role="alert">Unable to load repositories: {repositories.error.message}</p>;
+    return <p role="alert">{t(boardMessages.unableLoadRepositories, { detail: repositories.error.message })}</p>;
   if (repositories.data.items.length === 0)
-    return <p role="status">No configured repositories.</p>;
+    return <p role="status">{t(boardMessages.noConfiguredRepositories)}</p>;
   return (
     <RepositorySelector repositories={repositories.data.items} />
   );
 }
 
 function RepositoryDashboard() {
+  const { t } = useI18n();
   const repositories = useRepositories();
   if (repositories.data === undefined || repositories.data.items.length === 0)
     return null;
   return (
-    <div className="repository-board" aria-label="Configured repositories">
+    <div className="repository-board" aria-label={t(boardMessages.configuredRepositories)}>
       <header>
-        <p className="eyebrow">Repositories</p>
-        <h3>Repository overview</h3>
+        <p className="eyebrow">{t(boardMessages.repositories)}</p>
+        <h3>{t(boardMessages.repositoryOverview)}</h3>
       </header>
       <div className="repository-board__grid">
         {repositories.data.items.map((repository) => (
@@ -76,18 +81,14 @@ function RepositoryDashboard() {
 }
 
 export function BoardPage() {
+  const { t } = useI18n();
   return (
     <section className="home-page" aria-labelledby="welcome-heading">
       <div className="welcome-panel">
         <div className="welcome-panel__copy">
-          <p className="eyebrow">Local-first engineering workspace</p>
-          <h2 id="welcome-heading">
-            A clear view of your repositories and knowledge.
-          </h2>
-          <p className="welcome-panel__lead">
-            LoongBoard brings local Git workspaces, durable Markdown knowledge,
-            and coding-agent sessions together in one focused board.
-          </p>
+          <p className="eyebrow">{t(boardMessages.localFirstWorkspace)}</p>
+          <h2 id="welcome-heading">{t(boardMessages.clearView)}</h2>
+          <p className="welcome-panel__lead">{t(boardMessages.lead)}</p>
         </div>
         <RepositoryPicker />
       </div>

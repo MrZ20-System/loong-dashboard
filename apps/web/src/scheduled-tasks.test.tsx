@@ -1,11 +1,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useEffect } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ScheduledRun, ScheduledTask } from "@loongboard/contracts";
 
 import { ScheduledTasksPage } from "./scheduled-tasks";
+import { LocaleProvider, useI18n } from "./i18n";
 import {
   createScheduledTask,
   deleteScheduledTask,
@@ -70,7 +72,29 @@ const runs: ScheduledRun[] = [
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+  document.documentElement.lang = "en";
+  try {
+    window.localStorage?.removeItem("loongboard.locale");
+  } catch {
+    // Storage can be unavailable in the test environment.
+  }
 });
+
+function ForceChineseLocale() {
+  const { setLocale } = useI18n();
+  useEffect(() => setLocale("zh-CN"), [setLocale]);
+  return null;
+}
+
+function LocaleControls() {
+  const { setLocale } = useI18n();
+  return (
+    <div>
+      <button type="button" onClick={() => setLocale("zh-CN")}>Chinese test locale</button>
+      <button type="button" onClick={() => setLocale("en")}>English test locale</button>
+    </div>
+  );
+}
 
 describe("ScheduledTasksPage history", () => {
   it("links every historical run to its own Agent session", async () => {
@@ -99,5 +123,107 @@ describe("ScheduledTasksPage history", () => {
     expect(deleteScheduledTask).not.toHaveBeenCalled();
     expect(runScheduledTask).not.toHaveBeenCalled();
     expect(updateScheduledTask).not.toHaveBeenCalled();
+  });
+
+  it("localizes schedule chrome while preserving task data and formatted dates", async () => {
+    vi.mocked(fetchScheduledTasks).mockResolvedValue({ items: [task] });
+    vi.mocked(fetchScheduledTaskRuns).mockResolvedValue({ items: runs });
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <LocaleProvider>
+        <ForceChineseLocale />
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter>
+            <ScheduledTasksPage />
+          </MemoryRouter>
+        </QueryClientProvider>
+      </LocaleProvider>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "计划任务" })).toBeInTheDocument();
+    expect(await screen.findByText("Daily report")).toBeInTheDocument();
+    expect(screen.getByText(/UTC/)).toBeInTheDocument();
+    expect(screen.queryByText("2026-09-12T09:00:00.000Z")).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "历史" }));
+    expect(await screen.findByText("failed")).toBeInTheDocument();
+    expect(screen.getByText(/错误： failed/)).toBeInTheDocument();
+  });
+
+  it("adds a localized prefix to schedule query errors and preserves the detail", async () => {
+    vi.mocked(fetchScheduledTasks).mockRejectedValue(new Error("raw scheduler detail"));
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+
+    render(
+      <LocaleProvider>
+        <ForceChineseLocale />
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter>
+            <ScheduledTasksPage />
+          </MemoryRouter>
+        </QueryClientProvider>
+      </LocaleProvider>,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("无法加载计划任务： raw scheduler detail");
+  });
+
+  it("re-renders a successful mutation feedback after locale changes without rerunning it", async () => {
+    vi.mocked(fetchScheduledTasks).mockResolvedValue({ items: [] });
+    vi.mocked(createScheduledTask).mockResolvedValue({ ...task, name: "New task" });
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(
+      <LocaleProvider>
+        <ForceChineseLocale />
+        <LocaleControls />
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter><ScheduledTasksPage /></MemoryRouter>
+        </QueryClientProvider>
+      </LocaleProvider>,
+    );
+
+    fireEvent.change(await screen.findByLabelText("任务名称"), { target: { value: "New task" } });
+    fireEvent.change(screen.getByLabelText("工作区路径"), { target: { value: "/workspace/repo" } });
+    fireEvent.change(screen.getByLabelText("提示词"), { target: { value: "Run report" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
+
+    expect(await screen.findByText("任务“New task”已创建。", { exact: true })).toBeInTheDocument();
+    expect(createScheduledTask).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "English test locale" }));
+    expect(screen.getByText('Task "New task" created.', { exact: true })).toBeInTheDocument();
+    expect(createScheduledTask).toHaveBeenCalledTimes(1);
+  });
+
+  it("re-renders a failed mutation prefix after locale changes while preserving raw detail", async () => {
+    vi.mocked(fetchScheduledTasks).mockResolvedValue({ items: [] });
+    vi.mocked(createScheduledTask).mockRejectedValue(new Error("raw create detail"));
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+    render(
+      <LocaleProvider>
+        <ForceChineseLocale />
+        <LocaleControls />
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter><ScheduledTasksPage /></MemoryRouter>
+        </QueryClientProvider>
+      </LocaleProvider>,
+    );
+
+    fireEvent.change(await screen.findByLabelText("任务名称"), { target: { value: "New task" } });
+    fireEvent.change(screen.getByLabelText("工作区路径"), { target: { value: "/workspace/repo" } });
+    fireEvent.change(screen.getByLabelText("提示词"), { target: { value: "Run report" } });
+    fireEvent.click(screen.getByRole("button", { name: "创建任务" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("创建任务失败：raw create detail");
+    expect(createScheduledTask).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "English test locale" }));
+    await waitFor(() => expect(screen.getByRole("alert")).toHaveTextContent("Create task failed: raw create detail"));
+    expect(createScheduledTask).toHaveBeenCalledTimes(1);
   });
 });

@@ -182,19 +182,36 @@
 
 @media (max-width: 1200px) and (min-width: 901px) {
   .metadata-toolbar {
-    align-items: flex-end;
+    align-items: stretch;
   }
 
-  .metadata-filters .date-day-filter {
-    flex-basis: clamp(180px, 28vw, 286px);
+  /* Four filters need more room than the content rail has at this width.
+   * Preserve readable labels and placeholders with a predictable 2 x 2
+   * layout; the <=900 rule below intentionally remains a single column. */
+  .metadata-toolbar .metadata-filters {
+    display: grid;
+    width: 100%;
+    flex: 1 1 auto;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: end;
+    gap: 10px;
   }
 
-  .metadata-filters .search-filter {
-    flex-basis: clamp(180px, 22vw, 240px);
+  .metadata-toolbar .metadata-filters .date-day-filter,
+  .metadata-toolbar .metadata-filters .search-filter,
+  .metadata-toolbar .metadata-filters .filter-dropdown {
+    width: 100%;
+    min-width: 0;
+    flex: none;
   }
 
-  .metadata-filters .filter-dropdown {
-    flex-basis: clamp(120px, 14vw, 148px);
+  .metadata-toolbar .metadata-filters .date-day-filter__trigger,
+  .metadata-toolbar .metadata-filters .filter-dropdown__trigger {
+    width: 100%;
+  }
+
+  .metadata-toolbar .metadata-filters .search-filter {
+    grid-template-columns: auto minmax(0, 1fr);
   }
 
   .domain-agent-layout { grid-template-columns: minmax(0, 1fr) minmax(220px, .8fr); }
@@ -484,6 +501,15 @@
     align-items: flex-start;
     flex-direction: column;
     gap: 10px;
+  }
+
+  .focus-appearance-bar {
+    min-height: 42px;
+    padding: 7px 12px;
+  }
+
+  .app-shell--issue-focus .focus-appearance-bar {
+    padding: 8px 18px 0;
   }
 
   .pr-detail--focus .pr-workbench {

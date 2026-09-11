@@ -6,8 +6,10 @@ import {
   type RefObject,
 } from "react";
 import type { ChangedFileEntry } from "@loongboard/contracts";
+import { useI18n } from "../../i18n";
 import { ChangeFileIcon } from "./ChangeFileIcon";
 import { Codicon } from "./codicon";
+import { prMessages } from "./messages";
 import "./continuous-changes.css";
 
 export const DIFF_RENDER_AHEAD_MARGIN_PX = 1_600;
@@ -125,6 +127,7 @@ function useNearViewport(
 }
 
 export function FilePathCopyButton({ path }: { path: string }) {
+  const { t } = useI18n();
   const [copied, setCopied] = useState(false);
   const [failed, setFailed] = useState(false);
 
@@ -149,19 +152,19 @@ export function FilePathCopyButton({ path }: { path: string }) {
       <button
         type="button"
         className="continuous-changes__copy"
-        aria-label={`Copy path for ${path}`}
+        aria-label={t(prMessages.copyPathFor, { path })}
         onClick={() => void copy()}
       >
         <Codicon name="copy" className="continuous-changes__copy-icon" />
       </button>
       {copied && (
         <span role="status" className="continuous-changes__copied">
-          Copied
+          {t(prMessages.copied)}
         </span>
       )}
       {failed && (
         <span role="alert" className="continuous-changes__copy-error">
-          Copy failed
+          {t(prMessages.copyFailed)}
         </span>
       )}
     </span>
@@ -183,6 +186,7 @@ function DiffCard({
   selected: boolean;
   renderFileDiff: ContinuousChangesProps["renderFileDiff"];
 }) {
+  const { t, formatNumber } = useI18n();
   const { cardRef, near } = useNearViewport(expanded);
   const anchorId = diffAnchorId(file.path);
   const bodyId = `${anchorId}-body`;
@@ -218,12 +222,14 @@ function DiffCard({
         </span>
         <span className="continuous-changes__stats">
           {file.binary ? (
-            <span className="continuous-changes__binary">binary</span>
+            <span className="continuous-changes__binary">
+              {t(prMessages.binary)}
+            </span>
           ) : (
             file.additions !== null && (
               <>
-                <span className="diff-stat-add">+{file.additions}</span>
-                <span className="diff-stat-del">−{file.deletions ?? 0}</span>
+                <span className="diff-stat-add">+{formatNumber(file.additions)}</span>
+                <span className="diff-stat-del">−{formatNumber(file.deletions ?? 0)}</span>
               </>
             )
           )}
@@ -235,12 +241,12 @@ function DiffCard({
           aria-controls={expanded ? bodyId : undefined}
           aria-label={
             expanded
-              ? `Collapse diff for ${file.path}`
-              : `Expand diff for ${file.path}`
+              ? t(prMessages.collapseDiffFor, { path: file.path })
+              : t(prMessages.expandDiffFor, { path: file.path })
           }
           onClick={onToggle}
         >
-          {expanded ? "Collapse" : "Expand"}
+          {expanded ? t(prMessages.collapse) : t(prMessages.expand)}
         </button>
       </header>
       {expanded && (
@@ -255,7 +261,7 @@ function DiffCard({
               ? null
               : (
                 <p role="status" className="continuous-changes__waiting">
-                  Preparing diff…
+                  {t(prMessages.preparingDiff)}
                 </p>
               )}
         </div>
@@ -272,6 +278,7 @@ export function ContinuousChanges({
   initialExpandedPaths,
   bulkExpansion = null,
 }: ContinuousChangesProps) {
+  const { t, formatNumber } = useI18n();
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(
     () =>
       new Set(
@@ -322,9 +329,9 @@ export function ContinuousChanges({
   };
 
   return (
-    <section className="continuous-changes" aria-label="Changed file diffs">
+    <section className="continuous-changes" aria-label={t(prMessages.changedFileDiffs)}>
       <h3 className="continuous-changes__heading">
-        Changed files ({files.length})
+        {t(prMessages.changedFilesCount, { count: formatNumber(files.length) })}
       </h3>
       <ul className="continuous-changes__list" role="list">
         {files.map((file) => {

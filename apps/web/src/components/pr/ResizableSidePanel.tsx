@@ -4,7 +4,9 @@ import type {
   PointerEvent as ReactPointerEvent,
   ReactNode,
 } from "react";
+import { useI18n } from "../../i18n";
 import { Codicon } from "./codicon";
+import { prMessages } from "./messages";
 import "./pr-workbench-panels.css";
 
 export type ResizablePanelSide = "left" | "right";
@@ -99,6 +101,7 @@ export function ResizableSidePanel({
   id,
   className,
 }: ResizableSidePanelProps) {
+  const { t } = useI18n();
   const min = Math.min(minWidth, maxWidth);
   const max = Math.max(minWidth, maxWidth);
   const fallbackWidth = clampPanelWidth(defaultWidth, min, max);
@@ -198,7 +201,7 @@ export function ResizableSidePanel({
   const grip = (
     <div
       role="separator"
-      aria-label={`Resize ${label}`}
+      aria-label={t(prMessages.resize, { label })}
       aria-orientation="vertical"
       aria-valuenow={Math.round(width)}
       aria-valuemin={Math.round(min)}
@@ -256,6 +259,7 @@ export function PanelCollapseButton({
   side = "left",
   className,
 }: PanelCollapseButtonProps) {
+  const { t } = useI18n();
   const classes = ["pr-panel-collapse"];
   if (className !== undefined) classes.push(className);
   return (
@@ -264,7 +268,7 @@ export function PanelCollapseButton({
       className={classes.join(" ")}
       aria-expanded={expanded}
       aria-controls={panelId}
-      aria-label={`${expanded ? "Collapse" : "Expand"} ${label}`}
+      aria-label={t(expanded ? prMessages.collapsePanel : prMessages.expandPanel, { label })}
       data-panel-side={side}
       onClick={onToggle}
     >

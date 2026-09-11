@@ -5,7 +5,11 @@ import type { AgentSessionResponse, AgentSessionSummary } from "@loongboard/cont
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AgentPage } from "./AgentPage";
-import { listAgentSessions, updateAgentSession } from "../../agent-chat-client";
+import {
+  ensureAgentSession,
+  listAgentSessions,
+  updateAgentSession,
+} from "../../agent-chat-client";
 
 vi.mock("../../agent-chat", () => ({
   AgentChatPanel: () => <div data-testid="agent-chat-panel">Agent chat</div>,
@@ -38,10 +42,10 @@ const session: AgentSessionSummary = {
   lastUsedAt: "2026-09-11T00:00:00.000Z",
 };
 
-function renderPage() {
+function renderPage(initialEntry = "/agent") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <MemoryRouter initialEntries={["/agent"]}>
+    <MemoryRouter initialEntries={[initialEntry]}>
       <QueryClientProvider client={client}>
         <AgentPage />
       </QueryClientProvider>
@@ -75,5 +79,29 @@ describe("AgentPage titles", () => {
     fireEvent.click(screen.getByRole("button", { name: "Save conversation title" }));
 
     await waitFor(() => expect(updateAgentSession).toHaveBeenCalledWith("sess_title", { title: "Renamed title" }));
+  });
+
+  it("disables creation for origins that need an existing source", async () => {
+    vi.mocked(listAgentSessions).mockResolvedValue({ items: [] });
+    renderPage("/agent?origin=pr");
+
+    const createButton = await screen.findByRole("button", { name: "New conversation" });
+    await waitFor(() => expect(createButton).toBeDisabled());
+    expect(createButton).toHaveAttribute(
+      "title",
+      "A new conversation is unavailable for this origin.",
+    );
+    expect(ensureAgentSession).not.toHaveBeenCalled();
+  });
+
+  it("shows the raw backend detail when creation fails", async () => {
+    vi.mocked(listAgentSessions).mockResolvedValue({ items: [] });
+    vi.mocked(ensureAgentSession).mockRejectedValue(new Error("runtime says no"));
+    renderPage("/agent?origin=general");
+
+    fireEvent.click(await screen.findByRole("button", { name: "New conversation" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Unable to create conversation: runtime says no",
+    );
   });
 });

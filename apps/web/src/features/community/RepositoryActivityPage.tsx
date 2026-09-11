@@ -9,6 +9,8 @@ import {
 } from "../../components/filters/DateDayFilter";
 import { monthEnd, monthStart, todayValue } from "../../components/filters/date-utils";
 import { readDateRange } from "../../metadata-client";
+import { useI18n } from "../../i18n";
+import { communityMessages } from "./messages";
 
 function repositoryListPath(
   repositoryId: string,
@@ -29,11 +31,12 @@ function DayCount({
   count: number | undefined;
   to: string;
 }) {
+  const { t, formatNumber } = useI18n();
   return (
     <article className="activity-day-card">
-      <strong>{count ?? 0}</strong>
+      <strong>{formatNumber(count ?? 0)}</strong>
       <span>{label}</span>
-      <Link to={to}>Open list</Link>
+      <Link to={to}>{t(communityMessages.openList)}</Link>
     </article>
   );
 }
@@ -53,6 +56,7 @@ function countInRange(
 }
 
 export function RepositoryActivityPage() {
+  const { t, formatNumber, formatDate } = useI18n();
   const { repositoryId = "" } = useParams();
   const repositories = useRepositories();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -85,15 +89,15 @@ export function RepositoryActivityPage() {
     queryFn: () => fetchActivityDays(repositoryId, "issues", from, to),
   });
 
-  if (repositories.isPending) return <p role="status">Loading repositories…</p>;
+  if (repositories.isPending) return <p role="status">{t(communityMessages.loadingRepositories)}</p>;
   if (repositories.isError)
-    return <p role="alert">Unable to load repositories: {repositories.error.message}</p>;
+    return <p role="alert">{t(communityMessages.unableLoadRepositories, { detail: repositories.error.message })}</p>;
   if (!repository)
     return (
       <section>
-        <h2>Repository not found</h2>
-        <p role="alert">This repository is missing or disabled.</p>
-        <Link to="/">Choose another repository</Link>
+        <h2>{t(communityMessages.repositoryNotFound)}</h2>
+        <p role="alert">{t(communityMessages.repositoryMissing)}</p>
+        <Link to="/">{t(communityMessages.chooseAnotherRepository)}</Link>
       </section>
     );
 
@@ -117,16 +121,16 @@ export function RepositoryActivityPage() {
           <p className="eyebrow">
             {repository.githubOwner}/{repository.githubName}
           </p>
-          <h2 id="activity-heading">Repository activity</h2>
+          <h2 id="activity-heading">{t(communityMessages.activity)}</h2>
         </div>
-        <nav className="repository-tabs" aria-label="Repository sections">
+        <nav className="repository-tabs" aria-label={t(communityMessages.repositorySections)}>
           <Link
             to={`/repositories/${encodeURIComponent(repository.id)}/pulls`}
           >
-            Pull requests
+            {t(communityMessages.pullRequests)}
           </Link>
           <Link to={`/repositories/${encodeURIComponent(repository.id)}/issues`}>
-            Issues
+            {t(communityMessages.issues)}
           </Link>
         </nav>
       </header>
@@ -139,28 +143,34 @@ export function RepositoryActivityPage() {
           today={today}
         />
       </div>
-      <div className="activity-summary" aria-label="Selected date range summary">
+      <div className="activity-summary" aria-label={t(communityMessages.selectedDateRange)}>
         <DayCount
-          label="Pull requests updated"
+          label={t(communityMessages.pullRequestsUpdated)}
           count={pullRangeTotal}
           to={repositoryListPath(repository.id, "pulls", from, to)}
         />
         <DayCount
-          label="Issues updated"
+          label={t(communityMessages.issuesUpdated)}
           count={issueRangeTotal}
           to={repositoryListPath(repository.id, "issues", from, to)}
         />
       </div>
       {pulls.isPending || issues.isPending ? (
-        <p role="status">Loading activity counts…</p>
+        <p role="status">{t(communityMessages.loadingActivityCounts)}</p>
       ) : pulls.isError || issues.isError ? (
         <p role="alert">
-          Unable to load activity:{" "}
-          {(pulls.error ?? issues.error)?.message ?? "unknown error"}
+          {t(communityMessages.unableLoadActivity, {
+            detail: (pulls.error ?? issues.error)?.message ?? t(communityMessages.unknownError),
+          })}
         </p>
       ) : (
         <p role="status" className="activity-month-total">
-          {pullRangeTotal} pull requests and {issueRangeTotal} issues updated from {from} to {to}
+          {t(communityMessages.activityMonthTotal, {
+            pullCount: formatNumber(pullRangeTotal),
+            issueCount: formatNumber(issueRangeTotal),
+            from: formatDate(`${from}T12:00:00Z`, { year: "numeric", month: "short", day: "numeric" }, "UTC"),
+            to: formatDate(`${to}T12:00:00Z`, { year: "numeric", month: "short", day: "numeric" }, "UTC"),
+          })}
         </p>
       )}
     </section>

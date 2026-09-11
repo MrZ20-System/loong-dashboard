@@ -46,12 +46,12 @@ function json(value: unknown): Response {
   });
 }
 
-function renderIssueDetail(): void {
+function renderIssueDetail(data = issue): void {
   const fetchMock = vi.fn<typeof fetch>(async (input) => {
     const url = new URL(String(input), "http://localhost");
     if (url.pathname === "/api/auth/status") return json({ enabled: false, unlocked: true });
     expect(url.pathname).toBe("/api/repositories/repo/issues/7");
-    return json(issue);
+    return json(data);
   });
   vi.stubGlobal("fetch", fetchMock);
   render(
@@ -65,6 +65,7 @@ describe("Issue detail page", () => {
   afterEach(() => {
     cleanup();
     appQueryClient.clear();
+    window.localStorage?.removeItem("loongboard.locale");
     vi.unstubAllGlobals();
   });
 
@@ -100,12 +101,8 @@ describe("Issue detail page", () => {
     expect(comments).toHaveLength(2);
     expect(comments[0]).toHaveTextContent("alice");
     expect(comments[0]).toHaveTextContent("First comment paragraph.");
-    expect(comments[0]).toHaveTextContent(
-      "2026-09-03T02:04:00.000Z",
-    );
-    expect(comments[0]).toHaveTextContent(
-      "2026-09-03T02:05:00.000Z",
-    );
+    expect(comments[0]).toHaveTextContent("Sep 3, 2026, 10:04 AM");
+    expect(comments[0]).toHaveTextContent("Sep 3, 2026, 10:05 AM");
     expect(comments[1]).toHaveTextContent("bob");
     expect(comments[1]).toHaveTextContent("Second comment paragraph.");
 
@@ -180,5 +177,46 @@ describe("Issue detail page", () => {
     expect(screen.getByText("Refreshed body")).toBeInTheDocument();
     expect(calls).toContainEqual({ path: "/api/repositories/repo/issues/7/refresh", method: "POST" });
     expect(calls.filter(({ path }) => path.endsWith("/refresh")).length).toBe(1);
+  });
+
+  it("localizes fixed chrome while preserving English issue content", async () => {
+    const values = new Map<string, string>([["loongboard.locale", "zh-CN"]]);
+    Object.defineProperty(window, "localStorage", {
+      configurable: true,
+      value: {
+        getItem: (key: string) => values.get(key) ?? null,
+        setItem: (key: string, value: string) => values.set(key, value),
+        removeItem: (key: string) => values.delete(key),
+      },
+    });
+    renderIssueDetail();
+
+    const heading = await screen.findByRole("heading", {
+      name: /Render issue detail/,
+    });
+    expect(
+      within(heading).getByRole("link", {
+        name: "在 GitHub 上打开 Issue #7",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "评论" })).toBeInTheDocument();
+    expect(screen.getByText(/Body paragraph with/)).toBeInTheDocument();
+    expect(screen.getByText("First comment paragraph.")).toBeInTheDocument();
+    expect(screen.queryByText("Comments")).not.toBeInTheDocument();
+  });
+
+  it("formats a large comment count without changing the Issue identity", async () => {
+    window.localStorage.setItem("loongboard.locale", "zh-CN");
+    renderIssueDetail({ ...issue, commentsCount: 1_234_567 });
+
+    const heading = await screen.findByRole("heading", {
+      name: /Render issue detail/,
+    });
+    expect(
+      within(heading).getByRole("link", {
+        name: "在 GitHub 上打开 Issue #7",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("1,234,567 条评论")).toBeInTheDocument();
   });
 });

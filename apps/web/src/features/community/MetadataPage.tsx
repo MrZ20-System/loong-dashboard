@@ -8,6 +8,8 @@ import { FilterDropdown } from "../../components/filters/FilterDropdown";
 import { MetadataFeed, MetadataSearchField } from "../../components/metadata/MetadataList";
 import { Pagination } from "../../components/metadata/Pagination";
 import { buildListUrl, fetchList, readMetadataFilters } from "../../metadata-client";
+import { useI18n } from "../../i18n";
+import { communityMessages } from "./messages";
 
 export const pullStatuses = ["draft", "open", "closed", "merged"] as const;
 export const issueStatuses = ["open", "closed"] as const;
@@ -24,9 +26,10 @@ type PagedMetadata = {
 };
 
 function ReclassificationHint({ repositoryId }: { repositoryId: string }) {
+  const { t } = useI18n();
   const domains = useDomains(repositoryId);
   if (!domains.data?.reclassification.running) return null;
-  return <p role="status" className="reclassify-hint">重新分类中…</p>;
+  return <p role="status" className="reclassify-hint">{t(communityMessages.reclassifying)}</p>;
 }
 
 export function FilterBar({ kind, from, to, calendarTimeZone, status, archive = "current", search, onDateRange, onStatus, onArchive, onSearch }: {
@@ -42,12 +45,18 @@ export function FilterBar({ kind, from, to, calendarTimeZone, status, archive = 
   onArchive?: (value: string) => void;
   onSearch: (value: string) => void;
 }) {
+  const { t } = useI18n();
   const statuses = kind === "pulls" ? pullStatuses : issueStatuses;
-  return <form className="filters metadata-filters" aria-label="Metadata filters" onSubmit={(event) => event.preventDefault()}>
+  const archiveLabels = {
+    current: communityMessages.current,
+    archived: communityMessages.archived,
+    all: communityMessages.all,
+  } as const;
+  return <form className="filters metadata-filters" aria-label={t(communityMessages.metadataFilters)} onSubmit={(event) => event.preventDefault()}>
     <DateDayFilter from={from} to={to} calendarTimeZone={calendarTimeZone} onChange={onDateRange} />
     <MetadataSearchField kind={kind} value={search} onChange={onSearch} />
-    <FilterDropdown label="Status" emptyLabel="All statuses" options={statuses.map((value) => ({ value, label: value }))} selected={status ? [status] : []} onChange={(values) => onStatus(values[0] ?? "")} />
-    <FilterDropdown label="Archive" emptyLabel="Current" options={archiveFilters.map((value) => ({ value, label: value[0]!.toUpperCase() + value.slice(1) }))} selected={archive === "current" ? [] : [archive]} onChange={(values) => onArchive?.(values[0] ?? "current")} />
+    <FilterDropdown label={communityMessages.status} emptyLabel={communityMessages.allStatuses} options={statuses.map((value) => ({ value, label: value }))} selected={status ? [status] : []} onChange={(values) => onStatus(values[0] ?? "")} />
+    <FilterDropdown label={communityMessages.archive} emptyLabel={communityMessages.current} options={archiveFilters.map((value) => ({ value, label: archiveLabels[value] }))} selected={archive === "current" ? [] : [archive]} onChange={(values) => onArchive?.(values[0] ?? "current")} />
   </form>;
 }
 
@@ -61,6 +70,7 @@ function readPage(value: string | null): number {
 }
 
 export function MetadataPage({ kind }: { kind: "pulls" | "issues" }) {
+  const { t, formatNumber } = useI18n();
   const { repositoryId = "" } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const filters = readMetadataFilters(kind, searchParams);
@@ -153,9 +163,10 @@ export function MetadataPage({ kind }: { kind: "pulls" | "issues" }) {
     setSearchParams(next, { replace: true });
   }, [kind, page, pageData?.totalPages, searchParams, setSearchParams]);
 
-  if (repositories.isPending) return <p role="status">Loading repositories…</p>;
-  if (repositories.isError) return <p role="alert">Unable to load repositories: {repositories.error.message}</p>;
-  if (!repository) return <section><h2>Repository not found</h2><p role="alert">This repository is missing or disabled.</p><Link to="/">Choose another repository</Link></section>;
+  const kindLabel = kind === "pulls" ? t(communityMessages.pullRequests) : t(communityMessages.issues);
+  if (repositories.isPending) return <p role="status">{t(communityMessages.loadingRepositories)}</p>;
+  if (repositories.isError) return <p role="alert">{t(communityMessages.unableLoadRepositories, { detail: repositories.error.message })}</p>;
+  if (!repository) return <section><h2>{t(communityMessages.repositoryNotFound)}</h2><p role="alert">{t(communityMessages.repositoryMissing)}</p><Link to="/">{t(communityMessages.chooseAnotherRepository)}</Link></section>;
 
   const updateUrl = (mutate: (next: URLSearchParams) => void) => {
     const next = new URLSearchParams(searchParams);
@@ -175,19 +186,19 @@ export function MetadataPage({ kind }: { kind: "pulls" | "issues" }) {
   const changeSearch = (value: string) => updateUrl((next) => { if (value.trim()) next.set("search", value); else next.delete("search"); });
 
   return <section className="metadata-page" aria-labelledby="metadata-heading">
-    <div className="metadata-page__heading page-heading"><div><p className="eyebrow">Repository metadata</p><h2 id="metadata-heading">{kind === "pulls" ? "Pull requests" : "Issues"}</h2></div></div>
+    <div className="metadata-page__heading page-heading"><div><p className="eyebrow">{t(communityMessages.repositoryMetadata)}</p><h2 id="metadata-heading">{kindLabel}</h2></div></div>
     <div className="metadata-panel">
-      {kind === "pulls" && <nav className="metadata-view-tabs" aria-label="Pull request views"><button type="button" className={view === "updated" ? "is-active" : ""} aria-pressed={view === "updated"} onClick={() => changeView("updated")}>Recently updated</button><button type="button" className={view === "number" ? "is-active" : ""} aria-pressed={view === "number"} onClick={() => changeView("number")}>PR number</button></nav>}
+      {kind === "pulls" && <nav className="metadata-view-tabs" aria-label={t(communityMessages.pullRequestViews)}><button type="button" className={view === "updated" ? "is-active" : ""} aria-pressed={view === "updated"} onClick={() => changeView("updated")}>{t(communityMessages.recentlyUpdated)}</button><button type="button" className={view === "number" ? "is-active" : ""} aria-pressed={view === "number"} onClick={() => changeView("number")}>{t(communityMessages.prNumber)}</button></nav>}
       <div className="metadata-toolbar"><FilterBar kind={kind} from={from} to={to} calendarTimeZone={pageData?.calendarTimeZone} status={status} archive={archive} search={search} onDateRange={changeDate} onStatus={(value) => changeFilter("status", value)} onArchive={(value) => changeFilter("archive", value)} onSearch={changeSearch} /></div>
       <ReclassificationHint repositoryId={repository.id} />
       {kind === "pulls" && <DomainFilter repositoryId={repository.id} selected={domains} onChange={setDomains} />}
-      {isLoading && <p role="status">Loading {kind}…</p>}
-      {list.isError && !list.isFetching && <p role="alert">Unable to load {kind}: {list.error instanceof Error ? list.error.message : "Unknown error"}</p>}
-      {!isLoading && !list.isError && items.length === 0 && <p role="status">No {kind} match these filters.</p>}
+      {isLoading && <p role="status">{t(communityMessages.loadingItems, { kind: kindLabel })}</p>}
+      {list.isError && !list.isFetching && <p role="alert">{t(communityMessages.unableLoadItems, { kind: kindLabel, detail: list.error instanceof Error ? list.error.message : t(communityMessages.unknownError) })}</p>}
+      {!isLoading && !list.isError && items.length === 0 && <p role="status">{t(communityMessages.noItemsMatch, { kind: kindLabel })}</p>}
       {!isLoading && !list.isError && items.length > 0 && <MetadataFeed kind={kind} items={items} calendarTimeZone={pageData?.calendarTimeZone} />}
-      {kind === "pulls" && !list.isError && (items.length > 0 || totalCount > 0) && <Pagination page={page} pageSize={pageSize} totalCount={totalCount} totalPages={totalPages} onPageChange={(nextPage) => { const next = new URLSearchParams(searchParams); next.set("page", String(nextPage)); setSearchParams(next); }} disabled={list.isFetching} label="Pull requests pagination" />}
-      {kind === "issues" && !list.isError && (items.length > 0 || page > 1) && <nav className="metadata-pagination" aria-label="Issues pagination"><span className="metadata-pagination__summary">Page {page} · {items.length} items</span><button type="button" onClick={() => { const targetPage = page - 1; setIssuePage(targetPage); const next = new URLSearchParams(searchParams); if (targetPage <= 1) next.delete("cursor"); else if (issueCursors[targetPage]) next.set("cursor", issueCursors[targetPage]); else next.delete("cursor"); setSearchParams(next); }} disabled={list.isFetching || page <= 1}>Previous</button><button type="button" onClick={() => { if (!nextCursor) return; const targetPage = page + 1; setIssueCursors((current) => ({ ...current, [targetPage]: nextCursor })); setIssuePage(targetPage); const next = new URLSearchParams(searchParams); next.set("cursor", nextCursor); setSearchParams(next); }} disabled={list.isFetching || nextCursor === null}>Next</button></nav>}
-      {list.isFetching && !isLoading && <p role="status">Refreshing…</p>}
+      {kind === "pulls" && !list.isError && (items.length > 0 || totalCount > 0) && <Pagination page={page} pageSize={pageSize} totalCount={totalCount} totalPages={totalPages} onPageChange={(nextPage) => { const next = new URLSearchParams(searchParams); next.set("page", String(nextPage)); setSearchParams(next); }} disabled={list.isFetching} label={communityMessages.pullRequestsPagination} />}
+      {kind === "issues" && !list.isError && (items.length > 0 || page > 1) && <nav className="metadata-pagination" aria-label={t(communityMessages.issuesPagination)}><span className="metadata-pagination__summary">{t(communityMessages.itemsSummary, { page: formatNumber(page), count: formatNumber(items.length) })}</span><button type="button" onClick={() => { const targetPage = page - 1; setIssuePage(targetPage); const next = new URLSearchParams(searchParams); if (targetPage <= 1) next.delete("cursor"); else if (issueCursors[targetPage]) next.set("cursor", issueCursors[targetPage]); else next.delete("cursor"); setSearchParams(next); }} disabled={list.isFetching || page <= 1}>{t(communityMessages.previous)}</button><button type="button" onClick={() => { if (!nextCursor) return; const targetPage = page + 1; setIssueCursors((current) => ({ ...current, [targetPage]: nextCursor })); setIssuePage(targetPage); const next = new URLSearchParams(searchParams); next.set("cursor", nextCursor); setSearchParams(next); }} disabled={list.isFetching || nextCursor === null}>{t(communityMessages.next)}</button></nav>}
+      {list.isFetching && !isLoading && <p role="status">{t(communityMessages.refreshing)}</p>}
     </div>
     <p className="query-debug" aria-hidden="true">{buildListUrl(repository.id, kind, { from, to, status, archive, search, domains, page: kind === "pulls" ? page : null, sort: kind === "pulls" ? (view === "number" ? "number" : "updated") : null, limit: PAGE_SIZE })}</p>
   </section>;

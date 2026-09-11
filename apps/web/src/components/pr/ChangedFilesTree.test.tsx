@@ -1,7 +1,8 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import type { ChangedFileEntry } from "@loongboard/contracts";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChangedFilesTree } from "./ChangedFilesTree";
+import { LocaleProvider, LOCALE_STORAGE_KEY } from "../../i18n";
 
 const files: ChangedFileEntry[] = [
   {
@@ -50,9 +51,27 @@ function renderTree(selected = "src/app.ts") {
   return { onSelect, ...view };
 }
 
+beforeEach(() => {
+  const values = new Map<string, string>();
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => values.set(key, value),
+      removeItem: (key: string) => values.delete(key),
+      clear: () => values.clear(),
+      key: (index: number) => [...values.keys()][index] ?? null,
+      get length() {
+        return values.size;
+      },
+    } as Storage,
+  });
+});
+
 describe("ChangedFilesTree", () => {
   afterEach(() => {
     cleanup();
+    window.localStorage.removeItem(LOCALE_STORAGE_KEY);
     vi.clearAllMocks();
   });
 
@@ -119,5 +138,30 @@ describe("ChangedFilesTree", () => {
     expect(
       screen.getByRole("button", { name: "Added data.bin" }),
     ).toBeInTheDocument();
+  });
+
+  it("formats large change statistics with the active locale", () => {
+    window.localStorage.setItem(LOCALE_STORAGE_KEY, "zh-CN");
+    render(
+      <LocaleProvider>
+        <ChangedFilesTree
+          files={[
+            {
+              ...files[0],
+              additions: 1_234_567,
+              deletions: 2_345_678,
+            },
+          ]}
+          selected={null}
+          onSelect={() => undefined}
+        />
+      </LocaleProvider>,
+    );
+
+    const row = screen.getByRole("button", {
+      name: "新增 src/features/badge.tsx",
+    });
+    expect(row).toHaveTextContent("+1,234,567");
+    expect(row).toHaveTextContent("−2,345,678");
   });
 });

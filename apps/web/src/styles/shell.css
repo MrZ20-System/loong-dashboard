@@ -401,6 +401,51 @@
   box-shadow: var(--shadow-sm);
 }
 
+.locale-toggle {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-muted);
+}
+
+.locale-toggle__item {
+  min-height: 28px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 620;
+}
+
+.locale-toggle__item:hover {
+  color: var(--text);
+}
+
+.locale-toggle__item--active {
+  background: var(--surface);
+  color: var(--accent-dark);
+  box-shadow: var(--shadow-sm);
+}
+
+@media (max-width: 700px) {
+  .locale-toggle {
+    gap: 0;
+    padding: 2px;
+  }
+
+  .locale-toggle__item {
+    min-height: 26px;
+    padding: 0 6px;
+    font-size: 10px;
+  }
+}
+
 .app-content {
   width: min(100%, 1440px);
   margin: 0 auto;
