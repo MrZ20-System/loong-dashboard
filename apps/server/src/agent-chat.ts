@@ -360,7 +360,7 @@ export class AgentChatController {
       throw new AgentTurnBusyError(sessionId);
     }
     requireAgentSession(this.dependencies.database, sessionId);
-    const homeCleanup = await this.sessionHomeCleaner.prepare(sessionId);
+    const homeCleanup = await this.sessionHomeCleaner.preflight(sessionId);
     await this.host.restart(sessionId);
     deleteAgentSession(this.dependencies.database, sessionId);
     await homeCleanup.remove();

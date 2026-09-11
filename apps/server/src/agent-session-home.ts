@@ -14,7 +14,7 @@ export interface AgentSessionHomeCleanup {
 const SAFE_SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
 
 /**
- * Validate and prepare deletion of one exact per-session DSH home.
+ * Validate and preflight deletion of one exact per-session DSH home.
  *
  * The root is resolved once when this cleaner is constructed. The returned
  * operation re-checks lstat/realpath immediately before removal to fail closed
@@ -27,7 +27,7 @@ export class AgentSessionHomeCleaner {
     this.root = resolve(agentSessionsPath);
   }
 
-  async prepare(sessionId: string): Promise<AgentSessionHomeCleanup> {
+  async preflight(sessionId: string): Promise<AgentSessionHomeCleanup> {
     const target = this.targetFor(sessionId);
     try {
       await this.validatePath(sessionId, target);
