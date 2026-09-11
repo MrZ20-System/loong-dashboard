@@ -56,10 +56,42 @@ docker compose start
 2. 先把当前 data root 移到安全位置或制作另一份离线备份。
 3. 将备份恢复到目标 data root，保持 `system.yaml`、state、Knowledge 和 archive 的目录结构与权限。
 4. 检查 `system.yaml` 中的相对路径是否仍指向当前 data root；Docker 配置应继续使用 `/data/system.yaml`，native 配置则按 YAML 所在目录解析。
-5. 启动服务，让数据库执行已有有序迁移；观察日志和 `/api/health`。
+5. 启动服务，让数据库执行已有有序迁移；观察日志并请求 `/api/health/live`。
 6. 验证 Knowledge、Agent session、Settings、同步状态和 archive，再恢复正常写入。
 
+Native health check：
+
+```bash
+curl -fsS http://127.0.0.1:4174/api/health/live
+```
+
+Docker healthcheck 使用同一 endpoint；宿主机验证：
+
+```bash
+curl -fsS http://127.0.0.1:4174/api/health/live
+```
+
 恢复不会自动重新创建外部 GitHub 凭证、远端 repository 或 Docker volume 之外的本地 repository。不要运行 `git init` 覆盖已有 Knowledge 或 archive Git 历史；如果目标 Git 仓库缺失，应先恢复其完整 `.git` 目录或按部署流程重新配置。
+
+## Reset local password lock
+
+`pnpm auth:reset` 依赖 production build，并且只删除当前配置解析出的 `runtime.statePath/auth.json`：
+
+```bash
+pnpm build
+pnpm auth:reset
+pnpm start
+```
+
+Docker 使用当前镜像和同一个宿主机 data directory：
+
+```bash
+docker compose stop
+docker compose run --rm loongboard pnpm auth:reset
+docker compose start
+```
+
+如果运行中的 Server 已经加载了 auth 状态，reset 后必须重启或重建 Server 才会重新读取已删除的文件。reset 不碰 SQLite、Knowledge、Agent、Git 或 worktree；仍应在 reset 前停止写入并在之后检查 health。
 
 ## Upgrade checkpoint
 

@@ -41,6 +41,7 @@ docker compose up -d --build
 - `LOONGBOARD_SERVER_HOST=0.0.0.0`、`LOONGBOARD_SERVER_PORT=4174`。
 - 宿主机只绑定 `127.0.0.1:4174:4174`。
 - 容器使用 `restart: unless-stopped`。
+- healthcheck 使用镜像内 Node 请求 `http://127.0.0.1:4174/api/health/live`，不依赖 curl/wget。
 
 容器内 YAML 的相对路径相对 `/data`，所以 `./knowledge`、`./.loong`、`./.worktrees` 分别落在 `/data/knowledge`、`/data/.loong`、`/data/.worktrees`。首次启动前必须确认 `/data/system.yaml` 存在，并且其中配置的 repository path 对容器可访问。
 
@@ -87,3 +88,21 @@ docker compose up -d --build
 ```
 
 两种方式都继续使用原 data directory；不要为了升级删除 `.loong`、knowledge 或整个 `/data`。
+
+## Reset local password lock
+
+`pnpm auth:reset` 运行的是 production build 中的 `apps/server/dist/auth-reset.js`，所以 native 环境必须先构建：
+
+```bash
+pnpm build
+pnpm auth:reset
+```
+
+Docker 使用当前镜像和同一个 `/data` bind mount：
+
+```bash
+docker compose run --rm loongboard pnpm auth:reset
+docker compose restart loongboard
+```
+
+如果 Server 正在运行，删除 `runtime.statePath/auth.json` 后必须重启 Server，才能让进程重新加载已删除的 auth 文件。reset 只处理这个精确文件，不触碰 SQLite、Knowledge、Agent session、Git 或 worktree。
