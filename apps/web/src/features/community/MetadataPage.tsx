@@ -11,6 +11,7 @@ import { buildListUrl, fetchList, readMetadataFilters } from "../../metadata-cli
 
 export const pullStatuses = ["draft", "open", "closed", "merged"] as const;
 export const issueStatuses = ["open", "closed"] as const;
+const archiveFilters = ["current", "archived", "all"] as const;
 const PAGE_SIZE = 100;
 type PullRequestView = "updated" | "number";
 
@@ -28,15 +29,17 @@ function ReclassificationHint({ repositoryId }: { repositoryId: string }) {
   return <p role="status" className="reclassify-hint">重新分类中…</p>;
 }
 
-export function FilterBar({ kind, from, to, calendarTimeZone, status, search, onDateRange, onStatus, onSearch }: {
+export function FilterBar({ kind, from, to, calendarTimeZone, status, archive = "current", search, onDateRange, onStatus, onArchive, onSearch }: {
   kind: "pulls" | "issues";
   from: string | null;
   to: string | null;
   calendarTimeZone?: string;
   status: string | null;
+  archive?: "current" | "archived" | "all";
   search: string;
   onDateRange: (value: DateRangeValue) => void;
   onStatus: (value: string) => void;
+  onArchive?: (value: string) => void;
   onSearch: (value: string) => void;
 }) {
   const statuses = kind === "pulls" ? pullStatuses : issueStatuses;
@@ -44,6 +47,7 @@ export function FilterBar({ kind, from, to, calendarTimeZone, status, search, on
     <DateDayFilter from={from} to={to} calendarTimeZone={calendarTimeZone} onChange={onDateRange} />
     <MetadataSearchField kind={kind} value={search} onChange={onSearch} />
     <FilterDropdown label="Status" emptyLabel="All statuses" options={statuses.map((value) => ({ value, label: value }))} selected={status ? [status] : []} onChange={(values) => onStatus(values[0] ?? "")} />
+    <FilterDropdown label="Archive" emptyLabel="Current" options={archiveFilters.map((value) => ({ value, label: value[0]!.toUpperCase() + value.slice(1) }))} selected={archive === "current" ? [] : [archive]} onChange={(values) => onArchive?.(values[0] ?? "current")} />
   </form>;
 }
 
@@ -61,6 +65,7 @@ export function MetadataPage({ kind }: { kind: "pulls" | "issues" }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const filters = readMetadataFilters(kind, searchParams);
   const { from, to, status, search, domains } = filters;
+  const archive = filters.archive ?? "current";
   const view = kind === "pulls" ? readView(searchParams.get("view")) : "updated";
   const [issuePage, setIssuePage] = useState(1);
   const page = kind === "pulls" ? readPage(searchParams.get("page")) : issuePage;
@@ -70,9 +75,10 @@ export function MetadataPage({ kind }: { kind: "pulls" | "issues" }) {
   const rawFrom = searchParams.get("from");
   const rawTo = searchParams.get("to");
   const rawStatus = searchParams.get("status");
+  const rawArchive = searchParams.get("archive");
   const rawSearch = searchParams.get("search") ?? "";
   const rawDomains = kind === "pulls" ? searchParams.getAll("domain") : [];
-  const filterKey = `${from ?? ""}:${to ?? ""}:${status ?? ""}:${search}:${domains.join(",")}`;
+  const filterKey = `${from ?? ""}:${to ?? ""}:${status ?? ""}:${archive}:${search}:${domains.join(",")}`;
   const [issueCursors, setIssueCursors] = useState<Record<number, string | null>>({ 1: null });
   const requestCursor = kind === "issues" ? issueCursors[page] ?? searchParams.get("cursor") ?? null : null;
   const repositories = useRepositories();
@@ -88,11 +94,13 @@ export function MetadataPage({ kind }: { kind: "pulls" | "issues" }) {
         next.set(key, value); changed = true;
       }
     };
-    if (rawDate !== null || rawFrom !== from || rawTo !== to || rawStatus !== status || rawSearch !== search || rawDomains.join("\u0000") !== domains.join("\u0000")) {
+    const desiredArchive = archive === "current" ? null : archive;
+    if (rawDate !== null || rawFrom !== from || rawTo !== to || rawStatus !== status || rawArchive !== desiredArchive || rawSearch !== search || rawDomains.join("\u0000") !== domains.join("\u0000")) {
       next.delete("date");
       setOrDelete("from", from);
       setOrDelete("to", to);
       setOrDelete("status", status);
+      setOrDelete("archive", desiredArchive);
       setOrDelete("search", search || null);
       next.delete("domain");
       for (const domain of domains) next.append("domain", domain);
@@ -112,7 +120,7 @@ export function MetadataPage({ kind }: { kind: "pulls" | "issues" }) {
       next.delete("page"); changed = true;
     }
     if (changed) setSearchParams(next, { replace: true });
-  }, [domains, filterKey, from, kind, page, rawDate, rawDomains, rawFrom, rawPage, rawSearch, rawStatus, rawTo, rawView, search, searchParams, setSearchParams, status, to, view]);
+  }, [archive, domains, filterKey, from, kind, page, rawArchive, rawDate, rawDomains, rawFrom, rawPage, rawSearch, rawStatus, rawTo, rawView, search, searchParams, setSearchParams, status, to, view]);
   useEffect(() => {
     setIssueCursors({ 1: null });
     setIssuePage(1);
@@ -127,6 +135,7 @@ export function MetadataPage({ kind }: { kind: "pulls" | "issues" }) {
       status,
       search,
       domains,
+      archive,
       page: kind === "pulls" ? page : null,
       cursor: kind === "issues" ? requestCursor : null,
       sort: kind === "pulls" ? (view === "number" ? "number" : "updated") : null,
@@ -166,7 +175,7 @@ export function MetadataPage({ kind }: { kind: "pulls" | "issues" }) {
   };
   const changeView = (nextView: PullRequestView) => updateUrl((next) => next.set("view", nextView));
   const setDomains = (values: string[]) => updateUrl((next) => { next.delete("domain"); for (const value of values) next.append("domain", value); });
-  const changeFilter = (key: "status", value: string | null) => updateUrl((next) => { if (value) next.set(key, value); else next.delete(key); });
+  const changeFilter = (key: "status" | "archive", value: string | null) => updateUrl((next) => { if (value && !(key === "archive" && value === "current")) next.set(key, value); else next.delete(key); });
   const changeDate = (value: DateRangeValue) => updateUrl((next) => { next.delete("date"); if (value.from) next.set("from", value.from); else next.delete("from"); if (value.to) next.set("to", value.to); else next.delete("to"); });
   const changeSearch = (value: string) => updateUrl((next) => { if (value.trim()) next.set("search", value); else next.delete("search"); });
 
@@ -174,7 +183,7 @@ export function MetadataPage({ kind }: { kind: "pulls" | "issues" }) {
     <div className="metadata-page__heading page-heading"><div><p className="eyebrow">Repository metadata</p><h2 id="metadata-heading">{kind === "pulls" ? "Pull requests" : "Issues"}</h2></div></div>
     <div className="metadata-panel">
       {kind === "pulls" && <nav className="metadata-view-tabs" aria-label="Pull request views"><button type="button" className={view === "updated" ? "is-active" : ""} aria-pressed={view === "updated"} onClick={() => changeView("updated")}>Recently updated</button><button type="button" className={view === "number" ? "is-active" : ""} aria-pressed={view === "number"} onClick={() => changeView("number")}>PR number</button></nav>}
-      <div className="metadata-toolbar"><FilterBar kind={kind} from={from} to={to} calendarTimeZone={pageData?.calendarTimeZone} status={status} search={search} onDateRange={changeDate} onStatus={(value) => changeFilter("status", value)} onSearch={changeSearch} /></div>
+      <div className="metadata-toolbar"><FilterBar kind={kind} from={from} to={to} calendarTimeZone={pageData?.calendarTimeZone} status={status} archive={archive} search={search} onDateRange={changeDate} onStatus={(value) => changeFilter("status", value)} onArchive={(value) => changeFilter("archive", value)} onSearch={changeSearch} /></div>
       <ReclassificationHint repositoryId={repository.id} />
       {kind === "pulls" && <DomainFilter repositoryId={repository.id} selected={domains} onChange={setDomains} />}
       {isLoading && <p role="status">Loading {kind}…</p>}
@@ -185,6 +194,6 @@ export function MetadataPage({ kind }: { kind: "pulls" | "issues" }) {
       {kind === "issues" && !list.isError && (items.length > 0 || page > 1) && <nav className="metadata-pagination" aria-label="Issues pagination"><span className="metadata-pagination__summary">Page {page} · {items.length} items</span><button type="button" onClick={() => { const targetPage = page - 1; setIssuePage(targetPage); const next = new URLSearchParams(searchParams); if (targetPage <= 1) next.delete("cursor"); else if (issueCursors[targetPage]) next.set("cursor", issueCursors[targetPage]); else next.delete("cursor"); setSearchParams(next); }} disabled={list.isFetching || page <= 1}>Previous</button><button type="button" onClick={() => { if (!nextCursor) return; const targetPage = page + 1; setIssueCursors((current) => ({ ...current, [targetPage]: nextCursor })); setIssuePage(targetPage); const next = new URLSearchParams(searchParams); next.set("cursor", nextCursor); setSearchParams(next); }} disabled={list.isFetching || nextCursor === null}>Next</button></nav>}
       {list.isFetching && !isLoading && <p role="status">Refreshing…</p>}
     </div>
-    <p className="query-debug" aria-hidden="true">{buildListUrl(repository.id, kind, { from, to, status, search, domains, page: kind === "pulls" ? page : null, sort: kind === "pulls" ? (view === "number" ? "number" : "updated") : null, limit: PAGE_SIZE })}</p>
+    <p className="query-debug" aria-hidden="true">{buildListUrl(repository.id, kind, { from, to, status, archive, search, domains, page: kind === "pulls" ? page : null, sort: kind === "pulls" ? (view === "number" ? "number" : "updated") : null, limit: PAGE_SIZE })}</p>
   </section>;
 }

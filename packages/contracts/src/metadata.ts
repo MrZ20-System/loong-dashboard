@@ -10,6 +10,7 @@ import {
   repositoryIdSchema,
   utcDateTimeSchema,
 } from "./validation.js";
+import { archiveFilterSchema } from "./retention.js";
 
 const nonNegativeIntegerSchema = z.number().int().nonnegative();
 const listSearchSchema = z.string().trim().max(200).optional();
@@ -38,6 +39,8 @@ export const pullRequestListItemSchema = z
     additions: nonNegativeIntegerSchema,
     deletions: nonNegativeIntegerSchema,
     domains: z.array(domainTagSchema),
+    archivedAt: utcDateTimeSchema.nullable().optional(),
+    payloadPrunedAt: utcDateTimeSchema.nullable().optional(),
   })
   .strict();
 
@@ -51,6 +54,8 @@ export const issueListItemSchema = z
     status: issueStatusSchema,
     commentsCount: nonNegativeIntegerSchema,
     updatedAt: utcDateTimeSchema,
+    archivedAt: utcDateTimeSchema.nullable().optional(),
+    payloadPrunedAt: utcDateTimeSchema.nullable().optional(),
   })
   .strict();
 
@@ -163,6 +168,7 @@ export const pullRequestsQuerySchema = z.preprocess(
           value === undefined ? undefined : typeof value === "string" ? [value] : value,
         z.array(domainRuleIdSchema).max(20).optional(),
       ),
+      archive: archiveFilterSchema.optional(),
     })
     .strict()
     .refine(validDateRange, {
@@ -184,6 +190,7 @@ export const issuesQuerySchema = z.preprocess(
         z.number().int().positive().max(100).optional(),
       ),
       cursor: opaqueCursorSchema.optional(),
+      archive: archiveFilterSchema.optional(),
     })
     .strict()
     .refine(validDateRange, {

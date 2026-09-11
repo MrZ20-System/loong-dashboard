@@ -27,6 +27,7 @@ import type { SchedulerEngine } from "./scheduler.js";
 /** Actions backed by existing Server services; arbitrary command strings are rejected. */
 export const SUPPORTED_SYSTEM_ACTIONS = [
   "repository.sync",
+  "repository.metadata-maintenance",
   "repository.worktrees.cleanup",
   "git.checkpoint",
   "git.push",

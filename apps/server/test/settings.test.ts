@@ -123,6 +123,60 @@ describe("SettingsController", () => {
     });
   });
 
+  it("fills retention defaults when upgrading a legacy repository and merges partial updates", async () => {
+    const { root, statePath, database } = fixture();
+    writeFileSync(
+      join(root, "settings.json"),
+      JSON.stringify({
+        version: 1,
+        repositories: { vllm: { automaticSync: true, syncFrequencyMinutes: 15 } },
+      }),
+      "utf8",
+    );
+    const controller = new SettingsController({
+      database,
+      systemRoot: root,
+      statePath,
+      environment: {},
+      credential: new GitHubCredentialService({
+        filePath: join(statePath, "github-credential.json"),
+        environment: {},
+        ghExecutable: "false",
+      }),
+    });
+
+    expect((await controller.repository("vllm")).retention).toEqual({
+      automaticArchiveEnabled: false,
+      archiveAfterDays: 7,
+      includeMergedPrs: true,
+      includeClosedPrs: true,
+      includeClosedIssues: true,
+      prunePayloadWhenArchived: true,
+    });
+    const updated = await controller.updateRepository("vllm", {
+      retention: { automaticArchiveEnabled: true, archiveAfterDays: 30 },
+    });
+    expect(updated.retention).toEqual({
+      automaticArchiveEnabled: true,
+      archiveAfterDays: 30,
+      includeMergedPrs: true,
+      includeClosedPrs: true,
+      includeClosedIssues: true,
+      prunePayloadWhenArchived: true,
+    });
+    expect(JSON.parse(readFileSync(join(root, "settings.json"), "utf8"))).toMatchObject({
+      repositories: {
+        vllm: {
+          retention: {
+            automaticArchiveEnabled: true,
+            archiveAfterDays: 30,
+            includeClosedIssues: true,
+          },
+        },
+      },
+    });
+  });
+
   it("hydrates persisted Agent overrides over system defaults after restart", () => {
     const { root, statePath, database } = fixture();
     writeFileSync(

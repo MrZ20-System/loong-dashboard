@@ -47,6 +47,7 @@ import {
   type AgentArchiveSettings,
 } from "../../settings-client";
 import { SettingsSwitch } from "./SettingsSwitch";
+import { RepositoryRetentionSection } from "./RepositoryRetentionSection";
 
 function ErrorText({ error }: { error: unknown }) {
   return <p role="alert" className="settings-error">{error instanceof Error ? error.message : String(error)}</p>;
@@ -234,6 +235,7 @@ function RepositorySettingsCard({ repositoryId, name, githubOwner, githubName, l
     <div className="settings-form-row"><SettingsSwitch label="Automatic sync" checked={automatic} onChange={setAutomatic} /><label>Every <select value={frequency} onChange={(event) => setFrequency(Number(event.target.value))}><option value={15}>15 minutes</option><option value={60}>1 hour</option><option value={360}>6 hours</option><option value={1440}>Daily</option></select></label><button type="button" onClick={() => save.mutate()} disabled={save.isPending}>Save</button><button type="button" className="button-primary" onClick={() => run.mutate()} disabled={run.isPending}>{run.isPending ? "Starting…" : "Sync now"}</button></div>
     <section className="settings-subsection" aria-labelledby={`worktrees-${repositoryId}`}><header className="settings-card__header"><div><p className="eyebrow">Workspace isolation</p><h4 id={`worktrees-${repositoryId}`}>Worktrees</h4><p className="settings-muted">Capacity is per repository and does not limit Agent global concurrency.</p></div></header><div className="settings-grid"><label>Maximum slots<select value={configuredSlots} onChange={(event) => setConfiguredSlots(Number(event.target.value))}>{[1, 2, 3, 4, 5, 6, 7, 8].map((count) => <option key={count} value={count}>{count}</option>)}</select></label><label>Idle cleanup TTL<select value={idleCleanupTtlHours} onChange={(event) => setIdleCleanupTtlHours(Number(event.target.value))}><option value={6}>6 hours</option><option value={24}>24 hours</option><option value={72}>3 days</option><option value={168}>7 days</option><option value={720}>30 days</option></select></label></div><dl className="settings-details"><div><dt>Configured / physical</dt><dd>{state?.worktrees?.configuredSlots ?? configuredSlots} / {state?.worktrees?.physicalSlots ?? 0}</dd></div><div><dt>Active / idle</dt><dd>{state?.worktrees?.active ?? 0} / {state?.worktrees?.idle ?? 0}</dd></div><div><dt>Dirty</dt><dd>{state?.worktrees?.dirty ?? 0}</dd></div><div><dt>Pending retirement</dt><dd>{state?.worktrees?.pendingRetirement ?? 0}</dd></div></dl><div className="settings-form-row"><button type="button" onClick={() => cleanup.mutate()} disabled={cleanup.isPending}>{cleanup.isPending ? "Cleaning…" : "Clean unused now"}</button></div>{cleanup.isError && <ErrorText error={cleanup.error} />}</section>
     <HistorySyncSection repositoryId={repositoryId} />
+    <RepositoryRetentionSection repositoryId={repositoryId} />
     {run.isPending && <p role="status" className="settings-message">Sync started. Fetching recent history for new repositories and updates for existing ones.</p>}
     {run.isSuccess && !run.isPending && <p role="status" className="settings-message">Sync started.</p>}
   </article>;

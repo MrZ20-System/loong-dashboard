@@ -16,6 +16,24 @@ describe("metadata client", () => {
     );
   });
 
+  it("keeps the current projection as the default and sends explicit archive filters", () => {
+    expect(buildListUrl("repo", "pulls", {})).toBe("/api/repositories/repo/pulls");
+    expect(buildListUrl("repo", "issues", { archive: "archived" })).toBe(
+      "/api/repositories/repo/issues?archive=archived",
+    );
+    expect(buildListUrl("repo", "pulls", { archive: "all" })).toBe(
+      "/api/repositories/repo/pulls?archive=all",
+    );
+    expect(readMetadataFilters("pulls", new URLSearchParams("archive=archived"))).toEqual({
+      from: null,
+      to: null,
+      status: null,
+      search: "",
+      domains: [],
+      archive: "archived",
+    });
+  });
+
   it("never sends page parameters to the cursor-based Issues endpoint", () => {
     expect(buildListUrl("repo", "issues", { page: 4, limit: 100, cursor: "next" })).toBe(
       "/api/repositories/repo/issues?limit=100&cursor=next",

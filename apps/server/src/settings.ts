@@ -44,6 +44,7 @@ import {
   type KnowledgeCheckpointSettingsUpdate,
   type RepositorySettings,
   type RepositorySettingsUpdate,
+  type RepositoryRetentionSettings,
   type RepositoryWorktreeSettings,
 } from "@loongboard/contracts";
 import {
@@ -170,6 +171,14 @@ interface SettingsDocument {
 const DEFAULT_RETENTION_MINUTES = 120;
 const DEFAULT_SYNC_FREQUENCY_MINUTES = 60;
 const DEFAULT_SYNC_LOOKBACK_DAYS = 30;
+const DEFAULT_REPOSITORY_RETENTION: RepositoryRetentionSettings = {
+  automaticArchiveEnabled: false,
+  archiveAfterDays: 7,
+  includeMergedPrs: true,
+  includeClosedPrs: true,
+  includeClosedIssues: true,
+  prunePayloadWhenArchived: true,
+};
 const DEFAULT_CHECKPOINT: KnowledgeCheckpointSettings = {
   autoCommit: false,
   autoPush: false,
@@ -258,6 +267,7 @@ export class SettingsController {
       nextSyncAt: readNullableString(stored.nextSyncAt),
       lastSyncAt: latestTimestamp(sync.pullRequests.lastSuccessAt, sync.issues.lastSuccessAt),
       lastError: latestError(sync.pullRequests, sync.issues),
+      retention: this.readRetentionSettings(stored.retention),
       worktrees: worktree,
     };
     const authoritative = await this.repositorySchedules?.get?.(repositoryId);
@@ -288,6 +298,7 @@ export class SettingsController {
       nextSyncAt: readNullableString(stored.nextSyncAt),
       lastSyncAt: latestTimestamp(sync.pullRequests.lastSuccessAt, sync.issues.lastSuccessAt),
       lastError: latestError(sync.pullRequests, sync.issues),
+      retention: this.readRetentionSettings(stored.retention),
       worktrees: worktree,
     });
   }
@@ -303,10 +314,14 @@ export class SettingsController {
       ...(validated.automaticSync === undefined ? {} : { automaticSync: validated.automaticSync }),
       ...(validated.syncFrequencyMinutes === undefined ? {} : { syncFrequencyMinutes: validated.syncFrequencyMinutes }),
       ...(validated.syncLookbackDays === undefined ? {} : { syncLookbackDays: validated.syncLookbackDays }),
+      ...(validated.retention === undefined
+        ? {}
+        : { retention: { ...current.retention, ...validated.retention } }),
     });
     const next = repositorySettingsSchema.parse({
       ...current,
       ...validated,
+      retention: { ...current.retention, ...(validated.retention ?? {}) },
       worktrees: { ...current.worktrees, ...(validated.worktrees ?? {}) },
       ...(authoritative ?? {}),
       repositoryId,
@@ -318,6 +333,7 @@ export class SettingsController {
         automaticSync: next.automaticSync,
         syncFrequencyMinutes: next.syncFrequencyMinutes,
         syncLookbackDays: next.syncLookbackDays,
+        retention: next.retention,
         worktrees: {
           configuredSlots: next.worktrees.configuredSlots,
           idleCleanupTtlHours: next.worktrees.idleCleanupTtlHours,
@@ -788,6 +804,38 @@ export class SettingsController {
       idle: 0,
       dirty: 0,
       pendingRetirement: 0,
+    };
+  }
+
+  private readRetentionSettings(value: unknown): RepositoryRetentionSettings {
+    const stored = readRecord(value);
+    return {
+      automaticArchiveEnabled: readBoolean(
+        stored.automaticArchiveEnabled,
+        DEFAULT_REPOSITORY_RETENTION.automaticArchiveEnabled,
+      ),
+      archiveAfterDays: readBoundedInteger(
+        stored.archiveAfterDays,
+        DEFAULT_REPOSITORY_RETENTION.archiveAfterDays,
+        1,
+        3650,
+      ),
+      includeMergedPrs: readBoolean(
+        stored.includeMergedPrs,
+        DEFAULT_REPOSITORY_RETENTION.includeMergedPrs,
+      ),
+      includeClosedPrs: readBoolean(
+        stored.includeClosedPrs,
+        DEFAULT_REPOSITORY_RETENTION.includeClosedPrs,
+      ),
+      includeClosedIssues: readBoolean(
+        stored.includeClosedIssues,
+        DEFAULT_REPOSITORY_RETENTION.includeClosedIssues,
+      ),
+      prunePayloadWhenArchived: readBoolean(
+        stored.prunePayloadWhenArchived,
+        DEFAULT_REPOSITORY_RETENTION.prunePayloadWhenArchived,
+      ),
     };
   }
 

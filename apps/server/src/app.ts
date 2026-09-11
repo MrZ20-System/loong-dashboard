@@ -88,6 +88,10 @@ import {
   registerSettingsRoutes,
   type SettingsController,
 } from "./settings.js";
+import {
+  registerMetadataMaintenanceRoutes,
+} from "./metadata-maintenance-routes.js";
+import type { MetadataMaintenanceService } from "./metadata-maintenance.js";
 import { registerProductionStaticSite } from "./static-site.js";
 import {
   AuthInvalidPasswordError,
@@ -136,6 +140,8 @@ export interface BuildAppDependencies {
   settings?: SettingsController;
   /** Optional local password lock; absent keeps embedded/test apps unlocked. */
   auth?: AuthService;
+  /** Bounded repository metadata archive worker. */
+  metadataMaintenance?: MetadataMaintenanceService;
 }
 
 /**
@@ -194,6 +200,11 @@ export function buildApp(
       : { domainFiles: dependencies.domainFiles }),
   });
   registerDiffRoutes(app, { database, gitWorkspace });
+  if (dependencies.metadataMaintenance !== undefined) {
+    registerMetadataMaintenanceRoutes(app, {
+      service: dependencies.metadataMaintenance,
+    });
+  }
   if (dependencies.agentChat !== undefined) {
     registerAgentRoutes(app, dependencies.agentChat);
   }
@@ -420,6 +431,7 @@ function registerStageOneRoutes(
       page: query.page,
       limit: query.limit,
       domainIds: query.domain,
+      archive: query.archive ?? "current",
     });
     return sendParsed(reply, 200, pullRequestsResponseSchema, page);
   });
@@ -465,6 +477,7 @@ function registerStageOneRoutes(
       search: query.search,
       limit: query.limit,
       cursor: query.cursor,
+      archive: query.archive ?? "current",
     });
     return sendParsed(reply, 200, issuesResponseSchema, page);
   });
@@ -620,7 +633,8 @@ function errorResponse(error: unknown): {
             code === "KNOWLEDGE_VERSION_NOT_FOUND" ||
             code === "SCHEDULED_TASK_NOT_FOUND" ||
             code === "AGENT_SESSION_NOT_FOUND" ||
-            code === "SYNC_RUN_NOT_FOUND"
+            code === "SYNC_RUN_NOT_FOUND" ||
+            code === "MAINTENANCE_RUN_NOT_FOUND"
           ? 404
             : code === "AUTH_REQUIRED" || code === "AUTH_INVALID_PASSWORD"
               ? 401
@@ -689,6 +703,9 @@ function errorCode(error: unknown): ApiErrorCode {
   }
   if (error instanceof SyncRunNotFoundError || hasCode(error, "SYNC_RUN_NOT_FOUND")) {
     return "SYNC_RUN_NOT_FOUND";
+  }
+  if (hasCode(error, "MAINTENANCE_RUN_NOT_FOUND")) {
+    return "MAINTENANCE_RUN_NOT_FOUND";
   }
   return "INTERNAL_ERROR";
 }

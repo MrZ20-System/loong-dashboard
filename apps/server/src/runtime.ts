@@ -13,6 +13,7 @@ import {
   recoverInterruptedSyncStates,
   updateScheduledTask,
   type DatabaseClient,
+  type RepositoryRecord,
   type ScheduledTaskRow,
 } from "@loongboard/database";
 import {
@@ -59,10 +60,12 @@ import { pushBackupRef, runCheckpoint } from "@loongboard/git-workspace";
 import type { CodeBackupSettings } from "@loongboard/contracts";
 import type { AgentArchiveSettings } from "@loongboard/contracts";
 import type { RepositoryWorktreeSettings } from "@loongboard/contracts";
+import type { RepositoryRetentionSettings } from "@loongboard/contracts";
 import { AgentArchiveExporter } from "./agent-archive.js";
 import { GitRepositoryLock } from "./git-repository-lock.js";
 import { WorktreeMaintenanceService } from "./worktree-maintenance.js";
 import { AuthService } from "./auth.js";
+import { MetadataMaintenanceService } from "./metadata-maintenance.js";
 
 export interface CreateServerRuntimeOptions {
   /** Use a prevalidated config in tests or an embedding process. */
@@ -94,6 +97,7 @@ export interface ServerRuntime {
   readonly domainFiles: DomainFileService;
   readonly settings: SettingsController;
   readonly auth: AuthService;
+  readonly metadataMaintenance: MetadataMaintenanceService;
 }
 
 /** Resolve the one SQLite path owned by the Server runtime. */
@@ -167,6 +171,15 @@ export function createServerRuntime(
       lookbackDaysForRepository: (repositoryId) =>
         settingsController?.repositorySettingsSync(repositoryId).syncLookbackDays ?? 30,
     });
+    const metadataMaintenance = new MetadataMaintenanceService({
+      database,
+      calendarTimeZone: config.timezone,
+      now: options.now,
+      isSyncActive: (repositoryId) => coordinator.isRepositorySyncActive(repositoryId),
+      setRepositoryMaintenanceActive: (repositoryId, active) =>
+        coordinator.setRepositoryMaintenanceActive(repositoryId, active),
+      logger: options.coordinatorLogger,
+    });
     const reclassification = new DomainReclassificationService({ database });
     const workspaceRuns = new WorkspaceRunCoordinator();
     const worktreePolicyResolver = (repositoryId: string, fallbackSlots: number) => {
@@ -220,6 +233,8 @@ export function createServerRuntime(
       `system_repository_worktrees_cleanup_${encodeURIComponent(repositoryId)}`;
     const repositoryTaskId = (repositoryId: string) =>
       `system_repository_sync_${encodeURIComponent(repositoryId)}`;
+    const metadataMaintenanceTaskId = (repositoryId: string) =>
+      `system_repository_metadata_maintenance_${encodeURIComponent(repositoryId)}`;
     let checkpointState = {
       autoCommit: config.knowledge.checkpoint?.autoCommit ?? false,
       autoPush: config.knowledge.checkpoint?.autoPush ?? false,
@@ -295,6 +310,26 @@ export function createServerRuntime(
             mainRepositoryPath: repository.localPath,
             fallbackSlots: repository.worktreeSlots,
           });
+          return;
+        }
+        if (task.action === "repository.metadata-maintenance") {
+          if (task.repositoryId === null) {
+            throw new Error("Metadata maintenance task is missing repositoryId");
+          }
+          const repositorySettings = settingsController?.repositorySettingsSync(task.repositoryId);
+          if (repositorySettings === undefined) {
+            throw new Error(`Repository settings are unavailable: ${task.repositoryId}`);
+          }
+          const completed = await metadataMaintenance.runAndWait(
+            task.repositoryId,
+            metadataMaintenance.automaticRequest(repositorySettings.retention),
+            "automatic",
+          );
+          if (completed.status !== "completed") {
+            throw new Error(
+              completed.error ?? `Metadata maintenance ${completed.status} for ${task.repositoryId}`,
+            );
+          }
           return;
         }
         if (task.action === "knowledge.checkpoint") {
@@ -435,6 +470,23 @@ export function createServerRuntime(
             ? 60
             : intervalFromCron(existing.cronExpression) ?? 60);
         if (!automaticSync && existing === null) {
+          if (patch.retention !== undefined) {
+            ensureMetadataMaintenanceTask({
+              database,
+              scheduler,
+              taskId: metadataMaintenanceTaskId(repositoryId),
+              repository,
+              retention: {
+                automaticArchiveEnabled: patch.retention.automaticArchiveEnabled ?? false,
+                archiveAfterDays: patch.retention.archiveAfterDays ?? 7,
+                includeMergedPrs: patch.retention.includeMergedPrs ?? true,
+                includeClosedPrs: patch.retention.includeClosedPrs ?? true,
+                includeClosedIssues: patch.retention.includeClosedIssues ?? true,
+                prunePayloadWhenArchived: patch.retention.prunePayloadWhenArchived ?? true,
+              },
+              config,
+            });
+          }
           return {
             automaticSync: false,
             syncFrequencyMinutes,
@@ -466,6 +518,23 @@ export function createServerRuntime(
                 enabled: automaticSync,
               });
         scheduler.refresh(task.id);
+        if (patch.retention !== undefined) {
+          ensureMetadataMaintenanceTask({
+            database,
+            scheduler,
+            taskId: metadataMaintenanceTaskId(repositoryId),
+            repository,
+            retention: {
+              automaticArchiveEnabled: patch.retention.automaticArchiveEnabled ?? false,
+              archiveAfterDays: patch.retention.archiveAfterDays ?? 7,
+              includeMergedPrs: patch.retention.includeMergedPrs ?? true,
+              includeClosedPrs: patch.retention.includeClosedPrs ?? true,
+              includeClosedIssues: patch.retention.includeClosedIssues ?? true,
+              prunePayloadWhenArchived: patch.retention.prunePayloadWhenArchived ?? true,
+            },
+            config,
+          });
+        }
         const current = getScheduledTask(database, task.id)!;
         return {
           automaticSync: current.enabled,
@@ -777,6 +846,18 @@ export function createServerRuntime(
     knowledge.updateCheckpoint(checkpointState);
     for (const repository of config.repositories) {
       const repositorySettings = settings.repositorySettingsSync(repository.key);
+      ensureMetadataMaintenanceTask({
+        database,
+        scheduler,
+        taskId: metadataMaintenanceTaskId(repository.key),
+        repository,
+        retention: repositorySettings.retention,
+        config,
+      });
+    }
+    metadataMaintenance.recoverInterruptedRuns();
+    for (const repository of config.repositories) {
+      const repositorySettings = settings.repositorySettingsSync(repository.key);
       if (repositorySettings.automaticSync && getScheduledTask(database, repositoryTaskId(repository.key)) === null) {
         repositorySchedules.update?.(repository.key, repositorySettings);
       }
@@ -814,6 +895,7 @@ export function createServerRuntime(
         domainFiles,
         settings,
         auth,
+        metadataMaintenance,
       },
       options.appOptions,
     );
@@ -821,6 +903,7 @@ export function createServerRuntime(
     let closePromise: Promise<void> | undefined;
     app.addHook("onClose", async () => {
       closePromise ??= (async () => {
+        await metadataMaintenance.close();
         const schedulerClose = scheduler.close();
         await agentChat.close();
         await schedulerClose;
@@ -846,6 +929,7 @@ export function createServerRuntime(
       domainFiles,
       settings,
       auth,
+      metadataMaintenance,
     };
   } catch (error) {
     database.close();
@@ -880,6 +964,66 @@ function repositoryScheduleFromTask(
     syncFrequencyMinutes: intervalFromCron(task.cronExpression) ?? 60,
     nextSyncAt: task.nextRunAt,
   };
+}
+
+function metadataMaintenanceTaskId(repositoryId: string): string {
+  return `system_repository_metadata_maintenance_${encodeURIComponent(repositoryId)}`;
+}
+
+function ensureMetadataMaintenanceTask(input: {
+  database: DatabaseClient;
+  scheduler: SchedulerEngine;
+  taskId: string;
+  repository: SystemConfig["repositories"][number] | RepositoryRecord;
+  retention: RepositoryRetentionSettings;
+  config: SystemConfig;
+}): ScheduledTaskRow {
+  const repositoryKey = input.repository.key;
+  const repositoryName = "displayName" in input.repository
+    ? input.repository.displayName
+    : input.repository.name;
+  const repositoryPath = "localPath" in input.repository
+    ? input.repository.localPath
+    : input.repository.path;
+  const existing = getScheduledTask(input.database, input.taskId);
+  if (
+    existing !== null &&
+    (existing.kind !== "system" || existing.action !== "repository.metadata-maintenance")
+  ) {
+    throw new Error(`System task id is already used: ${input.taskId}`);
+  }
+  const task = existing === null
+    ? createScheduledTask(input.database, {
+        id: input.taskId,
+        name: `Archive metadata ${repositoryName}`,
+        cronExpression: "0 3 * * *",
+        timezone: input.config.timezone,
+        prompt: `Archive terminal metadata for repository ${repositoryKey}.`,
+        workspacePath: repositoryPath,
+        provider: input.config.agent.defaultProvider,
+        model: input.config.agent.defaultModel,
+        reasoningEffort: input.config.agent.defaultReasoningEffort,
+        kind: "system",
+        action: "repository.metadata-maintenance",
+        repositoryId: repositoryKey,
+        enabled: input.retention.automaticArchiveEnabled,
+      })
+    : updateScheduledTask(input.database, existing.id, {
+        name: existing.name,
+        cronExpression: "0 3 * * *",
+        timezone: input.config.timezone,
+        prompt: existing.prompt,
+        workspacePath: repositoryPath,
+        provider: existing.provider,
+        model: existing.model,
+        reasoningEffort: existing.reasoningEffort,
+        kind: "system",
+        action: "repository.metadata-maintenance",
+        repositoryId: repositoryKey,
+        enabled: input.retention.automaticArchiveEnabled,
+      });
+  input.scheduler.refresh(task.id);
+  return getScheduledTask(input.database, task.id) ?? task;
 }
 
 function updateSystemTask(

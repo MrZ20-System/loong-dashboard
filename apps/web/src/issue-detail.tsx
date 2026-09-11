@@ -1,8 +1,9 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { AgentChatPanel } from "./agent-chat";
 import { fetchIssueDetail } from "./issue-client";
 import { MarkdownView } from "./markdown";
+import { restoreIssueMetadata } from "./retention-client";
 
 /**
  * Issue detail page (plan 1.3, 14, 18.3, 7.9): cached markdown body and
@@ -14,6 +15,7 @@ export function IssueDetailPage() {
   const { repositoryId = "", number: rawNumber = "" } = useParams();
   const number = Number(rawNumber);
   const enabled = repositoryId.length > 0 && Number.isInteger(number) && number > 0;
+  const queryClient = useQueryClient();
 
   const detail = useQuery({
     queryKey: ["issue", repositoryId, number],
@@ -21,6 +23,13 @@ export function IssueDetailPage() {
     queryFn: ({ signal }) => {
       void signal;
       return fetchIssueDetail(repositoryId, number);
+    },
+  });
+  const restore = useMutation({
+    mutationFn: () => restoreIssueMetadata(repositoryId, number),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["issue", repositoryId, number] });
+      void queryClient.invalidateQueries({ queryKey: ["metadata", repositoryId, "issues"] });
     },
   });
 
@@ -70,6 +79,21 @@ export function IssueDetailPage() {
           <Link to={`/repositories/${encodeURIComponent(repositoryId)}/issues`}>Back to list</Link>
         </div>
       </div>
+      {issue.archivedAt && (
+        <aside className="metadata-archive-banner" role="status">
+          <strong>Archived</strong>
+          <span>Payload may have been cleaned.</span>
+          <button type="button" onClick={() => restore.mutate()} disabled={restore.isPending}>
+            {restore.isPending ? "Restoring…" : "Restore"}
+          </button>
+          {issue.payloadPrunedAt && (
+            <button type="button" onClick={() => void detail.refetch()} disabled={detail.isFetching}>
+              {detail.isFetching ? "Refreshing…" : "Refresh from GitHub"}
+            </button>
+          )}
+          {restore.isError && <span role="alert">Unable to restore: {restore.error.message}</span>}
+        </aside>
+      )}
       <div className="issue-layout">
         <div>
           <div className="issue-body">

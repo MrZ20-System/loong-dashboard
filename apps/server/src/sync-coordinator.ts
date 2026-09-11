@@ -109,6 +109,10 @@ export interface SyncCoordinator {
   resumeHistory?(repositoryId: string, options?: HistoryStartOptions): SyncRun;
   /** Re-admit enabled history whose last process died mid-cursor. */
   resumeEnabledHistories?(): void;
+  /** True when this repository has queued or admitted sync work. */
+  isRepositorySyncActive?(repositoryId: string): boolean;
+  /** External metadata maintenance shares the repository admission pump. */
+  setRepositoryMaintenanceActive?(repositoryId: string, active: boolean): void;
   waitForRun?(runId: string): Promise<SyncRunRecord>;
   waitForIdle(): Promise<void>;
   close(): Promise<void>;
@@ -252,6 +256,7 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
   private readonly foregroundQueues = new Map<string, ForegroundJob[]>();
   /** At most one continuation may wait behind the foreground FIFO. */
   private readonly pendingHistoryJobs = new Map<string, HistoryJob>();
+  private readonly activeMetadataMaintenance = new Set<string>();
   private readonly historyContinuationTimers = new Map<string, {
     timer: ReturnType<typeof setTimeout>;
     cancel: () => void;
@@ -295,6 +300,24 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
 
   get maxConcurrentRepositories(): number {
     return this.limiter.maximumCount;
+  }
+
+  isRepositorySyncActive(repositoryId: string): boolean {
+    this.requireRepository(repositoryId);
+    const status = getRepositorySyncStatus(this.database, repositoryId);
+    return this.hasLocalWork(repositoryId) ||
+      status.pullRequests.status === "running" ||
+      status.issues.status === "running";
+  }
+
+  setRepositoryMaintenanceActive(repositoryId: string, active: boolean): void {
+    this.requireRepository(repositoryId);
+    if (active) {
+      this.activeMetadataMaintenance.add(repositoryId);
+    } else {
+      this.activeMetadataMaintenance.delete(repositoryId);
+      this.pumpRepository(repositoryId);
+    }
   }
 
   start(repositoryId: string, trigger: SyncRunTrigger = "manual"): SyncRun {
@@ -408,7 +431,10 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
       pullRequestNeedsWork,
       issueNeedsWork,
     };
-    if (continuation && this.hasLocalWork(repositoryId)) {
+    if (
+      continuation &&
+      (this.hasLocalWork(repositoryId) || this.activeMetadataMaintenance.has(repositoryId))
+    ) {
       this.pendingHistoryJobs.set(repositoryId, job);
     } else {
       this.schedule(job);
@@ -610,6 +636,7 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
   /** Admit the repository's next foreground job, then its history continuation. */
   private pumpRepository(repositoryId: string, timerFired = false): void {
     if (this.closed || this.scheduledJobs.has(repositoryId)) return;
+    if (this.activeMetadataMaintenance.has(repositoryId)) return;
 
     const foreground = this.foregroundQueues.get(repositoryId);
     if (foreground !== undefined && foreground.length > 0) {
@@ -1235,6 +1262,9 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
 
   private assertHistoryAvailable(repositoryId: string): void {
     if (this.hasLocalWork(repositoryId)) throw new SyncAlreadyRunningError(repositoryId);
+    if (this.activeMetadataMaintenance.has(repositoryId)) {
+      throw new SyncAlreadyRunningError(repositoryId);
+    }
     const status = getRepositorySyncStatus(this.database, repositoryId);
     if (status.pullRequests.status === "running" || status.issues.status === "running") {
       throw new SyncAlreadyRunningError(repositoryId);

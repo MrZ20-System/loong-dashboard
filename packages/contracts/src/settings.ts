@@ -2,6 +2,10 @@ import { z } from "zod";
 
 import { repositoryIdSchema, utcDateTimeSchema } from "./validation.js";
 import { agentRuntimeCapabilitiesSchema } from "./agent.js";
+import {
+  repositoryRetentionSettingsSchema,
+  repositoryRetentionSettingsUpdateSchema,
+} from "./retention.js";
 
 export const worktreeMaintenanceErrorSchema = z
   .object({
@@ -48,6 +52,14 @@ export const repositorySettingsSchema = z
     nextSyncAt: utcDateTimeSchema.nullable().optional(),
     lastSyncAt: utcDateTimeSchema.nullable().optional(),
     lastError: z.string().nullable().optional(),
+    retention: repositoryRetentionSettingsSchema.default({
+      automaticArchiveEnabled: false,
+      archiveAfterDays: 7,
+      includeMergedPrs: true,
+      includeClosedPrs: true,
+      includeClosedIssues: true,
+      prunePayloadWhenArchived: true,
+    }),
     worktrees: repositoryWorktreeSettingsSchema.default({
       configuredSlots: 1,
       idleCleanupTtlHours: 24,
@@ -66,6 +78,7 @@ export const repositorySettingsUpdateSchema = z
     syncFrequencyMinutes: z.number().int().positive().optional(),
     syncLookbackDays: z.union([z.literal(7), z.literal(30)]).optional(),
     worktrees: repositoryWorktreeSettingsUpdateSchema.optional(),
+    retention: repositoryRetentionSettingsUpdateSchema.optional(),
   })
   .strict()
   .refine((value) => Object.values(value).some((field) => field !== undefined), {
@@ -340,6 +353,8 @@ export type CodeBackupSettingsUpdate = z.infer<typeof codeBackupSettingsUpdateSc
 export type AgentArchiveSettings = z.infer<typeof agentArchiveSettingsSchema>;
 export type AgentArchiveSettingsUpdate = z.infer<typeof agentArchiveSettingsUpdateSchema>;
 export type RepositorySettings = z.infer<typeof repositorySettingsSchema>;
+export type RepositoryRetentionSettings = z.infer<typeof repositoryRetentionSettingsSchema>;
+export type RepositoryRetentionSettingsUpdate = z.infer<typeof repositoryRetentionSettingsUpdateSchema>;
 export type RepositoryWorktreeSettings = z.infer<typeof repositoryWorktreeSettingsSchema>;
 export type RepositoryWorktreeSettingsUpdate = z.infer<
   typeof repositoryWorktreeSettingsUpdateSchema

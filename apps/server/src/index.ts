@@ -17,6 +17,14 @@ export type {
 } from "./runtime.js";
 export { IssueDetailService } from "./issue-detail-service.js";
 export type { IssueDetailServiceOptions } from "./issue-detail-service.js";
+export {
+  MetadataMaintenanceClosedError,
+  MetadataMaintenanceService,
+} from "./metadata-maintenance.js";
+export type {
+  MetadataMaintenanceServiceOptions,
+  MetadataMaintenanceStartResult,
+} from "./metadata-maintenance.js";
 export { KnowledgeController } from "./knowledge.js";
 export type {
   KnowledgeCheckpointOptions,

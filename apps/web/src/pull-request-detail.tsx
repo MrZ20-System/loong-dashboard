@@ -41,6 +41,7 @@ import {
 } from "./diff-client";
 import { ApiRequestError } from "./metadata-client";
 import { fetchSinglePullRequest, fetchSyncRun } from "./sync-client";
+import { restorePullRequestMetadata } from "./retention-client";
 import {
   prefetchChangedFileContents,
   prFileQueryOptions,
@@ -394,6 +395,13 @@ export function PullRequestDetailPage() {
     mutationFn: () => fetchSinglePullRequest(repositoryId, number),
     onSuccess: (accepted) => setFetchRunId(accepted.syncRunId),
   });
+  const restore = useMutation({
+    mutationFn: () => restorePullRequestMetadata(repositoryId, number),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["pr", repositoryId, number] });
+      void queryClient.invalidateQueries({ queryKey: ["metadata", repositoryId, "pulls"] });
+    },
+  });
   const [mode, setMode] = useState<WorkbenchMode>("changes");
   const [changesViewMode, setChangesViewMode] =
     useState<ChangesViewMode>("split");
@@ -588,6 +596,22 @@ export function PullRequestDetailPage() {
           </Link>
         </div>
       </div>
+      {pr.archivedAt && (
+        <aside className="metadata-archive-banner" role="status">
+          <strong>Archived</strong>
+          <span>Payload may have been cleaned.</span>
+          <button type="button" onClick={() => restore.mutate()} disabled={restore.isPending}>
+            {restore.isPending ? "Restoring…" : "Restore"}
+          </button>
+          {pr.payloadPrunedAt && (
+            <button type="button" onClick={() => fetchPullRequest.mutate()} disabled={fetchPullRequest.isPending || fetchRunId !== null}>
+              {fetchPullRequest.isPending ? "Refreshing…" : "Refresh from GitHub"}
+            </button>
+          )}
+          {restore.isError && <span role="alert">Unable to restore: {restore.error.message}</span>}
+          {fetchPullRequest.isError && <span role="alert">Unable to refresh: {fetchPullRequest.error.message}</span>}
+        </aside>
+      )}
       {prepare.isPending && (
         <p role="status" className="pr-workbench-status">
           Preparing local Git objects…

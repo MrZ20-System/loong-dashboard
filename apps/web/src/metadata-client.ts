@@ -11,6 +11,7 @@ import {
   pullRequestsResponseSchema,
   mergedPullRequestsQuerySchema,
   mergedPullRequestsResponseSchema,
+  archiveFilterSchema,
   syncAcceptedResponseSchema,
   syncStatusResponseSchema,
   type IssuesResponse,
@@ -22,6 +23,7 @@ import {
   type RepositoriesResponse,
   type SyncAcceptedResponse,
   type SyncStatusResponse,
+  type ArchiveFilter,
 } from "@loongboard/contracts";
 
 export type { IssueListItem, PullRequestListItem, RepositorySummary } from "@loongboard/contracts";
@@ -38,6 +40,8 @@ export type MetadataFilters = {
   search: string;
   /** Repeated `?domain=` values; pull request lists only. */
   domains: string[];
+  /** Omitted means the default current projection. */
+  archive?: ArchiveFilter;
 };
 
 export class ApiRequestError extends Error {
@@ -84,6 +88,7 @@ export function readMetadataFilters(
   const toValue = params.get("to");
   const dateValue = params.get("date");
   const statusValue = params.get("status");
+  const archiveValue = params.get("archive");
   const searchValue = params.get("search") ?? "";
   const rawDomainValues = kind === "pulls" ? params.getAll("domain") : [];
   const querySchema = kind === "pulls" ? pullRequestsQuerySchema : issuesQuerySchema;
@@ -92,16 +97,18 @@ export function readMetadataFilters(
   if (toValue !== null) candidate.to = toValue;
   if (dateValue !== null) candidate.date = dateValue;
   if (statusValue !== null) candidate.status = statusValue;
+  if (archiveValue !== null) candidate.archive = archiveValue;
   if (rawDomainValues.length > 0) candidate.domain = rawDomainValues;
   const parsed = querySchema.safeParse(candidate);
   if (parsed.success) {
-    const data = parsed.data as { from?: string; to?: string; status?: string; domain?: string[] };
+    const data = parsed.data as { from?: string; to?: string; status?: string; domain?: string[]; archive?: ArchiveFilter };
     return {
       from: data.from ?? null,
       to: data.to ?? null,
       status: data.status ?? null,
       search: searchValue,
       domains: kind === "pulls" ? (data.domain ?? []) : [],
+      ...(data.archive === undefined || data.archive === "current" ? {} : { archive: data.archive }),
     };
   }
   const statusSchema = kind === "pulls" ? pullRequestStatusSchema : issueStatusSchema;
@@ -117,6 +124,9 @@ export function readMetadataFilters(
     domains: rawDomainValues
       .filter((value) => domainRuleIdSchema.safeParse(value).success)
       .slice(0, 20),
+    ...(archiveFilterSchema.safeParse(archiveValue).success && archiveValue !== "current"
+      ? { archive: archiveValue as ArchiveFilter }
+      : {}),
   };
 }
 
@@ -135,6 +145,7 @@ export function buildListUrl(
     page?: number | null;
     cursor?: string | null;
     domains?: string[] | null;
+    archive?: ArchiveFilter | null;
   },
 ): string {
   const query = new URLSearchParams();
@@ -143,6 +154,7 @@ export function buildListUrl(
   if (from) query.set("from", from);
   if (to) query.set("to", to);
   if (filters.status) query.set("status", filters.status);
+  if (filters.archive && filters.archive !== "current") query.set("archive", filters.archive);
   if (filters.search) query.set("search", filters.search);
   if (filters.sort) query.set("sort", filters.sort);
   if (filters.limit) query.set("limit", String(filters.limit));
@@ -223,6 +235,7 @@ export function fetchList(
     page?: number | null;
     cursor?: string | null;
     domains?: string[] | null;
+    archive?: ArchiveFilter | null;
   },
   signal?: AbortSignal,
   fetchImpl: typeof fetch = globalThis.fetch,

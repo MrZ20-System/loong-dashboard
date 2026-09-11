@@ -1049,6 +1049,27 @@ button:hover:not(:disabled) {
   font-variant-numeric: tabular-nums;
 }
 
+.metadata-archive-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted, var(--surface));
+  color: var(--text-secondary);
+}
+
+.metadata-archive-banner strong {
+  color: var(--text);
+}
+
+.metadata-archive-banner button {
+  min-height: 30px;
+}
+
 .metadata-pagination button {
   min-height: 30px;
   padding: 0 10px;
