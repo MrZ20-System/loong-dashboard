@@ -221,6 +221,8 @@ describe("Issue detail lazy cache route", () => {
           status: "open",
           commentsCount: 1,
           updatedAt: "2026-09-03T00:00:00.000Z",
+          archivedAt: null,
+          payloadPrunedAt: null,
         },
       ],
       nextCursor: null,
