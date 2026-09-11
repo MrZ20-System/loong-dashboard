@@ -86,10 +86,6 @@ export function MergedPage() {
       next.set("page", String(page));
       changed = true;
     }
-    if (next.has("cursor")) {
-      next.delete("cursor");
-      changed = true;
-    }
     if (changed) setSearchParams(next, { replace: true });
   }, [page, searchParams, setSearchParams]);
 
@@ -104,7 +100,6 @@ export function MergedPage() {
     const next = new URLSearchParams(searchParams);
     mutate(next);
     next.set("page", "1");
-    next.delete("cursor");
     setSearchParams(next);
   };
   const updateSearch = (value: string) => updateUrl((next) => { if (value.trim()) next.set("search", value); else next.delete("search"); });
@@ -130,7 +125,7 @@ export function MergedPage() {
       {query.isError && <p role="alert">Unable to load merged pull requests: {query.error instanceof Error ? query.error.message : "Unknown error"}</p>}
       {!query.isPending && !query.isError && items.length === 0 && <p role="status">No merged pull requests match these filters.</p>}
       {!query.isPending && !query.isError && items.length > 0 && <div className="merged-timeline" aria-label="Merged pull request timeline">{[...groups.entries()].map(([day, group]) => <section className="merged-day-group" key={day} aria-labelledby={`merged-day-${day}`}><header className="merged-day-group__header"><span className="merged-day-group__node" aria-hidden="true"><Codicon name="git-merge" /></span><h3 id={`merged-day-${day}`}>Merged on {formatMergedDay(day, timeZone)}</h3><span className="merged-day-group__count">{group.length} {group.length === 1 ? "pull request" : "pull requests"}</span></header><ul className="feed-list merged-day-group__list">{group.map((item) => <MergedRow item={item} timeZone={timeZone} key={`${item.repositoryId}-${item.number}`} />)}</ul></section>)}</div>}
-      {!query.isError && (items.length > 0 || totalCount > 0) && <Pagination page={page} pageSize={pageSize} totalCount={totalCount} totalPages={totalPages} onPageChange={(nextPage) => { const next = new URLSearchParams(searchParams); next.set("page", String(nextPage)); next.delete("cursor"); setSearchParams(next); }} disabled={query.isFetching} label="Merged pagination" />}
+      {!query.isError && (items.length > 0 || totalCount > 0) && <Pagination page={page} pageSize={pageSize} totalCount={totalCount} totalPages={totalPages} onPageChange={(nextPage) => { const next = new URLSearchParams(searchParams); next.set("page", String(nextPage)); setSearchParams(next); }} disabled={query.isFetching} label="Merged pagination" />}
       {query.isFetching && !query.isPending && <p role="status">Refreshing…</p>}
     </div>
   </section>;

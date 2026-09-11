@@ -100,22 +100,19 @@ export function MetadataPage({ kind }: { kind: "pulls" | "issues" }) {
       setOrDelete("status", status);
       setOrDelete("archive", desiredArchive);
       setOrDelete("search", search || null);
-      next.delete("domain");
-      for (const domain of domains) next.append("domain", domain);
-      next.set("page", "1");
-      next.delete("cursor");
+      if (kind === "pulls") {
+        next.delete("domain");
+        for (const domain of domains) next.append("domain", domain);
+      }
+      if (kind === "pulls") next.set("page", "1");
+      else next.delete("cursor");
       changed = true;
     }
-    if (kind === "issues") {
-      if (next.has("view")) { next.delete("view"); changed = true; }
-    } else {
+    if (kind === "pulls") {
       setOrDelete("view", rawView === null ? null : view);
     }
     if (kind === "pulls") {
       if (rawPage !== String(page)) { next.set("page", String(page)); changed = true; }
-      if (next.has("cursor")) { next.delete("cursor"); changed = true; }
-    } else if (next.has("page")) {
-      next.delete("page"); changed = true;
     }
     if (changed) setSearchParams(next, { replace: true });
   }, [archive, domains, filterKey, from, kind, page, rawArchive, rawDomains, rawFrom, rawPage, rawSearch, rawStatus, rawTo, rawView, search, searchParams, setSearchParams, status, to, view]);
@@ -163,8 +160,8 @@ export function MetadataPage({ kind }: { kind: "pulls" | "issues" }) {
   const updateUrl = (mutate: (next: URLSearchParams) => void) => {
     const next = new URLSearchParams(searchParams);
     mutate(next);
-    if (kind === "pulls") next.set("page", "1"); else next.delete("page");
-    next.delete("cursor");
+    if (kind === "pulls") next.set("page", "1");
+    else next.delete("cursor");
     if (kind === "issues") {
       setIssueCursors({ 1: null });
       setIssuePage(1);
@@ -188,7 +185,7 @@ export function MetadataPage({ kind }: { kind: "pulls" | "issues" }) {
       {list.isError && !list.isFetching && <p role="alert">Unable to load {kind}: {list.error instanceof Error ? list.error.message : "Unknown error"}</p>}
       {!isLoading && !list.isError && items.length === 0 && <p role="status">No {kind} match these filters.</p>}
       {!isLoading && !list.isError && items.length > 0 && <MetadataFeed kind={kind} items={items} calendarTimeZone={pageData?.calendarTimeZone} />}
-      {kind === "pulls" && !list.isError && (items.length > 0 || totalCount > 0) && <Pagination page={page} pageSize={pageSize} totalCount={totalCount} totalPages={totalPages} onPageChange={(nextPage) => { const next = new URLSearchParams(searchParams); next.set("page", String(nextPage)); next.delete("cursor"); setSearchParams(next); }} disabled={list.isFetching} label="Pull requests pagination" />}
+      {kind === "pulls" && !list.isError && (items.length > 0 || totalCount > 0) && <Pagination page={page} pageSize={pageSize} totalCount={totalCount} totalPages={totalPages} onPageChange={(nextPage) => { const next = new URLSearchParams(searchParams); next.set("page", String(nextPage)); setSearchParams(next); }} disabled={list.isFetching} label="Pull requests pagination" />}
       {kind === "issues" && !list.isError && (items.length > 0 || page > 1) && <nav className="metadata-pagination" aria-label="Issues pagination"><span className="metadata-pagination__summary">Page {page} · {items.length} items</span><button type="button" onClick={() => { const targetPage = page - 1; setIssuePage(targetPage); const next = new URLSearchParams(searchParams); if (targetPage <= 1) next.delete("cursor"); else if (issueCursors[targetPage]) next.set("cursor", issueCursors[targetPage]); else next.delete("cursor"); setSearchParams(next); }} disabled={list.isFetching || page <= 1}>Previous</button><button type="button" onClick={() => { if (!nextCursor) return; const targetPage = page + 1; setIssueCursors((current) => ({ ...current, [targetPage]: nextCursor })); setIssuePage(targetPage); const next = new URLSearchParams(searchParams); next.set("cursor", nextCursor); setSearchParams(next); }} disabled={list.isFetching || nextCursor === null}>Next</button></nav>}
       {list.isFetching && !isLoading && <p role="status">Refreshing…</p>}
     </div>

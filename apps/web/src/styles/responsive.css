@@ -1,0 +1,523 @@
+/* Cross-domain responsive and reduced-motion rules. */
+
+/* ---- Responsive ---- */
+
+@media (max-width: 1500px) {
+  .knowledge-layout {
+    grid-template-columns: 15rem minmax(0, 1fr);
+  }
+
+  .knowledge-layout > .agent-panel {
+    grid-column: 1 / -1;
+    max-height: 60vh;
+  }
+}
+
+@media (max-width: 1100px) {
+  .issue-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .issue-layout > .agent-panel {
+    max-height: 60vh;
+  }
+
+  .agent-messages {
+    max-height: 34vh;
+  }
+
+  .pr-resize-panel .agent-messages,
+  .global-agent-dock .agent-messages {
+    max-height: none;
+  }
+
+  .pr-detail--focus .pr-workbench__body > .pr-resize-panel .agent-panel {
+    height: 40vh;
+    max-height: 40vh;
+  }
+
+  .pr-resize-panel .agent-command-menu {
+    max-height: min(240px, calc(40vh - 88px));
+  }
+
+  .global-agent-dock .agent-command-menu {
+    max-height: min(280px, calc(100vh - 128px));
+  }
+}
+
+@media (max-width: 900px) {
+  .settings-control-grid, .settings-metrics, .settings-details, .settings-grid, .settings-history-summary { grid-template-columns: 1fr; }
+  .settings-switch-grid { grid-template-columns: 1fr; }
+  .agent-page-layout { grid-template-columns: 1fr; }
+  .agent-session-list { max-height: 42vh; overflow-y: auto; }
+  .agent-page-surface { min-height: 520px; }
+  .sidebar {
+    width: min(320px, 86vw);
+    transform: translateX(-100%);
+    box-shadow: 16px 0 50px rgba(35, 47, 62, 0.12);
+  }
+
+  .sidebar--open {
+    transform: translateX(0);
+  }
+
+  .sidebar__close {
+    display: inline-flex;
+    min-width: auto;
+    min-height: 28px;
+    padding: 2px 8px;
+    border: 0;
+    background: transparent;
+    color: var(--sidebar-muted);
+    font-size: 11px;
+  }
+
+  .main-canvas {
+    margin-left: 0;
+  }
+
+  .topbar {
+    min-height: 64px;
+    padding: 0 16px;
+  }
+
+  .topbar__menu {
+    display: inline-flex;
+    min-height: 36px;
+    align-items: center;
+    gap: 6px;
+    padding: 0 10px;
+    font-size: 12px;
+  }
+
+  .topbar__menu span[aria-hidden="true"] {
+    font-size: 16px;
+    line-height: 1;
+  }
+
+  .app-content {
+    padding: 18px 16px 48px;
+  }
+
+  .app-footer {
+    width: calc(100% - 32px);
+    padding-bottom: 26px;
+  }
+
+  .welcome-panel {
+    grid-template-columns: 1fr;
+    padding: 20px;
+  }
+
+  .welcome-panel h2 {
+    font-size: 24px;
+  }
+
+  .page-heading {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .metadata-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .settings-history-runs li { grid-template-columns: 1fr; }
+
+  .filters {
+    width: 100%;
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .filters label {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .filters input,
+  .filters select {
+    width: 100%;
+  }
+
+  .feed-row {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .metrics div {
+    padding: 10px 12px;
+  }
+
+  .domain-settings-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .domain-form {
+    position: static;
+  }
+
+  .scheduled-form {
+    grid-template-columns: 1fr;
+  }
+
+  .scheduled-form h3 {
+    grid-column: auto;
+  }
+
+  .scheduled-edit-form {
+    grid-template-columns: 1fr;
+  }
+
+  .scheduled-edit-form label:nth-last-of-type(1),
+  .scheduled-edit-form .scheduled-actions {
+    grid-column: auto;
+  }
+}
+
+@media (max-width: 1200px) and (min-width: 901px) {
+  .metadata-toolbar {
+    align-items: flex-end;
+  }
+
+  .metadata-filters .date-day-filter {
+    flex-basis: clamp(180px, 28vw, 286px);
+  }
+
+  .metadata-filters .search-filter {
+    flex-basis: clamp(180px, 22vw, 240px);
+  }
+
+  .metadata-filters .filter-dropdown {
+    flex-basis: clamp(120px, 14vw, 148px);
+  }
+
+  .domain-agent-layout { grid-template-columns: minmax(0, 1fr) minmax(220px, .8fr); }
+  .domain-agent-layout .agent-panel { grid-column: 1 / -1; }
+}
+
+@media (max-width: 600px) {
+  .app-content {
+    padding-right: 12px;
+    padding-left: 12px;
+  }
+
+  .metrics {
+    grid-template-columns: 1fr;
+  }
+
+  .feed-row__rail,
+  .feed-row__meta {
+    align-items: flex-start;
+  }
+
+  .feed-row__meta {
+    gap: 4px 8px;
+  }
+
+  .knowledge-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .domain-agent-layout { grid-template-columns: 1fr; }
+
+  .knowledge-tree {
+    position: static;
+    max-height: 40vh;
+  }
+
+  .knowledge-doc-header,
+  .scheduled-task header,
+  .page-heading {
+    flex-direction: column;
+  }
+
+  .knowledge-actions {
+    justify-content: flex-start;
+  }
+
+  .pr-heading-actions {
+    align-items: stretch;
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .copy-command,
+  .sync-control {
+    flex-wrap: wrap;
+  }
+
+  .theme-toggle__item {
+    padding: 0 8px;
+  }
+}
+
+@media (max-width: 700px) {
+  .activity-summary,
+  .repository-board__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .metadata-view-tabs {
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+
+  .metadata-pagination {
+    flex-wrap: wrap;
+  }
+
+  .metadata-pagination__summary {
+    width: 100%;
+    margin-right: 0;
+  }
+
+  .metadata-pagination__goto {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .metadata-pagination__goto input {
+    flex: 1 1 auto;
+    width: auto;
+  }
+
+  .metadata-pagination__pages {
+    max-width: 100%;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .merged-timeline {
+    padding-right: 10px;
+    padding-left: 14px;
+  }
+
+  .merged-day-group {
+    margin-left: 10px;
+  }
+
+  .merged-day-group__header {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .merged-day-group__count {
+    width: 100%;
+    margin-left: 35px;
+  }
+
+
+  .activity-page__heading {
+    align-items: stretch;
+  }
+
+  .repository-tabs {
+    width: 100%;
+  }
+
+  .date-day-filter__panel {
+    position: fixed;
+    top: 72px;
+    right: 12px;
+    left: 12px;
+    width: auto;
+    max-width: none;
+    max-height: calc(100dvh - 84px);
+  }
+
+  .filter-dropdown__menu {
+    position: fixed;
+    top: 72px;
+    right: 12px;
+    left: 12px;
+    width: auto;
+  }
+
+  .search-filter {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Keep the metadata routes usable at the narrowest supported viewport. */
+@media (max-width: 390px) {
+  html,
+  body,
+  #root {
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+
+  .topbar {
+    gap: 8px;
+    min-width: 0;
+    padding: 0 8px;
+  }
+
+  .topbar__menu {
+    width: 32px;
+    min-width: 32px;
+    justify-content: center;
+    padding: 0;
+    font-size: 0;
+  }
+
+  .topbar__menu span[aria-hidden="true"] {
+    font-size: 16px;
+  }
+
+  .topbar__context-mark {
+    width: 28px;
+    height: 28px;
+    font-size: 10px;
+  }
+
+  .topbar__context strong {
+    font-size: 12px;
+  }
+
+  .topbar-sync {
+    gap: 4px;
+  }
+
+  .topbar-sync .sync-status {
+    display: none;
+  }
+
+  .topbar-sync .sync-control button {
+    padding: 0 7px;
+    font-size: 10px;
+  }
+
+  .theme-toggle {
+    gap: 0;
+    padding: 2px;
+  }
+
+  .theme-toggle__item {
+    padding: 0 5px;
+    font-size: 10px;
+  }
+
+  .app-content {
+    min-width: 0;
+    padding-right: 8px;
+    padding-left: 8px;
+  }
+
+  .metadata-panel,
+  .metadata-toolbar,
+  .metadata-filters,
+  .merged-timeline,
+  .merged-day-group__list {
+    min-width: 0;
+  }
+
+  .metadata-toolbar {
+    padding: 10px;
+  }
+
+  .metadata-pagination {
+    gap: 6px;
+    padding: 10px;
+  }
+
+  .metadata-pagination__pages {
+    width: 100%;
+    max-width: 100%;
+    justify-content: flex-start;
+    overflow-x: auto;
+  }
+
+  .merged-timeline {
+    padding-right: 6px;
+    padding-left: 6px;
+  }
+
+  .merged-day-group {
+    margin-left: 5px;
+  }
+
+  .merged-day-group__header {
+    gap: 6px;
+    padding: 8px;
+  }
+
+  .merged-day-group__header h3 {
+    font-size: 12px;
+  }
+
+  .feed-row {
+    min-width: 0;
+    padding: 10px;
+  }
+
+  .feed-row__title {
+    overflow-wrap: anywhere;
+  }
+}
+
+/* Full-viewport PR workbench on narrow screens: keep the route but stack the
+   rails so the diff can still scroll instead of overflowing the viewport. */
+@media (max-width: 900px) {
+  .app-shell--pr-focus {
+    height: auto;
+    min-height: 100vh;
+    overflow-y: auto;
+  }
+
+  .app-shell--pr-focus .main-canvas {
+    height: auto;
+  }
+
+  .app-shell--pr-focus .app-content {
+    overflow: visible;
+  }
+
+  .pr-detail--focus .pr-heading {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+  }
+
+  .pr-detail--focus .pr-workbench {
+    overflow-y: auto;
+  }
+
+  .pr-detail--focus .pr-workbench-toolbar {
+    flex-wrap: nowrap;
+    align-items: center;
+  }
+
+  .pr-detail--focus .pr-workbench__body {
+    flex-direction: column;
+  }
+
+  .pr-detail--focus .pr-workbench__body > .pr-resize-panel {
+    width: 100% !important;
+    height: auto;
+    max-height: 40vh;
+  }
+
+  .pr-detail--focus .pr-workbench__body > .pr-diff-main {
+    max-height: 62vh;
+    min-height: 52vh;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

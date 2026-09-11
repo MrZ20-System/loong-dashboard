@@ -198,7 +198,7 @@ describe("LoongBoard metadata routes", () => {
 
   it("renders a PR route without duplicated repository sibling navigation", async () => {
     mockApi();
-    renderApp("/repositories/repo/pulls?from=2026-09-03&to=2026-09-03&status=merged&cursor=stale");
+    renderApp("/repositories/repo/pulls?from=2026-09-03&to=2026-09-03&status=merged");
     expect(await screen.findByRole("heading", { name: "Pull requests" })).toBeInTheDocument();
     expect(mainContent().queryByRole("navigation", { name: "Repository metadata navigation" })).not.toBeInTheDocument();
     expect(mainContent().queryByRole("link", { name: "Issues" })).not.toBeInTheDocument();
@@ -318,13 +318,13 @@ describe("LoongBoard metadata routes", () => {
     await waitFor(() => expect(screen.queryByText("Add GLM flash support")).not.toBeInTheDocument());
   });
 
-  it("sanitizes invalid URL filters and resets cursor", async () => {
+  it("canonicalizes invalid formal URL filters", async () => {
     const fetchMock = mockApi();
-    renderApp("/repositories/repo/pulls?date=2026-02-29&status=nope&cursor=stale");
+    renderApp("/repositories/repo/pulls?from=2026-02-29&status=nope&page=8");
     await screen.findByRole("heading", { name: "Pull requests" });
     await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => {
       const url = new URL(String(input), "http://localhost");
-      return url.pathname === "/api/repositories/repo/pulls" && !url.searchParams.has("date") && !url.searchParams.has("status") && !url.searchParams.has("cursor");
+      return url.pathname === "/api/repositories/repo/pulls" && !url.searchParams.has("from") && !url.searchParams.has("status") && url.searchParams.get("page") === "1";
     })).toBe(true));
   });
 

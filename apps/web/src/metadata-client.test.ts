@@ -37,8 +37,11 @@ describe("metadata client", () => {
     });
   });
 
-  it("never sends page parameters to the cursor-based Issues endpoint", () => {
-    expect(buildListUrl("repo", "issues", { page: 4, limit: 100, cursor: "next" })).toBe(
+  it("scopes list controls to the matching pagination model", () => {
+    expect(buildListUrl("repo", "pulls", { cursor: "next", sort: "number" })).toBe(
+      "/api/repositories/repo/pulls?sort=number",
+    );
+    expect(buildListUrl("repo", "issues", { page: 4, sort: "number", limit: 100, cursor: "next" })).toBe(
       "/api/repositories/repo/issues?limit=100&cursor=next",
     );
   });
@@ -49,17 +52,16 @@ describe("metadata client", () => {
     expect(isValidDate("2026-9-3")).toBe(false);
   });
 
-  it("uses the shared query/status schemas while ignoring invalid URL filters", () => {
-    const params = new URLSearchParams("date=2026-02-29&status=unknown");
+  it("uses the shared query/status schemas while ignoring invalid formal filters", () => {
+    const params = new URLSearchParams("status=unknown");
     expect(readMetadataFilters("pulls", params)).toEqual({ from: null, to: null, status: null, search: "", domains: [] });
-    expect(readMetadataFilters("issues", new URLSearchParams("date=2026-09-03&status=closed"))).toEqual({ from: null, to: null, status: "closed", search: "", domains: [] });
+    expect(readMetadataFilters("issues", new URLSearchParams("from=2026-09-03&status=closed"))).toEqual({ from: "2026-09-03", to: null, status: "closed", search: "", domains: [] });
     const domainParams = new URLSearchParams("from=2026-09-03&to=2026-09-10&domain=dom_a&domain=dom_b&domain=");
     expect(readMetadataFilters("pulls", domainParams)).toEqual({ from: "2026-09-03", to: "2026-09-10", status: null, search: "", domains: ["dom_a", "dom_b"] });
     expect(buildListUrl("repo", "pulls", { domains: ["dom_a", "dom_b"] })).toBe("/api/repositories/repo/pulls?domain=dom_a&domain=dom_b");
   });
 
-  it("ignores legacy date URLs and rejects reversed ranges", () => {
-    expect(readDateRange(new URLSearchParams("date=2026-09-03"), { from: "2026-09-01", to: "2026-09-30" })).toEqual({ from: "2026-09-01", to: "2026-09-30" });
+  it("rejects reversed formal date ranges", () => {
     expect(readDateRange(new URLSearchParams("from=2026-09-10&to=2026-09-03"), { from: "2026-09-01", to: "2026-09-30" })).toEqual({ from: "2026-09-01", to: "2026-09-30" });
   });
 

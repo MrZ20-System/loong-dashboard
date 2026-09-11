@@ -108,7 +108,7 @@ describe("MetadataPage pull request views", () => {
       const cursor = url.searchParams.get("cursor");
       return new Response(JSON.stringify({ items: [cursor ? { ...issue, number: 8, title: "Issue 8" } : issue], nextCursor: cursor ? null : "issue-page-2", calendarTimeZone: "Asia/Shanghai" }));
     }));
-    renderPage("/repositories/repo/issues?page=8", "issues");
+    renderPage("/repositories/repo/issues", "issues");
     expect(await screen.findByText("Issue 7")).toBeInTheDocument();
     await waitFor(() => expect(screen.getByTestId("location-search")).toHaveTextContent("") );
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
@@ -117,24 +117,6 @@ describe("MetadataPage pull request views", () => {
     const issueCalls = calls.filter((url) => url.pathname.endsWith("/issues"));
     expect(issueCalls[0].searchParams.has("page")).toBe(false);
     expect(issueCalls[1].searchParams.get("cursor")).toBe("issue-page-2");
-  });
-
-  it("removes stale cursors when canonicalizing and changing PR pages", async () => {
-    vi.stubGlobal("fetch", vi.fn(async (input: RequestInfo | URL) => {
-      const url = new URL(String(input), "http://localhost");
-      if (url.pathname === "/api/repositories") return new Response(JSON.stringify({ items: [repository] }));
-      if (url.pathname.endsWith("/domains")) return new Response(JSON.stringify({ items: [], reclassification: { running: false, pendingCount: null } }));
-      const page = Number(url.searchParams.get("page") ?? "1");
-      return new Response(JSON.stringify({ items: [pull(page, "2026-09-09T01:00:00.000Z")], page, pageSize: 100, totalCount: 101, totalPages: 2, calendarTimeZone: "Asia/Shanghai" }));
-    }));
-    renderPage("/repositories/repo/pulls?page=1&cursor=stale");
-    expect(await screen.findByText("Pull 1")).toBeInTheDocument();
-    await waitFor(() => expect(screen.getByTestId("location-search")).toHaveTextContent("page=1"));
-    expect(screen.getByTestId("location-search")).not.toHaveTextContent("cursor");
-    fireEvent.click(screen.getByRole("button", { name: "Go to page 2" }));
-    await screen.findByText("Pull 2");
-    expect(screen.getByTestId("location-search")).toHaveTextContent("page=2");
-    expect(screen.getByTestId("location-search")).not.toHaveTextContent("cursor");
   });
 
   it("canonicalizes a PR page beyond totalPages to the last legal page", async () => {

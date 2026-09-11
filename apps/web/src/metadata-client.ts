@@ -61,7 +61,7 @@ export function isValidDate(value: string | null): value is string {
   return calendarDateSchema.safeParse(value).success;
 }
 
-/** Read a complete range, with a fallback for malformed URLs. */
+/** Read a complete range, falling back when no valid range is provided. */
 export function readDateRange(
   params: URLSearchParams,
   fallback: DateRange,
@@ -93,20 +93,22 @@ export function readMetadataFilters(
   if (toValue !== null) candidate.to = toValue;
   if (statusValue !== null) candidate.status = statusValue;
   if (archiveValue !== null) candidate.archive = archiveValue;
+  if (searchValue !== "") candidate.search = searchValue;
   if (rawDomainValues.length > 0) candidate.domain = rawDomainValues;
   const parsed = querySchema.safeParse(candidate);
   if (parsed.success) {
-    const data = parsed.data as { from?: string; to?: string; status?: string; domain?: string[]; archive?: ArchiveFilter };
+    const data = parsed.data as { from?: string; to?: string; status?: string; search?: string; domain?: string[]; archive?: ArchiveFilter };
     return {
       from: data.from ?? null,
       to: data.to ?? null,
       status: data.status ?? null,
-      search: searchValue,
+      search: data.search ?? "",
       domains: kind === "pulls" ? (data.domain ?? []) : [],
       ...(data.archive === undefined || data.archive === "current" ? {} : { archive: data.archive }),
     };
   }
   const statusSchema = kind === "pulls" ? pullRequestStatusSchema : issueStatusSchema;
+  const parsedSearch = querySchema.safeParse({ search: searchValue });
   const from = fromValue !== null && isValidDate(fromValue) ? fromValue : null;
   const to = toValue !== null && isValidDate(toValue) ? toValue : null;
   const validOrder = from === null || to === null || from <= to;
@@ -114,7 +116,7 @@ export function readMetadataFilters(
     from: validOrder ? from : null,
     to: validOrder ? to : null,
     status: statusSchema.safeParse(statusValue).success ? statusValue : null,
-    search: searchValue,
+    search: parsedSearch.success ? ((parsedSearch.data as { search?: string }).search ?? "") : "",
     domains: rawDomainValues
       .filter((value) => domainRuleIdSchema.safeParse(value).success)
       .slice(0, 20),
@@ -148,11 +150,11 @@ export function buildListUrl(
   if (filters.status) query.set("status", filters.status);
   if (filters.archive && filters.archive !== "current") query.set("archive", filters.archive);
   if (filters.search) query.set("search", filters.search);
-  if (filters.sort) query.set("sort", filters.sort);
+  if (kind === "pulls" && filters.sort) query.set("sort", filters.sort);
   if (filters.limit) query.set("limit", String(filters.limit));
   if (kind === "pulls" && filters.page) query.set("page", String(filters.page));
   for (const domain of filters.domains ?? []) query.append("domain", domain);
-  if (filters.cursor) query.set("cursor", filters.cursor);
+  if (kind === "issues" && filters.cursor) query.set("cursor", filters.cursor);
   const search = query.toString();
   return `/api/repositories/${encodeURIComponent(repositoryId)}/${kind}${search ? `?${search}` : ""}`;
 }

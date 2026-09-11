@@ -28,7 +28,7 @@ describe("MergedPage", () => {
       return new Response(JSON.stringify({ items: [], page: 1, pageSize: 100, totalCount: 0, totalPages: 1, calendarTimeZone: "Asia/Shanghai" }));
     }));
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-    render(<MemoryRouter initialEntries={["/repositories/repo/merged?page=1&cursor=stale"]}><QueryClientProvider client={client}><Routes><Route path="/repositories/:repositoryId/merged" element={<MergedPage />} /></Routes><LocationProbe /></QueryClientProvider></MemoryRouter>);
+    render(<MemoryRouter initialEntries={["/repositories/repo/merged?page=1"]}><QueryClientProvider client={client}><Routes><Route path="/repositories/:repositoryId/merged" element={<MergedPage />} /></Routes><LocationProbe /></QueryClientProvider></MemoryRouter>);
     expect(await screen.findByRole("heading", { name: "Merged" })).toBeInTheDocument();
     expect(await screen.findByText("Merged 5")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Merged on Sep 10, 2026" })).toBeInTheDocument();
@@ -36,14 +36,12 @@ describe("MergedPage", () => {
     expect(screen.queryByText("✓")).not.toBeInTheDocument();
     expect(document.querySelector(".codicon-git-merge")).not.toBeNull();
     await waitFor(() => expect(screen.getByTestId("location-search")).toHaveTextContent("page=1"));
-    expect(screen.getByTestId("location-search")).not.toHaveTextContent("cursor");
     expect(screen.getByRole("button", { name: "Go to page 2" })).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Go to page 2" }));
     await waitFor(() => expect(screen.getByText("Merged 2")).toBeInTheDocument());
     expect(screen.getByRole("heading", { name: "Merged on Sep 9, 2026" })).toBeInTheDocument();
     expect(screen.queryByText("Merged 5")).not.toBeInTheDocument();
     expect(screen.getByTestId("location-search")).toHaveTextContent("page=2");
-    expect(screen.getByTestId("location-search")).not.toHaveTextContent("cursor");
     expect(calls.some((url) => url.pathname.endsWith("/merged") && url.searchParams.get("page") === "2" && url.searchParams.get("limit") === "100")).toBe(true);
   });
 

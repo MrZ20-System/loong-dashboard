@@ -1,7 +1,7 @@
 # LoongBoard Pre-Freeze Refactor Progress
 
 - Baseline SHA: `57d1cedafab9a1510d6616619cc33859f56d125d`
-- Current phase: Phase 10
+- Current phase: Phase 11
 
 ## Frozen product semantics
 
@@ -36,10 +36,11 @@
 - Phase 7: split the GitHub integration by responsibility while preserving the package facade and observable behavior. `provider.ts` is now a 335-line composition facade over `github-client.ts`, `pull-requests.ts`, `issues.ts`, and the expanded `files.ts`; token resolution, HTTP/GraphQL handling, PR/Issue paging and history semantics, file batching/REST fallback, quota projection, public exports, and error contracts remain unchanged. Updated the package and architecture/current-state documentation, and replaced the last Server raw scheduled-task test queries with the typed database service so the architecture guard remains canonical.
 - Phase 8: kept `RepositorySyncCoordinator` as the sole queue/admission/priority/limiter/continuation/recovery owner while moving forward, history, and fetch-PR page execution into three narrow runners. Kept `AgentChatController` as the compatible route and caller facade while moving durable session/workspace/runtime lifecycle, turn execution/persistence, and SSE/interaction fan-out into dedicated services. Provisional native titles now retry after every successful turn with per-session single-flight and a 2-second cooldown; empty/error/unavailable results may retry, while generated/manual ownership remains final and title failures never affect turn success.
 - Phase 9: made archive and payload-pruned state independent in PR/Issue details; PR Fetch clears the prune marker only after changed-file payload restoration, while pruned Issue GET stays local until the explicit refresh endpoint is used. Activity links now open `archive=all`; Web business clients emit one global auth-required event on a matching 401 so `AuthGate` immediately re-locks. Metadata maintenance replaced its event-loop busy poll with a close-interruptible 150 ms delay while preserving batch-boundary admission.
+- Phase 10: split the Settings control center into repository, GitHub, Agent, backup, and archive sections; split the monolithic Web stylesheet into ordered base, shell, metadata, settings, Agent, knowledge, and responsive modules; and reduced list URL canonicalization to formal illegal-value cleanup plus model-specific pagination. Issues retain cursor pagination, while PR and Merged retain page/limit navigation. Cross-review caught and restored the Repository Activity desktop style block before acceptance.
 
 ## Pending changes
 
-- Phases 10–13 remain.
+- Phases 11–13 remain.
 
 ## Migrations added
 
@@ -89,6 +90,7 @@
 - Phase 7 lightweight validation: GitHub 4 files, 38 tests passed; GitHub typecheck and production build passed; production-condition package import smoke passed; Server scheduled-task test 3 tests passed; architecture guard and `git diff --check` passed. A separate Luna Max strict review found no P0/P1/P2 issue. Root `pnpm check`, live GitHub credentials/API behavior, and real UI were not run.
 - Phase 8 lightweight validation: 6 focused Server files, 44 tests passed for forward/history/fetch coordination, Agent lifecycle, title retry, interactions, and workspace ownership; Server typecheck, root typecheck, architecture guard, and `git diff --check` passed. A separate full Server run also passed 29 files/146 tests, and the strict cross-review found no P0/P1/P2 issue. Production build, live GitHub/DSH, and browser smoke were not run.
 - Phase 9 lightweight validation: Database retention/metadata 2 files/22 tests, Server issue/sync/maintenance 4 files/31 tests, and Web auth/clients/PR/Issue/Activity 8 files/37 tests passed. Database, Server, and Web typechecks plus the architecture guard and `git diff --check` passed; strict cross-review found no P0/P1/P2 issue. Full root checks, live GitHub, and browser smoke remain for final validation.
+- Phase 10 lightweight validation: Web behavior 9 files/63 tests passed; Web typecheck and production build passed. After restoring the Activity style block, 4 focused files/10 tests and `git diff --check` passed. Independent Settings, CSS, and URL cross-reviews found no remaining P0/P1/P2 issue. Full root checks and real browser smoke remain for final validation.
 
 ## Known failures
 
