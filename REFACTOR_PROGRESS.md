@@ -1,7 +1,7 @@
 # LoongBoard Pre-Freeze Refactor Progress
 
 - Baseline SHA: `57d1cedafab9a1510d6616619cc33859f56d125d`
-- Current phase: Phase 11
+- Current phase: Phase 12
 
 ## Frozen product semantics
 
@@ -37,10 +37,11 @@
 - Phase 8: kept `RepositorySyncCoordinator` as the sole queue/admission/priority/limiter/continuation/recovery owner while moving forward, history, and fetch-PR page execution into three narrow runners. Kept `AgentChatController` as the compatible route and caller facade while moving durable session/workspace/runtime lifecycle, turn execution/persistence, and SSE/interaction fan-out into dedicated services. Provisional native titles now retry after every successful turn with per-session single-flight and a 2-second cooldown; empty/error/unavailable results may retry, while generated/manual ownership remains final and title failures never affect turn success.
 - Phase 9: made archive and payload-pruned state independent in PR/Issue details; PR Fetch clears the prune marker only after changed-file payload restoration, while pruned Issue GET stays local until the explicit refresh endpoint is used. Activity links now open `archive=all`; Web business clients emit one global auth-required event on a matching 401 so `AuthGate` immediately re-locks. Metadata maintenance replaced its event-loop busy poll with a close-interruptible 150 ms delay while preserving batch-boundary admission.
 - Phase 10: split the Settings control center into repository, GitHub, Agent, backup, and archive sections; split the monolithic Web stylesheet into ordered base, shell, metadata, settings, Agent, knowledge, and responsive modules; and reduced list URL canonicalization to formal illegal-value cleanup plus model-specific pagination. Issues retain cursor pagination, while PR and Merged retain page/limit navigation. Cross-review caught and restored the Repository Activity desktop style block before acceptance.
+- Phase 11: split the mixed Database metadata suite into repository, sync, pull-request, pull-request-files, issue, domain, and activity service tests; expanded the real 013-to-014 migration fixture to prove durable canonical state and removed legacy columns; and reduced `App.test.tsx` to AuthGate, Shell, Router, primary navigation, and NotFound. Forward-sync invalidation, repository context, metadata feed accessibility, and sidebar behavior now live at their nearest Web component boundaries. The Server and regression suites were audited without adding fixture-heavy duplicates; their existing orchestration and three cross-module regression contracts remain focused.
 
 ## Pending changes
 
-- Phases 11–13 remain.
+- Phases 12–13 remain.
 
 ## Migrations added
 
@@ -91,6 +92,7 @@
 - Phase 8 lightweight validation: 6 focused Server files, 44 tests passed for forward/history/fetch coordination, Agent lifecycle, title retry, interactions, and workspace ownership; Server typecheck, root typecheck, architecture guard, and `git diff --check` passed. A separate full Server run also passed 29 files/146 tests, and the strict cross-review found no P0/P1/P2 issue. Production build, live GitHub/DSH, and browser smoke were not run.
 - Phase 9 lightweight validation: Database retention/metadata 2 files/22 tests, Server issue/sync/maintenance 4 files/31 tests, and Web auth/clients/PR/Issue/Activity 8 files/37 tests passed. Database, Server, and Web typechecks plus the architecture guard and `git diff --check` passed; strict cross-review found no P0/P1/P2 issue. Full root checks, live GitHub, and browser smoke remain for final validation.
 - Phase 10 lightweight validation: Web behavior 9 files/63 tests passed; Web typecheck and production build passed. After restoring the Activity style block, 4 focused files/10 tests and `git diff --check` passed. Independent Settings, CSS, and URL cross-reviews found no remaining P0/P1/P2 issue. Full root checks and real browser smoke remain for final validation.
+- Phase 11 package validation: Database 15 files/62 tests and typecheck passed; Web 38 files/166 tests and typecheck passed; Server audit run 29 files/152 tests and typecheck passed. Five focused Web boundary files/33 tests passed under independent review. The three-test regression suite was audited but not rerun because it was unchanged; it remains deferred to final `check:full`. `git diff --check` passed, and final cross-review found no remaining P0/P1/P2 issue.
 
 ## Known failures
 

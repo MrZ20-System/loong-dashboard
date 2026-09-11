@@ -522,8 +522,12 @@ describe("database migrations", () => {
     }
   });
 
-  it("canonicalizes a populated 013 schema without losing rows, child references, or constraints", () => {
-    const database = createVersion013Database(createDatabasePath());
+  it("canonicalizes the pre-refactor 013 schema without losing state or constraints", () => {
+    const databasePath = createDatabasePath();
+    const settingsPath = join(dirname(databasePath), "settings.json");
+    const settings = '{"repositories":{"repo-phase1":{"automaticSync":false}}}\n';
+    writeFileSync(settingsPath, settings, "utf8");
+    const database = createVersion013Database(databasePath);
 
     try {
       database.exec(`
@@ -554,6 +558,42 @@ describe("database migrations", () => {
           'https://github.com/example/phase1/issues/7', 'author', 'open', 0,
           '2026-09-01T00:00:00.000Z', '2026-09-02T00:00:00.000Z', NULL, 'issue'
         );
+        INSERT INTO pull_request_files (
+          repository_id, pr_number, head_sha, path, previous_path,
+          change_type, additions, deletions
+        ) VALUES (
+          'repo-phase1', 42, 'sha-42', 'src/phase1.ts', NULL,
+          'added', 10, 0
+        );
+        INSERT INTO issue_comments (
+          repository_id, issue_number, github_comment_id, author_login, body,
+          created_at, updated_at, url
+        ) VALUES (
+          'repo-phase1', 7, 701, 'reviewer', 'cached comment',
+          '2026-09-02T00:00:00.000Z', '2026-09-02T00:00:00.000Z',
+          'https://github.com/example/phase1/issues/7#issuecomment-701'
+        );
+        UPDATE pull_requests
+        SET archived_at = '2026-09-03T00:00:00.000Z',
+            payload_pruned_at = '2026-09-04T00:00:00.000Z'
+        WHERE repository_id = 'repo-phase1' AND number = 42;
+        UPDATE issues
+        SET archived_at = '2026-09-03T00:00:00.000Z',
+            payload_pruned_at = '2026-09-04T00:00:00.000Z'
+        WHERE repository_id = 'repo-phase1' AND number = 7;
+        INSERT INTO repository_sync_state (
+          repository_id, entity_kind, watermark_updated_at, last_attempt_at,
+          last_success_at, status, last_error, rate_limit_remaining,
+          rate_limit_reset_at
+        ) VALUES (
+          'repo-phase1', 'pull_request', '2026-09-02T00:00:00.000Z',
+          '2026-09-04T00:00:00.000Z', '2026-09-04T00:01:00.000Z', 'idle',
+          NULL, 42, '2026-09-04T00:10:00.000Z'
+        ), (
+          'repo-phase1', 'issue', NULL, '2026-09-04T00:00:00.000Z',
+          '2026-09-04T00:02:00.000Z', 'idle', NULL, 41,
+          '2026-09-04T00:10:00.000Z'
+        );
         INSERT INTO knowledge_documents (
           id, path, title, content_hash, default_session_id, created_at, updated_at
         ) VALUES (
@@ -566,11 +606,11 @@ describe("database migrations", () => {
           provider, model, reasoning_effort, status, created_at, last_used_at,
           origin_kind, domain_id, origin_route, title, title_source
         ) VALUES
-          ('session-pr', 'pr', 'repo-phase1', 42, NULL, 'sha-42', NULL, NULL,
+          ('session-pr', 'pr', 'repo-phase1', 42, NULL, 'sha-42', NULL, 'dsh-pr',
            '/sessions/session-pr', '/workspace/phase1', 'provider', 'model', 'high',
            'idle', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z', NULL,
            NULL, '/pr', 'PR session', 'manual'),
-          ('session-issue', 'issue', 'repo-phase1', NULL, 7, NULL, NULL, NULL,
+          ('session-issue', 'issue', 'repo-phase1', NULL, 7, NULL, NULL, 'dsh-issue',
            '/sessions/session-issue', '/workspace/phase1', 'provider', 'model', 'high',
            'idle', '2026-09-01T00:00:00.000Z', '2026-09-01T00:00:00.000Z', NULL,
            NULL, '/issue', 'Issue session', 'manual'),
@@ -632,7 +672,39 @@ describe("database migrations", () => {
           ('run-orphan', 'task-agent-phase1', '2026-09-04T10:30:00.000Z',
            NULL, NULL, 'completed', NULL, 'missing-conversation', NULL),
           ('run-system', 'task-repository-phase1', '2026-09-04T11:00:00.000Z',
-           NULL, NULL, 'completed', NULL, NULL, NULL);
+           NULL, NULL, 'completed', NULL, NULL, 'system task error');
+        INSERT INTO repository_sync_runs (
+          id, repository_id, kind, trigger, status, requested_at, started_at,
+          finished_at, selector_json, items_seen, items_written, error
+        ) VALUES (
+          'sync-run-phase1', 'repo-phase1', 'history', 'manual', 'partial',
+          '2026-09-04T00:00:00.000Z', '2026-09-04T00:01:00.000Z', NULL,
+          '{"entity":"pull_request"}', 4, 3, NULL
+        );
+        INSERT INTO repository_sync_run_streams (
+          run_id, entity_kind, status, pages_fetched, items_seen, items_written,
+          watermark_before, watermark_after, rate_limit_remaining, started_at,
+          finished_at, error
+        ) VALUES (
+          'sync-run-phase1', 'pull_request', 'partial', 2, 4, 3,
+          '2026-09-01T00:00:00.000Z', '2026-09-02T00:00:00.000Z', 40,
+          '2026-09-04T00:01:00.000Z', NULL, 'history budget exhausted'
+        );
+        INSERT INTO repository_sync_run_targets (
+          run_id, repository_id, pr_number, head_sha, reason
+        ) VALUES (
+          'sync-run-phase1', 'repo-phase1', 42, 'sha-42', 'history'
+        );
+        INSERT INTO repository_history_state (
+          repository_id, entity_kind, enabled, status, target_date,
+          oldest_covered_day, cursor, recovery_anchor_updated_at, last_run_id,
+          last_error, updated_at, resume_after
+        ) VALUES (
+          'repo-phase1', 'pull_request', 1, 'paused', '2026-01-01',
+          '2026-02-01', 'opaque-cursor', '2026-02-01T00:00:00.000Z',
+          'sync-run-phase1', 'history budget exhausted',
+          '2026-09-04T00:02:00.000Z', '2026-09-04T00:15:00.000Z'
+        );
         INSERT INTO worktree_slots (
           id, repository_id, slot_name, path, pr_number, target_sha,
           busy_session_id, last_used_at
@@ -644,13 +716,13 @@ describe("database migrations", () => {
 
       runMigrations(database);
 
-      const columns = (table: string): string[] =>
+      const tableColumns = (table: string): string[] =>
         database
           .prepare(`PRAGMA table_info(${table})`)
           .all()
           .map((row) => (row as { name: string }).name);
 
-      expect(columns("agent_sessions")).toEqual([
+      expect(tableColumns("agent_sessions")).toEqual([
         "id",
         "origin_kind",
         "repository_id",
@@ -672,33 +744,7 @@ describe("database migrations", () => {
         "created_at",
         "last_used_at",
       ]);
-      expect(
-        database
-          .prepare("PRAGMA table_info(agent_sessions)")
-          .all()
-          .find((row) => (row as { name: string }).name === "origin_kind"),
-      ).toEqual(expect.objectContaining({ notnull: 1 }));
-      expect(database.prepare(
-        "SELECT id, origin_kind FROM agent_sessions ORDER BY id",
-      ).all()).toEqual([
-        { id: "session-domain", origin_kind: "domain" },
-        { id: "session-general", origin_kind: "general" },
-        { id: "session-issue", origin_kind: "issue" },
-        { id: "session-knowledge", origin_kind: "knowledge" },
-        { id: "session-pr", origin_kind: "pr" },
-        { id: "session-repository", origin_kind: "repository" },
-      ]);
-      expect(database.prepare(
-        "SELECT default_session_id FROM knowledge_documents WHERE id = 'doc-phase1'",
-      ).get()).toEqual({ default_session_id: "session-knowledge" });
-      expect(database.prepare(
-        "SELECT session_id, content_markdown FROM agent_messages WHERE id = 'message-phase1'",
-      ).get()).toEqual({ session_id: "session-general", content_markdown: "hello" });
-      expect(database.prepare(
-        "SELECT document_id, version_number FROM document_versions WHERE id = 'version-phase1'",
-      ).get()).toEqual({ document_id: "doc-phase1", version_number: 1 });
-
-      expect(columns("scheduled_tasks")).toEqual([
+      expect(tableColumns("scheduled_tasks")).toEqual([
         "id",
         "name",
         "cron_expression",
@@ -717,44 +763,7 @@ describe("database migrations", () => {
         "created_at",
         "updated_at",
       ]);
-      expect(database.prepare(
-        "SELECT id, prompt, workspace_path, provider, model, reasoning_effort, kind, action, repository_id FROM scheduled_tasks ORDER BY id",
-      ).all()).toEqual([
-        {
-          id: "task-agent-phase1",
-          prompt: "agent prompt",
-          workspace_path: "/workspace/phase1",
-          provider: "provider",
-          model: "model",
-          reasoning_effort: "high",
-          kind: "agent",
-          action: null,
-          repository_id: "repo-phase1",
-        },
-        {
-          id: "task-knowledge-phase1",
-          prompt: null,
-          workspace_path: null,
-          provider: null,
-          model: null,
-          reasoning_effort: null,
-          kind: "system",
-          action: "knowledge.checkpoint",
-          repository_id: null,
-        },
-        {
-          id: "task-repository-phase1",
-          prompt: null,
-          workspace_path: null,
-          provider: null,
-          model: null,
-          reasoning_effort: null,
-          kind: "system",
-          action: "repository.sync",
-          repository_id: "repo-phase1",
-        },
-      ]);
-      expect(columns("scheduled_task_runs")).toEqual([
+      expect(tableColumns("scheduled_task_runs")).toEqual([
         "id",
         "task_id",
         "scheduled_for",
@@ -764,15 +773,7 @@ describe("database migrations", () => {
         "agent_session_id",
         "error",
       ]);
-      expect(database.prepare(
-        "SELECT id, agent_session_id FROM scheduled_task_runs ORDER BY id",
-      ).all()).toEqual([
-        { id: "run-conversation-only", agent_session_id: "session-general" },
-        { id: "run-mismatch", agent_session_id: "session-pr" },
-        { id: "run-orphan", agent_session_id: null },
-        { id: "run-system", agent_session_id: null },
-      ]);
-      expect(columns("worktree_slots")).toEqual([
+      expect(tableColumns("worktree_slots")).toEqual([
         "id",
         "repository_id",
         "slot_name",
@@ -781,13 +782,475 @@ describe("database migrations", () => {
         "target_sha",
         "last_used_at",
       ]);
+
       expect(database.prepare(
-        "SELECT repository_id, slot_name, pr_number, target_sha FROM worktree_slots WHERE id = 'slot-phase1'",
+        `SELECT title, head_sha, archived_at, payload_pruned_at
+         FROM pull_requests WHERE repository_id = 'repo-phase1' AND number = 42`,
+      ).get()).toEqual({
+        title: "Phase 1 PR",
+        head_sha: "sha-42",
+        archived_at: "2026-09-03T00:00:00.000Z",
+        payload_pruned_at: "2026-09-04T00:00:00.000Z",
+      });
+      expect(database.prepare(
+        `SELECT title, detail_body, archived_at, payload_pruned_at
+         FROM issues WHERE repository_id = 'repo-phase1' AND number = 7`,
+      ).get()).toEqual({
+        title: "Phase 1 Issue",
+        detail_body: "issue",
+        archived_at: "2026-09-03T00:00:00.000Z",
+        payload_pruned_at: "2026-09-04T00:00:00.000Z",
+      });
+      expect(database.prepare(
+        `SELECT path, previous_path, head_sha, change_type, additions, deletions
+         FROM pull_request_files
+         WHERE repository_id = 'repo-phase1' AND pr_number = 42`,
+      ).get()).toEqual({
+        path: "src/phase1.ts",
+        previous_path: null,
+        head_sha: "sha-42",
+        change_type: "added",
+        additions: 10,
+        deletions: 0,
+      });
+      expect(database.prepare(
+        `SELECT issue_number, github_comment_id, author_login, body,
+                created_at, updated_at, url
+         FROM issue_comments
+         WHERE repository_id = 'repo-phase1' AND issue_number = 7`,
+      ).get()).toEqual({
+        issue_number: 7,
+        github_comment_id: 701,
+        author_login: "reviewer",
+        body: "cached comment",
+        created_at: "2026-09-02T00:00:00.000Z",
+        updated_at: "2026-09-02T00:00:00.000Z",
+        url: "https://github.com/example/phase1/issues/7#issuecomment-701",
+      });
+      expect(database.prepare(
+        `SELECT repository_id, entity_kind, status, watermark_updated_at,
+                last_attempt_at, last_success_at, last_error,
+                rate_limit_remaining, rate_limit_reset_at
+         FROM repository_sync_state
+         WHERE repository_id = 'repo-phase1'
+         ORDER BY entity_kind`,
+      ).all()).toEqual([
+        {
+          repository_id: "repo-phase1",
+          entity_kind: "issue",
+          status: "idle",
+          watermark_updated_at: null,
+          last_attempt_at: "2026-09-04T00:00:00.000Z",
+          last_success_at: "2026-09-04T00:02:00.000Z",
+          last_error: null,
+          rate_limit_remaining: 41,
+          rate_limit_reset_at: "2026-09-04T00:10:00.000Z",
+        },
+        {
+          repository_id: "repo-phase1",
+          entity_kind: "pull_request",
+          status: "idle",
+          watermark_updated_at: "2026-09-02T00:00:00.000Z",
+          last_attempt_at: "2026-09-04T00:00:00.000Z",
+          last_success_at: "2026-09-04T00:01:00.000Z",
+          last_error: null,
+          rate_limit_remaining: 42,
+          rate_limit_reset_at: "2026-09-04T00:10:00.000Z",
+        },
+      ]);
+      expect(database.prepare(
+        `SELECT id, repository_id, kind, trigger, status, requested_at,
+                started_at, finished_at, items_seen, items_written,
+                selector_json, error
+         FROM repository_sync_runs WHERE id = 'sync-run-phase1'`,
+      ).get()).toEqual({
+        id: "sync-run-phase1",
+        repository_id: "repo-phase1",
+        kind: "history",
+        trigger: "manual",
+        status: "partial",
+        requested_at: "2026-09-04T00:00:00.000Z",
+        started_at: "2026-09-04T00:01:00.000Z",
+        finished_at: null,
+        items_seen: 4,
+        items_written: 3,
+        selector_json: '{"entity":"pull_request"}',
+        error: null,
+      });
+      expect(database.prepare(
+        `SELECT entity_kind, status, pages_fetched, items_seen, items_written,
+                watermark_before, watermark_after, rate_limit_remaining,
+                started_at, finished_at, error
+         FROM repository_sync_run_streams WHERE run_id = 'sync-run-phase1'`,
+      ).get()).toEqual({
+        entity_kind: "pull_request",
+        status: "partial",
+        pages_fetched: 2,
+        items_seen: 4,
+        items_written: 3,
+        watermark_before: "2026-09-01T00:00:00.000Z",
+        watermark_after: "2026-09-02T00:00:00.000Z",
+        rate_limit_remaining: 40,
+        started_at: "2026-09-04T00:01:00.000Z",
+        finished_at: null,
+        error: "history budget exhausted",
+      });
+      expect(database.prepare(
+        `SELECT run_id, repository_id, pr_number, head_sha, reason
+         FROM repository_sync_run_targets WHERE run_id = 'sync-run-phase1'`,
+      ).get()).toEqual({
+        run_id: "sync-run-phase1",
+        repository_id: "repo-phase1",
+        pr_number: 42,
+        head_sha: "sha-42",
+        reason: "history",
+      });
+      expect(database.prepare(
+        `SELECT repository_id, entity_kind, enabled, status, target_date,
+                oldest_covered_day, cursor, recovery_anchor_updated_at,
+                last_run_id, last_error, updated_at, resume_after
+         FROM repository_history_state
+         WHERE repository_id = 'repo-phase1' AND entity_kind = 'pull_request'`,
       ).get()).toEqual({
         repository_id: "repo-phase1",
+        entity_kind: "pull_request",
+        enabled: 1,
+        status: "paused",
+        target_date: "2026-01-01",
+        oldest_covered_day: "2026-02-01",
+        cursor: "opaque-cursor",
+        recovery_anchor_updated_at: "2026-02-01T00:00:00.000Z",
+        last_run_id: "sync-run-phase1",
+        last_error: "history budget exhausted",
+        updated_at: "2026-09-04T00:02:00.000Z",
+        resume_after: "2026-09-04T00:15:00.000Z",
+      });
+
+      expect(database.prepare(
+        `SELECT id, origin_kind, repository_id, pr_number, issue_number,
+                target_sha, knowledge_document_id, domain_id, title,
+                title_source, dsh_session_id, dsh_home_path, workspace_path,
+                provider, model, reasoning_effort
+         FROM agent_sessions ORDER BY id`,
+      ).all()).toEqual([
+        {
+          id: "session-domain",
+          origin_kind: "domain",
+          repository_id: "repo-phase1",
+          pr_number: null,
+          issue_number: null,
+          target_sha: null,
+          knowledge_document_id: null,
+          domain_id: "domain-1",
+          title: "Domain session",
+          title_source: "manual",
+          dsh_session_id: null,
+          dsh_home_path: "/sessions/session-domain",
+          workspace_path: "/workspace/phase1",
+          provider: "provider",
+          model: "model",
+          reasoning_effort: "high",
+        },
+        {
+          id: "session-general",
+          origin_kind: "general",
+          repository_id: null,
+          pr_number: null,
+          issue_number: null,
+          target_sha: null,
+          knowledge_document_id: null,
+          domain_id: null,
+          title: "General session",
+          title_source: "manual",
+          dsh_session_id: null,
+          dsh_home_path: "/sessions/session-general",
+          workspace_path: "/workspace/phase1",
+          provider: "provider",
+          model: "model",
+          reasoning_effort: "high",
+        },
+        {
+          id: "session-issue",
+          origin_kind: "issue",
+          repository_id: "repo-phase1",
+          pr_number: null,
+          issue_number: 7,
+          target_sha: null,
+          knowledge_document_id: null,
+          domain_id: null,
+          title: "Issue session",
+          title_source: "manual",
+          dsh_session_id: "dsh-issue",
+          dsh_home_path: "/sessions/session-issue",
+          workspace_path: "/workspace/phase1",
+          provider: "provider",
+          model: "model",
+          reasoning_effort: "high",
+        },
+        {
+          id: "session-knowledge",
+          origin_kind: "knowledge",
+          repository_id: null,
+          pr_number: null,
+          issue_number: null,
+          target_sha: null,
+          knowledge_document_id: "doc-phase1",
+          domain_id: null,
+          title: "Knowledge session",
+          title_source: "manual",
+          dsh_session_id: null,
+          dsh_home_path: "/sessions/session-knowledge",
+          workspace_path: "/workspace/phase1",
+          provider: "provider",
+          model: "model",
+          reasoning_effort: "high",
+        },
+        {
+          id: "session-pr",
+          origin_kind: "pr",
+          repository_id: "repo-phase1",
+          pr_number: 42,
+          issue_number: null,
+          target_sha: "sha-42",
+          knowledge_document_id: null,
+          domain_id: null,
+          title: "PR session",
+          title_source: "manual",
+          dsh_session_id: "dsh-pr",
+          dsh_home_path: "/sessions/session-pr",
+          workspace_path: "/workspace/phase1",
+          provider: "provider",
+          model: "model",
+          reasoning_effort: "high",
+        },
+        {
+          id: "session-repository",
+          origin_kind: "repository",
+          repository_id: "repo-phase1",
+          pr_number: null,
+          issue_number: null,
+          target_sha: null,
+          knowledge_document_id: null,
+          domain_id: null,
+          title: "Repository session",
+          title_source: "manual",
+          dsh_session_id: null,
+          dsh_home_path: "/sessions/session-repository",
+          workspace_path: "/workspace/phase1",
+          provider: "provider",
+          model: "model",
+          reasoning_effort: "high",
+        },
+      ]);
+      expect(database.prepare(
+        `SELECT id, origin_route, status, created_at, last_used_at
+         FROM agent_sessions ORDER BY id`,
+      ).all()).toEqual([
+        {
+          id: "session-domain",
+          origin_route: "/domain",
+          status: "idle",
+          created_at: "2026-09-01T00:00:00.000Z",
+          last_used_at: "2026-09-01T00:00:00.000Z",
+        },
+        {
+          id: "session-general",
+          origin_route: "/general",
+          status: "idle",
+          created_at: "2026-09-01T00:00:00.000Z",
+          last_used_at: "2026-09-01T00:00:00.000Z",
+        },
+        {
+          id: "session-issue",
+          origin_route: "/issue",
+          status: "idle",
+          created_at: "2026-09-01T00:00:00.000Z",
+          last_used_at: "2026-09-01T00:00:00.000Z",
+        },
+        {
+          id: "session-knowledge",
+          origin_route: "/knowledge",
+          status: "idle",
+          created_at: "2026-09-01T00:00:00.000Z",
+          last_used_at: "2026-09-01T00:00:00.000Z",
+        },
+        {
+          id: "session-pr",
+          origin_route: "/pr",
+          status: "idle",
+          created_at: "2026-09-01T00:00:00.000Z",
+          last_used_at: "2026-09-01T00:00:00.000Z",
+        },
+        {
+          id: "session-repository",
+          origin_route: "/repository",
+          status: "idle",
+          created_at: "2026-09-01T00:00:00.000Z",
+          last_used_at: "2026-09-01T00:00:00.000Z",
+        },
+      ]);
+      expect(database.pragma("foreign_key_check")).toEqual([]);
+      expect(database.prepare(
+        `SELECT path, title, content_hash, default_session_id,
+                created_at, updated_at
+         FROM knowledge_documents WHERE id = 'doc-phase1'`,
+      ).get()).toEqual({
+        path: "phase1.md",
+        title: "Phase 1",
+        content_hash: "hash-phase1",
+        default_session_id: "session-knowledge",
+        created_at: "2026-09-01T00:00:00.000Z",
+        updated_at: "2026-09-01T00:00:00.000Z",
+      });
+      expect(database.prepare(
+        `SELECT session_id, sequence, role, content_markdown, metadata_json,
+                created_at
+         FROM agent_messages WHERE id = 'message-phase1'`,
+      ).get()).toEqual({
+        session_id: "session-general",
+        sequence: 0,
+        role: "user",
+        content_markdown: "hello",
+        metadata_json: "{}",
+        created_at: "2026-09-04T00:00:00.000Z",
+      });
+      expect(database.prepare(
+        `SELECT document_id, version_number, content, source, agent_run_id,
+                created_at
+         FROM document_versions WHERE id = 'version-phase1'`,
+      ).get()).toEqual({
+        document_id: "doc-phase1",
+        version_number: 1,
+        content: "# Phase 1",
+        source: "manual",
+        agent_run_id: null,
+        created_at: "2026-09-04T00:00:00.000Z",
+      });
+      expect(readFileSync(settingsPath, "utf8")).toBe(settings);
+
+      expect(database.prepare(
+        `SELECT id, name, cron_expression, timezone, enabled, last_run_at,
+                next_run_at, created_at, updated_at, kind, action,
+                repository_id, prompt, workspace_path, provider, model,
+                reasoning_effort
+         FROM scheduled_tasks ORDER BY id`,
+      ).all()).toEqual([
+        {
+          id: "task-agent-phase1",
+          name: "Agent task",
+          cron_expression: "0 9 * * *",
+          timezone: "Asia/Shanghai",
+          enabled: 1,
+          last_run_at: null,
+          next_run_at: "2026-09-05T01:00:00.000Z",
+          created_at: "2026-09-04T00:00:00.000Z",
+          updated_at: "2026-09-04T00:00:00.000Z",
+          kind: "agent",
+          action: null,
+          repository_id: "repo-phase1",
+          prompt: "agent prompt",
+          workspace_path: "/workspace/phase1",
+          provider: "provider",
+          model: "model",
+          reasoning_effort: "high",
+        },
+        {
+          id: "task-knowledge-phase1",
+          name: "Knowledge task",
+          cron_expression: "0 11 * * *",
+          timezone: "Asia/Shanghai",
+          enabled: 1,
+          last_run_at: null,
+          next_run_at: "2026-09-05T03:00:00.000Z",
+          created_at: "2026-09-04T00:00:00.000Z",
+          updated_at: "2026-09-04T00:00:00.000Z",
+          kind: "system",
+          action: "knowledge.checkpoint",
+          repository_id: null,
+          prompt: null,
+          workspace_path: null,
+          provider: null,
+          model: null,
+          reasoning_effort: null,
+        },
+        {
+          id: "task-repository-phase1",
+          name: "Repository task",
+          cron_expression: "0 10 * * *",
+          timezone: "Asia/Shanghai",
+          enabled: 1,
+          last_run_at: null,
+          next_run_at: "2026-09-05T02:00:00.000Z",
+          created_at: "2026-09-04T00:00:00.000Z",
+          updated_at: "2026-09-04T00:00:00.000Z",
+          kind: "system",
+          action: "repository.sync",
+          repository_id: "repo-phase1",
+          prompt: null,
+          workspace_path: null,
+          provider: null,
+          model: null,
+          reasoning_effort: null,
+        },
+      ]);
+      expect(database.prepare(
+        `SELECT id, task_id, scheduled_for, started_at, finished_at, status,
+                agent_session_id, error
+         FROM scheduled_task_runs ORDER BY id`,
+      ).all()).toEqual([
+        {
+          id: "run-conversation-only",
+          task_id: "task-agent-phase1",
+          scheduled_for: "2026-09-04T09:00:00.000Z",
+          started_at: null,
+          finished_at: null,
+          status: "completed",
+          agent_session_id: "session-general",
+          error: null,
+        },
+        {
+          id: "run-mismatch",
+          task_id: "task-agent-phase1",
+          scheduled_for: "2026-09-04T10:00:00.000Z",
+          started_at: null,
+          finished_at: null,
+          status: "completed",
+          agent_session_id: "session-pr",
+          error: null,
+        },
+        {
+          id: "run-orphan",
+          task_id: "task-agent-phase1",
+          scheduled_for: "2026-09-04T10:30:00.000Z",
+          started_at: null,
+          finished_at: null,
+          status: "completed",
+          agent_session_id: null,
+          error: null,
+        },
+        {
+          id: "run-system",
+          task_id: "task-repository-phase1",
+          scheduled_for: "2026-09-04T11:00:00.000Z",
+          started_at: null,
+          finished_at: null,
+          status: "completed",
+          agent_session_id: null,
+          error: "system task error",
+        },
+      ]);
+      expect(database.prepare(
+        `SELECT id, repository_id, slot_name, path, pr_number, target_sha,
+                last_used_at
+         FROM worktree_slots WHERE id = 'slot-phase1'`,
+      ).get()).toEqual({
+        id: "slot-phase1",
+        repository_id: "repo-phase1",
         slot_name: "slot-01",
+        path: "/worktrees/phase1/slot-01",
         pr_number: 42,
         target_sha: "sha-42",
+        last_used_at: "2026-09-04T00:00:00.000Z",
       });
 
       expect(readIndexColumns(database, "agent_sessions_origin_idx")).toEqual([
@@ -806,7 +1269,6 @@ describe("database migrations", () => {
       expect(database.prepare(
         "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'scheduled_tasks_conversation_idx'",
       ).get()).toBeUndefined();
-      expect(database.pragma("foreign_key_check")).toEqual([]);
 
       const insertTask = database.prepare(`
         INSERT INTO scheduled_tasks (

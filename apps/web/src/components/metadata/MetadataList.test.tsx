@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { MemoryRouter, useLocation } from "react-router-dom";
 import { describe, expect, it } from "vitest";
 import {
   matchesMetadataSearch,
@@ -37,6 +37,10 @@ const issue = (overrides: Partial<IssueListItem> = {}): IssueListItem => ({
   commentsCount: 1,
   ...overrides,
 });
+
+function LocationProbe() {
+  return <output data-testid="location-path">{useLocation().pathname}</output>;
+}
 
 describe("metadata list controls", () => {
   it("keeps date range, search, and status in one metadata toolbar contract", () => {
@@ -100,5 +104,37 @@ describe("metadata list controls", () => {
         `status-${status}`,
       );
     }
+  });
+
+  it("exposes an accessible PR feed row and its GitHub link contract", () => {
+    render(
+      <MemoryRouter initialEntries={["/repositories/repo/pulls"]}>
+        <MetadataFeed kind="pulls" items={[pull({ status: "draft" })]} />
+        <LocationProbe />
+      </MemoryRouter>,
+    );
+
+    const feed = screen.getByRole("list", { name: "Pull request feed" });
+    expect(feed).toBeInTheDocument();
+    const row = screen.getByRole("link", {
+      name: "Pull request #53906: Add scheduler observability",
+    });
+    expect(row).toHaveAttribute("tabindex", "0");
+
+    const githubLink = screen.getByRole("link", {
+      name: "Open pull request #53906 on GitHub",
+    });
+    expect(githubLink).toHaveAttribute(
+      "href",
+      "https://github.com/acme/project/pull/53906",
+    );
+    expect(githubLink).toHaveAttribute("target", "_blank");
+    expect(githubLink).toHaveAttribute("rel", "noreferrer");
+    expect(screen.getByText("draft")).toHaveClass("status-pill", "status-draft");
+
+    fireEvent.keyDown(row, { key: "Enter" });
+    expect(screen.getByTestId("location-path")).toHaveTextContent(
+      "/repositories/repo/pulls/53906",
+    );
   });
 });

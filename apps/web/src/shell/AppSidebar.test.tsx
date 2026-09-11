@@ -37,10 +37,10 @@ function NavigationControls() {
   );
 }
 
-function renderSidebar(path: string) {
+function renderSidebar(path: string, onClose = () => undefined) {
   return render(
     <MemoryRouter initialEntries={[path]}>
-      <AppSidebar open onClose={() => undefined} />
+      <AppSidebar open onClose={onClose} />
       <NavigationControls />
     </MemoryRouter>,
   );
@@ -97,14 +97,24 @@ describe("AppSidebar", () => {
   });
 
   it("uses one direct Settings link without a section popup", () => {
-    renderSidebar("/");
+    renderSidebar("/settings");
 
     const sidebar = within(screen.getByRole("complementary", { name: "Primary" }));
     const settingsLink = sidebar.getByRole("link", { name: "Settings" });
     expect(settingsLink).toHaveAttribute("href", "/settings");
+    expect(settingsLink).toHaveClass("sidebar-settings__trigger--active");
     expect(settingsLink).not.toHaveAttribute("aria-expanded");
     expect(sidebar.queryByRole("navigation", { name: "Settings sections" })).not.toBeInTheDocument();
     expect(sidebar.getAllByRole("link", { name: "Settings" })).toHaveLength(1);
+  });
+
+  it("closes mobile navigation when a workspace link is selected", () => {
+    const onClose = vi.fn();
+    renderSidebar("/", onClose);
+
+    fireEvent.click(screen.getByRole("link", { name: "Knowledge" }));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 
   it("does not render the old footer mark or copy", () => {
