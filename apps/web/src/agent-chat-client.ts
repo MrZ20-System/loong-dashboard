@@ -11,6 +11,7 @@ import {
   type AgentRuntimeEvent,
   type AgentScope,
   type AgentSessionResponse,
+  type AgentSessionUpdate,
   type AgentSessionsResponse,
 } from "@loongboard/contracts";
 
@@ -141,7 +142,7 @@ export function deleteAgentSession(sessionId: string, fetchImpl: ApiFetch = glob
   return requestJson(fetchImpl, `/api/agent-sessions/${encodeURIComponent(sessionId)}`, agentSessionDeleteResponseSchema, { method: "DELETE" });
 }
 
-export function updateAgentSession(sessionId: string, patch: { provider?: string; model?: string; reasoningEffort?: string }, fetchImpl: ApiFetch = globalThis.fetch): Promise<AgentSessionResponse> {
+export function updateAgentSession(sessionId: string, patch: AgentSessionUpdate, fetchImpl: ApiFetch = globalThis.fetch): Promise<AgentSessionResponse> {
   return requestJson(fetchImpl, `/api/agent-sessions/${encodeURIComponent(sessionId)}`, agentSessionResponseSchema, { method: "PATCH", body: JSON.stringify(patch) });
 }
 

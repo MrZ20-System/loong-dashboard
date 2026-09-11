@@ -87,6 +87,10 @@ describe("AgentArchiveExporter", () => {
 
     expect(metadata).not.toContain("dshHomePath");
     expect(metadata).not.toContain("provider.secret");
+    expect(JSON.parse(metadata)).toMatchObject({
+      title: null,
+      titleSource: "provisional",
+    });
     expect(transcript.split("\n").filter(Boolean)).toHaveLength(2);
     expect(JSON.parse(transcript.split("\n")[0] ?? "{}")).toMatchObject({
       sequence: 0,

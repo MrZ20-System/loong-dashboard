@@ -20,6 +20,7 @@ import {
   listWorktreeSlots,
   recordWorktreeSlotUse,
   requireAgentSession,
+  setGeneratedAgentSessionTitleIfProvisional,
   touchAgentSession,
   deleteAgentSession,
   updateAgentMessage,
@@ -235,6 +236,8 @@ export class AgentChatController {
   private readonly runningTurns = new Map<string, Promise<void>>();
   private readonly cancelled = new Set<string>();
   private readonly emittedInteractionResolutions = new Set<string>();
+  /** Prevent a native title lookup from being retried after its first attempt. */
+  private readonly titleAttempts = new Set<string>();
   private readonly sessionCreates = new Map<string, Promise<AgentSessionView>>();
   private readonly worktreePool: WorktreePool;
 
@@ -307,6 +310,7 @@ export class AgentChatController {
       model: input.model,
       reasoningEffort: input.reasoningEffort,
       title: input.title ?? `Scheduled: ${input.taskId}`,
+      titleSource: "provisional",
       now: new Date().toISOString(),
     });
     return session;
@@ -329,6 +333,7 @@ export class AgentChatController {
       model: body.model ?? this.dependencies.defaults.model,
       reasoningEffort: body.reasoningEffort ?? this.dependencies.defaults.reasoningEffort,
       title: body.title ?? null,
+      titleSource: body.title === undefined ? "provisional" : "manual",
       now: new Date().toISOString(),
     });
     return this.viewFor(session);
@@ -359,6 +364,7 @@ export class AgentChatController {
     await this.host.restart(sessionId);
     deleteAgentSession(this.dependencies.database, sessionId);
     await homeCleanup.remove();
+    this.titleAttempts.delete(sessionId);
     this.clearInteractionResolutions(sessionId);
     const subscribers = this.subscribers.get(sessionId);
     if (subscribers !== undefined) {
@@ -390,6 +396,20 @@ export class AgentChatController {
       ...(patch.reasoningEffort !== undefined ? { reasoningEffort: patch.reasoningEffort } : {}),
       ...(patch.title !== undefined ? { title: patch.title } : {}),
     });
+    if (patch.title !== undefined && patch.title !== null) {
+      // Local manual ownership is authoritative. Keep an already-live native
+      // session in sync when it has an opaque runtime id, but never make a
+      // DSH rename failure turn a successful local rename into an HTTP error.
+      const runtime = this.host.runtime(sessionId);
+      const runtimeSessionId = runtime?.runtimeSessionId?.(sessionId) ?? null;
+      if (runtime !== undefined && runtimeSessionId !== null) {
+        try {
+          await this.host.rename(sessionId, patch.title);
+        } catch {
+          // The local manual title remains the source of truth.
+        }
+      }
+    }
     return this.viewFor(updated);
   }
 
@@ -695,6 +715,7 @@ export class AgentChatController {
     this.subscribers.clear();
     this.cancelled.clear();
     this.emittedInteractionResolutions.clear();
+    this.titleAttempts.clear();
     this.runningTurns.clear();
   }
 
@@ -761,10 +782,17 @@ export class AgentChatController {
       dshHomePath: session.dshHomePath,
       runtimeSessionId: resumeRuntimeSessionId,
     };
+    // Both interactive and scheduled callers persist the user row before
+    // entering this method. A title is eligible only for that first row.
+    const isFirstUserTurn =
+      listAgentMessages(this.dependencies.database, session.id).filter(
+        (message) => message.role === "user",
+      ).length === 1;
     mkdirSync(session.dshHomePath, { recursive: true });
     updateAgentSession(this.dependencies.database, session.id, { status: "running" });
     this.host.beginRun(session.id);
     let receivedCompletion = false;
+    let receivedAssistantResult = false;
     let terminalIdle = false;
     let runtimeFailed = false;
     let persistedRuntimeSessionId = resumeRuntimeSessionId ?? null;
@@ -803,7 +831,12 @@ export class AgentChatController {
           continue;
         }
         this.persistRuntimeEvent(session.id, normalized, toolMessageIds);
-        if (normalized.type === "assistant.completed") receivedCompletion = true;
+        if (normalized.type === "assistant.completed") {
+          receivedCompletion = true;
+          if (normalized.markdown.trim().length > 0) {
+            receivedAssistantResult = true;
+          }
+        }
         if (normalized.type === "status" && normalized.status === "idle") {
           terminalIdle = true;
         }
@@ -820,9 +853,9 @@ export class AgentChatController {
         contentMarkdown: message,
       });
     } finally {
-      this.host.endRun(session.id);
       const interrupted = this.cancelled.has(session.id);
       const completed = (terminalIdle || receivedCompletion) && !runtimeFailed;
+      this.host.endRun(session.id);
       const nextStatus = interrupted ? "interrupted" : completed ? "idle" : "error";
       updateAgentSession(this.dependencies.database, session.id, {
         status: nextStatus,
@@ -833,6 +866,45 @@ export class AgentChatController {
       });
       this.broadcast(session.id, { type: "status", status: "idle" });
       this.clearInteractionResolutions(session.id);
+      if (!interrupted && completed && receivedAssistantResult) {
+        // The answer and terminal status are already delivered. Native title
+        // discovery stays secondary and must never extend the user's turn.
+        void this.discoverGeneratedTitle(session.id, isFirstUserTurn);
+      }
+    }
+  }
+
+  /** Best-effort native title projection after the first successful turn. */
+  private async discoverGeneratedTitle(
+    sessionId: string,
+    isFirstUserTurn: boolean,
+  ): Promise<void> {
+    if (!isFirstUserTurn || this.titleAttempts.has(sessionId)) return;
+    try {
+      const session = requireAgentSession(this.dependencies.database, sessionId);
+      if (session.titleSource !== undefined && session.titleSource !== "provisional") {
+        return;
+      }
+      const runtime = this.host.runtime(sessionId);
+      const runtimeSessionId = runtime?.runtimeSessionId?.(sessionId) ?? null;
+      if (runtime === undefined || runtimeSessionId === null || runtime.getTitle === undefined) {
+        return;
+      }
+      this.titleAttempts.add(sessionId);
+      const nativeTitle = await this.host.getTitle(sessionId);
+      if (nativeTitle === null || nativeTitle.title.trim().length === 0) return;
+      const result = setGeneratedAgentSessionTitleIfProvisional(
+        this.dependencies.database,
+        sessionId,
+        nativeTitle.title,
+      );
+      if (result.updated) {
+        // Reuse the existing idle event so the Web query invalidation path
+        // refreshes the selected view and the conversation list.
+        this.broadcast(sessionId, { type: "status", status: "idle" });
+      }
+    } catch {
+      // Native title discovery is secondary metadata; never affect the turn.
     }
   }
 

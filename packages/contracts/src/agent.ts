@@ -126,6 +126,24 @@ export const agentRuntimeCapabilitiesSchema = z
   })
   .strict();
 
+/** Ownership of a session title. Older responses may omit this field. */
+export const agentSessionTitleSourceSchema = z.enum([
+  "provisional",
+  "generated",
+  "manual",
+]);
+
+const agentTitleSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .refine((value) => !/\r|\n|\u2028|\u2029/u.test(value), {
+    message: "title must be one line",
+  })
+  .refine((value) => Array.from(value).length <= 80, {
+    message: "title must contain at most 80 Unicode code points",
+  });
+
 export const agentSessionSummarySchema = z
   .object({
     id: z.string().min(1),
@@ -142,6 +160,8 @@ export const agentSessionSummarySchema = z
     /** Explicit workspace binding; `workspacePath` remains the compatibility field. */
     workspace: agentWorkspaceBindingSchema.optional(),
     title: z.string().trim().min(1).nullable().optional(),
+    /** Optional on the wire so older clients can still read session summaries. */
+    titleSource: agentSessionTitleSourceSchema.optional(),
     createdAt: utcDateTimeSchema,
     lastUsedAt: utcDateTimeSchema,
   })
@@ -180,7 +200,7 @@ const agentSessionCreateBodySchema = z
     scope: agentScopeSchema,
     origin: agentOriginSchema.optional(),
     workspace: agentWorkspaceBindingSchema.optional(),
-    title: z.string().trim().min(1).max(200).optional(),
+    title: agentTitleSchema.optional(),
     provider: z.string().trim().min(1).optional(),
     model: z.string().trim().min(1).optional(),
     reasoningEffort: z.string().trim().min(1).optional(),
@@ -211,7 +231,7 @@ export const agentSessionUpdateSchema = z
     provider: z.string().trim().min(1).optional(),
     model: z.string().trim().min(1).optional(),
     reasoningEffort: z.string().trim().min(1).optional(),
-    title: z.string().trim().min(1).max(200).nullable().optional(),
+    title: agentTitleSchema.nullable().optional(),
   })
   .strict()
   .refine((value) => Object.values(value).some((field) => field !== undefined), {
@@ -353,6 +373,9 @@ export type AgentRuntimeProviderCapability = z.infer<
 >;
 export type AgentRuntimeCapabilities = z.infer<
   typeof agentRuntimeCapabilitiesSchema
+>;
+export type AgentSessionTitleSource = z.infer<
+  typeof agentSessionTitleSourceSchema
 >;
 export type AgentScopeKind = z.infer<typeof agentScopeKindSchema>;
 export type AgentSessionSummary = z.infer<typeof agentSessionSummarySchema>;
