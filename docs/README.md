@@ -18,7 +18,9 @@
 | [Agent 与 DSH](dsh-integration.md) | 会话、子进程、事件、取消与 workspace 互斥 |
 | [Knowledge](knowledge.md) | Markdown 身份、版本、watcher、Git checkpoint |
 | [调度器](scheduler.md) | cron、timer、运行记录、忙碌与重启语义 |
-| [配置与运行](operations.md) | 安装、配置位置、认证、启动、备份和排错 |
+| [配置与运行](operations.md) | 安装、配置位置、GitHub 凭证、启动、备份和排错 |
+| [部署](deployment.md) | Native production、Docker Compose、静态托管、监听和升级 |
+| [Backup and Restore](backup-restore.md) | data root、SQLite、Knowledge、Agent session 和恢复边界 |
 | [开发与验收](testing.md) | 改动顺序、测试分层、手工验收 |
 | [文档维护与清理记录](maintenance.md) | 旧方案去向、文档更新规则 |
 | [历史验收记录](validation-history.md) | 过去的检查及其适用边界 |

@@ -1,0 +1,13 @@
+services:
+  loongboard:
+    build:
+      context: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:4174:4174"
+    environment:
+      LOONGBOARD_SYSTEM_CONFIG: /data/system.yaml
+      LOONGBOARD_SERVER_HOST: 0.0.0.0
+      LOONGBOARD_SERVER_PORT: 4174
+    volumes:
+      - "${LOONGBOARD_DATA_DIR:-./loongboard-data}:/data"

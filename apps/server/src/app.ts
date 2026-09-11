@@ -85,6 +85,7 @@ import {
   registerSettingsRoutes,
   type SettingsController,
 } from "./settings.js";
+import { registerProductionStaticSite } from "./static-site.js";
 
 const healthResponse: HealthResponse = healthResponseSchema.parse({
   status: "ok",
@@ -131,11 +132,17 @@ export interface BuildAppDependencies {
  * as one explicit shape so route composition cannot accidentally construct a
  * partially wired application.
  */
+export interface BuildAppOptions extends FastifyServerOptions {
+  /** Absolute or cwd-relative React production artifact root. */
+  staticRoot?: string;
+}
+
 export function buildApp(
   dependencies: BuildAppDependencies,
-  options: FastifyServerOptions = {},
+  options: BuildAppOptions = {},
 ): FastifyInstance {
   const { database, timezone, syncCoordinator } = dependencies;
+  const { staticRoot, ...fastifyOptions } = options;
   const ownsReclassification = dependencies.reclassification === undefined;
   const reclassification =
     dependencies.reclassification ??
@@ -145,7 +152,7 @@ export function buildApp(
     database,
     ...(dependencies.github === undefined ? {} : { github: dependencies.github }),
   });
-  const app = Fastify(options);
+  const app = Fastify(fastifyOptions);
   configureJsonParser(app);
 
   app.get("/api/health", async (_request, reply) => {
@@ -176,6 +183,9 @@ export function buildApp(
   }
   if (dependencies.settings !== undefined) {
     registerSettingsRoutes(app, { controller: dependencies.settings });
+  }
+  if (staticRoot !== undefined) {
+    registerProductionStaticSite(app, staticRoot);
   }
 
   if (ownsReclassification) {

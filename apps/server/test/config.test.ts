@@ -79,6 +79,30 @@ describe("system configuration", () => {
     });
   });
 
+  it("allows container runtime host and port overrides without changing data paths", () => {
+    const configPath = resolve(fixtureDirectory, "valid-system.yaml");
+    const config = loadSystemConfig(configPath, {
+      LOONGBOARD_SERVER_HOST: "  0.0.0.0 ",
+      LOONGBOARD_SERVER_PORT: " 4180 ",
+    });
+
+    expect(config.runtime).toMatchObject({
+      serverHost: "0.0.0.0",
+      serverPort: 4180,
+    });
+    expect(config.runtime.statePath).toBe(resolve(fixtureDirectory, ".loong"));
+    expect(config.knowledge.path).toBe(resolve(fixtureDirectory, "knowledge"));
+  });
+
+  it.each([
+    ["LOONGBOARD_SERVER_HOST", { LOONGBOARD_SERVER_HOST: " " }],
+    ["LOONGBOARD_SERVER_PORT", { LOONGBOARD_SERVER_PORT: "not-a-port" }],
+  ])("rejects an invalid %s override", (_name, environment) => {
+    expect(() =>
+      loadSystemConfig(resolve(fixtureDirectory, "valid-system.yaml"), environment),
+    ).toThrowError(/LOONGBOARD_SERVER_(?:HOST|PORT)/);
+  });
+
   it("fails fast when a required value is invalid", () => {
     const configPath = resolve(fixtureDirectory, "invalid-system.yaml");
 

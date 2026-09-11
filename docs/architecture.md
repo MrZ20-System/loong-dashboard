@@ -39,6 +39,10 @@ flowchart LR
 
 [start.ts](../apps/server/src/start.ts) 调用 `createServerRuntime` 再监听端口。运行时先加载和校验配置，打开数据库并迁移，投影配置中的仓库，恢复中断的 Agent 与元数据同步状态，然后组装同步、分类、Agent、Knowledge、Settings、Scheduler 和 HTTP 路由。Knowledge/Domain watcher 与调度 timer 随运行时启动；导入 app factory 本身不监听端口。
 
+生产流程先由根脚本执行 `pnpm build`，再由 `pnpm start` 使用 `node --conditions=production apps/server/dist/start.js` 启动。workspace package 的 `production` export 指向各自 `dist/index.js`，开发和测试仍通过 `types`/`import` 使用 `src`。编译后的 start 入口按自身位置解析 `apps/web/dist`，因此不依赖当前工作目录。只有 production start 传入 static root 时，Fastify 才注册静态文件和 React deep-link fallback；`/api/*` 未匹配路由保持 JSON 404。
+
+代码和运行数据分离：代码、构建产物及依赖属于应用仓库或镜像；SQLite、Agent session、Knowledge、worktrees、Settings 和凭证路径由 `system.yaml` 指定。YAML 相对路径相对配置文件目录解析。Docker 将宿主机 data root 挂载为 `/data`，并通过 `LOONGBOARD_SERVER_HOST`/`LOONGBOARD_SERVER_PORT` 覆盖容器监听地址/端口，不改变这些数据路径。
+
 聊天和调度器注入同一个 `WorkspaceRunCoordinator`。SIGINT/SIGTERM 经 [lifecycle.ts](../apps/server/src/lifecycle.ts) 触发幂等关闭；app 的关闭钩子按顺序等待同步、重分类、Agent、Knowledge、Scheduler，最后关闭 SQLite。增加后台服务时必须同时接入退出清理。
 
 ## 必须保持的边界

@@ -21,9 +21,9 @@ import {
   type GhGitHubMetadataProviderOptions,
   type GitHubMetadataProvider,
 } from "@loongboard/github";
-import type { FastifyInstance, FastifyServerOptions } from "fastify";
+import type { FastifyInstance } from "fastify";
 
-import { buildApp } from "./app.js";
+import { buildApp, type BuildAppOptions } from "./app.js";
 import {
   loadSystemConfig,
   resolveSystemConfigPath,
@@ -75,7 +75,7 @@ export interface CreateServerRuntimeOptions {
   providerOptions?: GhGitHubMetadataProviderOptions;
   now?: () => Date;
   coordinatorLogger?: SyncCoordinatorLogger;
-  appOptions?: FastifyServerOptions;
+  appOptions?: BuildAppOptions;
   /** Override the DSH-backed runtime factory (tests inject a scripted one). */
   runtimeFactory?: (spec: AgentSessionSpec) => AgentRuntime;
 }
@@ -108,7 +108,9 @@ export function createServerRuntime(
   options: CreateServerRuntimeOptions = {},
 ): ServerRuntime {
   const resolvedConfigPath = resolveRuntimeConfigPath(options);
-  const config = options.config ?? loadSystemConfig(resolvedConfigPath);
+  const config =
+    options.config ??
+    loadSystemConfig(resolvedConfigPath, options.environment ?? process.env);
   const systemRoot = resolve(
     options.systemRoot ??
       (options.config !== undefined && options.configPath === undefined

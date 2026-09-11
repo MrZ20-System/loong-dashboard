@@ -203,7 +203,10 @@ export function parseSystemConfig(
   };
 }
 
-export function loadSystemConfig(configPath: string): SystemConfig {
+export function loadSystemConfig(
+  configPath: string,
+  environment?: NodeJS.ProcessEnv,
+): SystemConfig {
   const absoluteConfigPath = resolve(configPath);
 
   let input: unknown;
@@ -216,7 +219,46 @@ export function loadSystemConfig(configPath: string): SystemConfig {
     );
   }
 
-  return parseSystemConfig(input, absoluteConfigPath);
+  const config = parseSystemConfig(input, absoluteConfigPath);
+  return environment === undefined
+    ? config
+    : applyRuntimeEnvironmentOverrides(config, environment);
+}
+
+/** Apply process-level runtime overrides without changing config-relative paths. */
+export function applyRuntimeEnvironmentOverrides(
+  config: SystemConfig,
+  environment: NodeJS.ProcessEnv,
+): SystemConfig {
+  const host = readEnvironmentString(environment.LOONGBOARD_SERVER_HOST);
+  const port = readEnvironmentPort(environment.LOONGBOARD_SERVER_PORT);
+  return {
+    ...config,
+    runtime: {
+      ...config.runtime,
+      ...(host === undefined ? {} : { serverHost: host }),
+      ...(port === undefined ? {} : { serverPort: port }),
+    },
+  };
+}
+
+function readEnvironmentString(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) {
+    throw new Error("LOONGBOARD_SERVER_HOST must not be empty");
+  }
+  return trimmed;
+}
+
+function readEnvironmentPort(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const trimmed = value.trim();
+  const port = Number(trimmed);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    throw new Error("LOONGBOARD_SERVER_PORT must be an integer between 1 and 65535");
+  }
+  return port;
 }
 
 export function resolveSystemConfigPath(

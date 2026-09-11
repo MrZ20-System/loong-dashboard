@@ -13,7 +13,7 @@ pnpm dev
 
 先准备父目录 `system.yaml`；独立克隆可复制 [system.example.yaml](../system.example.yaml) 到该位置，再修改仓库路径。已有配置时直接编辑所需项，不覆盖现存本机配置。
 
-开发启动为两个进程：Fastify 默认 `127.0.0.1:4174`，Vite 默认 `127.0.0.1:5173`。Vite 将 `/api` 代理到 Server，覆盖变量为 `LOONGBOARD_API_ORIGIN`。`pnpm build` 只构建产物，不等于部署；当前 Server 不负责生产静态站点托管。
+开发启动为两个进程：Fastify 默认 `127.0.0.1:4174`，Vite 默认 `127.0.0.1:5173`。Vite 将 `/api` 代理到 Server，覆盖变量为 `LOONGBOARD_API_ORIGIN`。生产启动使用已构建的同一份前端/Server 产物：`pnpm build && pnpm start`；Fastify 提供 API、SSE、静态文件和前端 deep link。具体 native/Docker 步骤见 [部署](deployment.md)。
 
 ## 配置定位和字段
 
@@ -24,7 +24,7 @@ pnpm dev
 | version / timezone | 当前 version=1；日期活动的 IANA 时区 |
 | repositories[] | key、name、GitHub owner/repo、本地 path、remote、defaultBranch、worktreeSlots（Worktree capacity fallback） |
 | knowledge | path、相对 inbox、historyLimit；可选 checkpoint 配置见 Knowledge 章节 |
-| runtime | statePath、worktreesPath、serverHost、serverPort |
+| runtime | statePath、worktreesPath、serverHost、serverPort；`LOONGBOARD_SERVER_HOST`/`LOONGBOARD_SERVER_PORT` 可在进程环境中覆盖监听值 |
 | agent | defaultProvider、defaultModel、defaultReasoningEffort、idleProcessMinutes |
 
 仓库配置是唯一来源，启动时投影到 SQLite；不提供仓库增删 API。配置拒绝重复 key/GitHub slug、无效时区和越界 inbox。修改环境变量/配置后重启服务。
@@ -56,7 +56,7 @@ Settings → Integrations → GitHub 是 GitHub 凭证的唯一控制入口。�
 | system workspace/prompts/update-domains.md | Agent 更新 Domain 使用的可编辑 prompt |
 | runtime.statePath/domain-file-versions | Domain/prompt content hash 短期历史，可由 history/restore API 查看 |
 
-SIGINT/SIGTERM 触发服务的有序退出。服务启动会把数据库中上次遗留的 running metadata sync 标记为 interrupted/failed，保留已写入 rows 与成功 watermark；下次显式 Sync now 可继续。不会自动补跑错过的周期。备份前停止写入，保留整个知识仓库、数据库及会话目录；只备份 Markdown 无法恢复聊天与短期版本。不要用删除 `.loong` 处理普通启动故障。
+SIGINT/SIGTERM 触发服务的有序退出。服务启动会把数据库中上次遗留的 running metadata sync 标记为 interrupted/failed，保留已写入 rows 与成功 watermark；下次显式 Sync now 可继续。不会自动补跑错过的周期。备份前停止写入，保留整个知识仓库、数据库及会话目录；只备份 Markdown 无法恢复聊天与短期版本。SQLite 在线复制不作为安全备份方式，完整备份/恢复边界见 [Backup and Restore](backup-restore.md)。不要用删除 `.loong` 处理普通启动故障。
 
 ### GitHub history 与 Merged 验收边界
 
