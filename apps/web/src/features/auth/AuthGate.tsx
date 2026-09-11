@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from
 import type { AuthStatus } from "@loongboard/contracts";
 
 import { fetchAuthStatus, unlockAuth } from "../../auth-client";
+import { AUTH_REQUIRED_EVENT } from "../../auth-required-event";
 
 export function AuthGate({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus | null>(null);
@@ -19,6 +20,16 @@ export function AuthGate({ children }: { children: ReactNode }) {
   }, []);
 
   useEffect(() => refresh(), [refresh]);
+
+  useEffect(() => {
+    const handleAuthRequired = () => {
+      setStatus((current) =>
+        current === null ? current : { ...current, unlocked: false },
+      );
+    };
+    window.addEventListener(AUTH_REQUIRED_EVENT, handleAuthRequired);
+    return () => window.removeEventListener(AUTH_REQUIRED_EVENT, handleAuthRequired);
+  }, []);
 
   if (error !== null) {
     return (
@@ -38,7 +49,7 @@ export function AuthGate({ children }: { children: ReactNode }) {
     return <main className="auth-screen"><p role="status">Checking password lock…</p></main>;
   }
 
-  if (status.enabled && !status.unlocked) {
+  if (!status.unlocked) {
     return <UnlockScreen onUnlocked={setStatus} />;
   }
 

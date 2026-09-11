@@ -25,6 +25,7 @@ import {
   type SyncStatusResponse,
   type ArchiveFilter,
 } from "@loongboard/contracts";
+import { dispatchAuthRequiredEvent } from "./auth-required-event";
 
 export type { IssueListItem, PullRequestListItem, RepositorySummary } from "@loongboard/contracts";
 
@@ -189,6 +190,7 @@ export async function request<T>(
   }
 
   if (!response.ok) {
+    dispatchAuthRequiredEvent(response, body);
     const parsedError = apiErrorSchema.safeParse(body);
     const detail = parsedError.success ? parsedError.data.error : undefined;
     throw new ApiRequestError(

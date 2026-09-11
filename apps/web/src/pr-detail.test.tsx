@@ -132,7 +132,7 @@ class NoopIntersectionObserver {
   disconnect(): void {}
 }
 
-function mockApi(options: { prepare?: Promise<unknown> } = {}) {
+function mockApi(options: { prepare?: Promise<unknown>; detail?: unknown } = {}) {
   const calls: string[] = [];
   const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
     const url = new URL(String(input), "http://localhost");
@@ -170,7 +170,7 @@ function mockApi(options: { prepare?: Promise<unknown> } = {}) {
       ].join(" ");
       return json({ command });
     }
-    if (url.pathname.endsWith("/pulls/5")) return json(detail);
+    if (url.pathname.endsWith("/pulls/5")) return json(options.detail ?? detail);
     const sessionScope = {
       kind: "pr",
       repositoryId: "repo",
@@ -346,6 +346,39 @@ describe("PR detail workbench", () => {
     expect(screen.getAllByRole("button", { name: /^Collapse diff for / })).toHaveLength(
       files.length,
     );
+  });
+
+  it("renders archive and cleaned-payload markers independently", async () => {
+    const archivedAndPruned = {
+      ...detail,
+      archivedAt: "2026-09-10T00:00:00.000Z",
+      payloadPrunedAt: "2026-09-10T00:00:00.000Z",
+    };
+    mockApi({ detail: archivedAndPruned });
+    renderDetail();
+
+    expect(await screen.findByRole("heading", { name: /Add diff workspace/ })).toBeInTheDocument();
+    expect(screen.getByText("Archived")).toBeInTheDocument();
+    expect(screen.getByText("Cached details cleaned")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Restore" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refresh from GitHub" })).toBeInTheDocument();
+  });
+
+  it("shows the cleaned-payload marker without an archive banner", async () => {
+    mockApi({
+      detail: {
+        ...detail,
+        archivedAt: null,
+        payloadPrunedAt: "2026-09-10T00:00:00.000Z",
+      },
+    });
+    renderDetail();
+
+    expect(await screen.findByRole("heading", { name: /Add diff workspace/ })).toBeInTheDocument();
+    expect(screen.queryByText("Archived")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Restore" })).not.toBeInTheDocument();
+    expect(screen.getByText("Cached details cleaned")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Refresh from GitHub" })).toBeInTheDocument();
   });
 
   it("passes the Changes Split control through as split without narrow-width degradation", async () => {

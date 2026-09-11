@@ -16,7 +16,7 @@ function repositoryListPath(
   from: string,
   to: string,
 ): string {
-  const query = new URLSearchParams({ from, to });
+  const query = new URLSearchParams({ from, to, archive: "all" });
   return `/repositories/${encodeURIComponent(repositoryId)}/${kind}?${query.toString()}`;
 }
 

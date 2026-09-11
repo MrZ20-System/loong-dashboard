@@ -1,4 +1,5 @@
 import { issueDetailSchema, type IssueDetail } from "@loongboard/contracts";
+import { dispatchAuthRequiredEvent } from "./auth-required-event";
 
 export type IssueFetch = (
   input: RequestInfo | URL,
@@ -10,30 +11,53 @@ export async function fetchIssueDetail(
   number: number,
   fetchImpl: IssueFetch = globalThis.fetch,
 ): Promise<IssueDetail> {
+  return requestIssueDetail(repositoryId, number, "GET", fetchImpl);
+}
+
+/** Explicit GitHub refresh for a cached Issue payload. */
+export async function refreshIssueDetail(
+  repositoryId: string,
+  number: number,
+  fetchImpl: IssueFetch = globalThis.fetch,
+): Promise<IssueDetail> {
+  return requestIssueDetail(repositoryId, number, "POST", fetchImpl);
+}
+
+async function requestIssueDetail(
+  repositoryId: string,
+  number: number,
+  method: "GET" | "POST",
+  fetchImpl: IssueFetch,
+): Promise<IssueDetail> {
+  const path = `/api/repositories/${encodeURIComponent(repositoryId)}/issues/${number}${method === "POST" ? "/refresh" : ""}`;
   let response: Response;
   try {
-    response = await fetchImpl(
-      `/api/repositories/${encodeURIComponent(repositoryId)}/issues/${number}`,
-      { headers: { Accept: "application/json" } },
-    );
+    response = await fetchImpl(path, {
+      ...(method === "POST" ? { method } : {}),
+      headers: { Accept: "application/json" },
+    });
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    throw new Error(`GET issue #${number} failed: ${reason}`);
+    throw new Error(`${method} issue #${number} failed: ${reason}`);
   }
   if (!response.ok) {
-    let detail = response.statusText;
+    let body: unknown = null;
     try {
-      const body = (await response.json()) as { error?: { message?: string } };
-      if (body.error?.message) detail = body.error.message;
+      body = await response.json();
     } catch {
       // Keep the HTTP status text when the body is not JSON.
     }
-    throw new Error(`GET issue #${number} failed with HTTP ${response.status}: ${detail}`);
+    dispatchAuthRequiredEvent(response, body);
+    const detail =
+      typeof body === "object" && body !== null && "error" in body
+        ? String((body as { error?: { message?: unknown } }).error?.message ?? response.statusText)
+        : response.statusText;
+    throw new Error(`${method} issue #${number} failed with HTTP ${response.status}: ${detail}`);
   }
   const body: unknown = await response.json();
   const parsed = issueDetailSchema.safeParse(body);
   if (!parsed.success) {
-    throw new Error(`GET issue #${number} returned an invalid response`);
+    throw new Error(`${method} issue #${number} returned an invalid response`);
   }
   return parsed.data;
 }

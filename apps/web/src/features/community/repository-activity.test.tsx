@@ -95,14 +95,16 @@ describe("Repository activity page", () => {
     const issueListLink = within(issueCard as HTMLElement).getByRole("link", {
       name: "Open list",
     });
-    expect(pullListLink).toHaveAttribute(
-      "href",
-      expect.stringMatching(/^\/repositories\/repo\/pulls\?from=[^&]+&to=[^&]+$/),
-    );
-    expect(issueListLink).toHaveAttribute(
-      "href",
-      expect.stringMatching(/^\/repositories\/repo\/issues\?from=[^&]+&to=[^&]+$/),
-    );
+    const pullListUrl = new URL(pullListLink.getAttribute("href") as string, "http://localhost");
+    const issueListUrl = new URL(issueListLink.getAttribute("href") as string, "http://localhost");
+    expect(pullListUrl.pathname).toBe("/repositories/repo/pulls");
+    expect(issueListUrl.pathname).toBe("/repositories/repo/issues");
+    expect(pullListUrl.searchParams.get("archive")).toBe("all");
+    expect(issueListUrl.searchParams.get("archive")).toBe("all");
+    expect(pullListUrl.searchParams.get("from")).toBeTruthy();
+    expect(pullListUrl.searchParams.get("to")).toBeTruthy();
+    expect(issueListUrl.searchParams.get("from")).toBeTruthy();
+    expect(issueListUrl.searchParams.get("to")).toBeTruthy();
     expect(pullListLink.getAttribute("href")).not.toContain("/api/");
     expect(issueListLink.getAttribute("href")).not.toContain("/api/");
   });

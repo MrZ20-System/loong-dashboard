@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { fetchIssueDetail } from "./issue-client";
+import { fetchIssueDetail, refreshIssueDetail } from "./issue-client";
+import { AUTH_REQUIRED_EVENT } from "./auth-required-event";
 
 const detail = {
   repositoryId: "repo",
@@ -26,9 +27,9 @@ const detail = {
   ],
 };
 
-function json(value: unknown): Response {
+function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
-    status: 200,
+    status,
     headers: { "Content-Type": "application/json" },
   });
 }
@@ -51,5 +52,32 @@ describe("fetchIssueDetail", () => {
     await expect(fetchIssueDetail("repo", 7, fetchImpl)).rejects.toThrow(
       "returned an invalid response",
     );
+  });
+
+  it("uses the explicit refresh endpoint and validates the refreshed detail", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => json(detail));
+
+    await expect(refreshIssueDetail("repo", 7, fetchImpl)).resolves.toEqual(detail);
+    expect(fetchImpl).toHaveBeenCalledWith(
+      "/api/repositories/repo/issues/7/refresh",
+      expect.objectContaining({ method: "POST", headers: { Accept: "application/json" } }),
+    );
+  });
+
+  it("dispatches auth-required for a matching 401 while preserving the Issue error", async () => {
+    const onAuthRequired = vi.fn();
+    window.addEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
+    const fetchImpl = vi.fn<typeof fetch>(async () => json(
+      { error: { code: "AUTH_REQUIRED", message: "Unlock required" } },
+      401,
+    ));
+    try {
+      await expect(fetchIssueDetail("repo", 7, fetchImpl)).rejects.toThrow(
+        "GET issue #7 failed with HTTP 401",
+      );
+      expect(onAuthRequired).toHaveBeenCalledTimes(1);
+    } finally {
+      window.removeEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
+    }
   });
 });

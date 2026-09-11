@@ -3,10 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  archiveBatch,
   getIssueDetailCacheState,
   openDatabase,
   reconcileRepositories,
   replaceIssueDetailCache,
+  restoreIssue,
   upsertIssuePage,
   type ConfiguredRepository,
   type DatabaseClient,
@@ -78,7 +80,11 @@ function setup(): { client: DatabaseClient; app: ReturnType<typeof buildTestApp>
   return { client, app, provider };
 }
 
-function issue(number: number, updatedAt: string): IssueMetadata {
+function issue(
+  number: number,
+  updatedAt: string,
+  overrides: Partial<IssueMetadata> = {},
+): IssueMetadata {
   return {
     nodeId: `issue-node-${number}`,
     number,
@@ -90,6 +96,7 @@ function issue(number: number, updatedAt: string): IssueMetadata {
     createdAt: "2026-09-01T00:00:00.000Z",
     updatedAt,
     closedAt: null,
+    ...overrides,
   };
 }
 
@@ -305,6 +312,141 @@ describe("Issue detail lazy cache route", () => {
     expect(response.json()).toMatchObject({
       error: { code: "ISSUE_NOT_FOUND" },
     });
+    expect(provider.calls).toHaveLength(0);
+  });
+
+  it("serves archived/pruned Issues from local core metadata and refreshes only explicitly", async () => {
+    const { client, app, provider } = setup();
+    upsertIssuePage(client, "alpha", [issue(7, "2026-09-03T00:00:00.000Z", {
+      status: "closed",
+      closedAt: "2026-09-04T00:00:00.000Z",
+    })]);
+    replaceIssueDetailCache(client, "alpha", {
+      ...cacheInput("2026-09-03T00:00:00.000Z"),
+      state: "closed",
+      closedAt: "2026-09-04T00:00:00.000Z",
+    });
+    archiveBatch(client, {
+      repositoryId: "alpha",
+      cutoff: "2026-09-04T00:00:00.000Z",
+      archiveAt: "2026-09-11T00:00:00.000Z",
+      includeMergedPrs: false,
+      includeClosedPrs: false,
+      includeClosedIssues: true,
+      prune: true,
+    });
+
+    const beforeRefresh = await app.inject({
+      method: "GET",
+      url: "/api/repositories/alpha/issues/7",
+    });
+    expect(beforeRefresh.statusCode).toBe(200);
+    expect(beforeRefresh.json()).toMatchObject({
+      title: "Issue 7",
+      detailBody: null,
+      comments: [],
+      archivedAt: "2026-09-11T00:00:00.000Z",
+      payloadPrunedAt: "2026-09-11T00:00:00.000Z",
+    });
+    expect(provider.calls).toHaveLength(0);
+
+    provider.result = {
+      ...fetched("2026-09-11T00:00:00.000Z"),
+      state: "closed",
+      closedAt: "2026-09-04T00:00:00.000Z",
+    };
+    const refreshed = await app.inject({
+      method: "POST",
+      url: "/api/repositories/alpha/issues/7/refresh",
+    });
+    expect(refreshed.statusCode).toBe(200);
+    expect(provider.calls).toHaveLength(1);
+    expect(refreshed.json()).toMatchObject({
+      detailBody: "# Fetched body\n\nBody paragraph.",
+      comments: [{ id: 1 }, { id: 2 }],
+      archivedAt: "2026-09-11T00:00:00.000Z",
+      payloadPrunedAt: null,
+    });
+
+    const afterRefresh = await app.inject({
+      method: "GET",
+      url: "/api/repositories/alpha/issues/7",
+    });
+    expect(afterRefresh.statusCode).toBe(200);
+    expect(afterRefresh.json()).toMatchObject({
+      detailBody: "# Fetched body\n\nBody paragraph.",
+      comments: [{ id: 1 }, { id: 2 }],
+      archivedAt: "2026-09-11T00:00:00.000Z",
+      payloadPrunedAt: null,
+    });
+    expect(provider.calls).toHaveLength(1);
+
+    restoreIssue(client, "alpha", 7);
+    const restored = await app.inject({
+      method: "GET",
+      url: "/api/repositories/alpha/issues/7",
+    });
+    expect(restored.statusCode).toBe(200);
+    expect(restored.json()).toMatchObject({
+      detailBody: "# Fetched body\n\nBody paragraph.",
+      comments: [{ id: 1 }, { id: 2 }],
+      archivedAt: null,
+      payloadPrunedAt: null,
+    });
+    expect(provider.calls).toHaveLength(1);
+  });
+
+  it("serves archived but unpruned detail locally without contacting GitHub", async () => {
+    const { client, app, provider } = setup();
+    upsertIssuePage(client, "alpha", [issue(7, "2026-09-03T00:00:00.000Z", {
+      status: "closed",
+      closedAt: "2026-09-04T00:00:00.000Z",
+    })]);
+    replaceIssueDetailCache(client, "alpha", {
+      ...cacheInput("2026-09-03T00:00:00.000Z"),
+      state: "closed",
+      closedAt: "2026-09-04T00:00:00.000Z",
+    });
+    archiveBatch(client, {
+      repositoryId: "alpha",
+      cutoff: "2026-09-04T00:00:00.000Z",
+      archiveAt: "2026-09-11T00:00:00.000Z",
+      includeMergedPrs: false,
+      includeClosedPrs: false,
+      includeClosedIssues: true,
+      prune: false,
+    });
+
+    const response = await app.inject({
+      method: "GET",
+      url: "/api/repositories/alpha/issues/7",
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({
+      detailBody: "Cached body paragraph.",
+      comments: [{ id: 1, body: "Cached comment" }],
+      archivedAt: "2026-09-11T00:00:00.000Z",
+      payloadPrunedAt: null,
+    });
+    expect(provider.calls).toHaveLength(0);
+  });
+
+  it("rejects a non-empty explicit refresh body and preserves the 404 format", async () => {
+    const { app, provider } = setup();
+    const invalid = await app.inject({
+      method: "POST",
+      url: "/api/repositories/alpha/issues/7/refresh",
+      payload: { force: true },
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json()).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+
+    const missing = await app.inject({
+      method: "POST",
+      url: "/api/repositories/alpha/issues/404/refresh",
+    });
+    expect(missing.statusCode).toBe(404);
+    expect(missing.json()).toMatchObject({ error: { code: "ISSUE_NOT_FOUND" } });
     expect(provider.calls).toHaveLength(0);
   });
 });

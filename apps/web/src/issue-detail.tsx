@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { AgentChatPanel } from "./agent-chat";
-import { fetchIssueDetail } from "./issue-client";
+import { fetchIssueDetail, refreshIssueDetail } from "./issue-client";
 import { MarkdownView } from "./markdown";
 import { restoreIssueMetadata } from "./retention-client";
 
@@ -32,6 +32,13 @@ export function IssueDetailPage() {
       void queryClient.invalidateQueries({ queryKey: ["metadata", repositoryId, "issues"] });
     },
   });
+  const refresh = useMutation({
+    mutationFn: () => refreshIssueDetail(repositoryId, number),
+    onSuccess: (refreshed) => {
+      queryClient.setQueryData(["issue", repositoryId, number], refreshed);
+      void queryClient.invalidateQueries({ queryKey: ["metadata", repositoryId, "issues"] });
+    },
+  });
 
   if (!enabled) return <p role="alert">Invalid issue number.</p>;
   if (detail.isPending) return <p role="status">Loading issue…</p>;
@@ -45,6 +52,8 @@ export function IssueDetailPage() {
     );
   }
   const issue = detail.data;
+  const isArchived = issue.archivedAt != null;
+  const isPayloadPruned = issue.payloadPrunedAt != null;
   return (
     <section className="issue-detail" aria-labelledby="issue-title">
       <div className="page-heading issue-heading">
@@ -79,19 +88,22 @@ export function IssueDetailPage() {
           <Link to={`/repositories/${encodeURIComponent(repositoryId)}/issues`}>Back to list</Link>
         </div>
       </div>
-      {issue.archivedAt && (
+      {isArchived && (
         <aside className="metadata-archive-banner" role="status">
           <strong>Archived</strong>
-          <span>Payload may have been cleaned.</span>
           <button type="button" onClick={() => restore.mutate()} disabled={restore.isPending}>
             {restore.isPending ? "Restoring…" : "Restore"}
           </button>
-          {issue.payloadPrunedAt && (
-            <button type="button" onClick={() => void detail.refetch()} disabled={detail.isFetching}>
-              {detail.isFetching ? "Refreshing…" : "Refresh from GitHub"}
-            </button>
-          )}
           {restore.isError && <span role="alert">Unable to restore: {restore.error.message}</span>}
+        </aside>
+      )}
+      {isPayloadPruned && (
+        <aside className="metadata-archive-banner" role="status">
+          <strong>Cached details cleaned</strong>
+          <button type="button" onClick={() => refresh.mutate()} disabled={refresh.isPending}>
+            {refresh.isPending ? "Refreshing…" : "Refresh from GitHub"}
+          </button>
+          {refresh.isError && <span role="alert">Unable to refresh: {refresh.error.message}</span>}
         </aside>
       )}
       <div className="issue-layout">

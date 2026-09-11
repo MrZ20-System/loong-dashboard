@@ -83,10 +83,6 @@ export function upsertPullRequestPage(
         WHEN excluded.status IN ('open', 'draft')
           THEN NULL
         ELSE pull_requests.archived_at
-      END,
-      payload_pruned_at = CASE
-        WHEN @detailBodyProvided = 1 THEN NULL
-        ELSE pull_requests.payload_pruned_at
       END`,
   );
 
@@ -114,7 +110,6 @@ export function upsertPullRequestPage(
         deletions: item.deletions,
         changedFilesCount: item.changedFilesCount,
         detailBody: item.detailBody ?? null,
-        detailBodyProvided: item.detailBody === undefined ? 0 : 1,
       }).changes;
     }
   })();
@@ -256,6 +251,7 @@ export function replaceIssueDetailCache(
 export interface IssueDetailCacheState {
   updatedAt: string;
   syncedUpdatedAt: string | null;
+  archivedAt: string | null;
   payloadPrunedAt: string | null;
 }
 
@@ -268,7 +264,7 @@ export function getIssueDetailCacheState(
   requireRepository(database, repositoryId);
   const row = database
     .prepare(
-      `SELECT updated_at, detail_synced_updated_at, payload_pruned_at
+      `SELECT updated_at, detail_synced_updated_at, archived_at, payload_pruned_at
        FROM issues
        WHERE repository_id = ? AND number = ?`,
     )
@@ -276,6 +272,7 @@ export function getIssueDetailCacheState(
     | {
         updated_at: string;
         detail_synced_updated_at: string | null;
+        archived_at: string | null;
         payload_pruned_at: string | null;
       }
     | undefined;
@@ -283,6 +280,7 @@ export function getIssueDetailCacheState(
   return {
     updatedAt: row.updated_at,
     syncedUpdatedAt: row.detail_synced_updated_at ?? null,
+    archivedAt: row.archived_at ?? null,
     payloadPrunedAt: row.payload_pruned_at ?? null,
   };
 }

@@ -402,6 +402,16 @@ export function PullRequestDetailPage() {
       void queryClient.invalidateQueries({ queryKey: ["metadata", repositoryId, "pulls"] });
     },
   });
+  const refreshActive =
+    fetchPullRequest.isPending ||
+    (fetchRunId !== null &&
+      (fetchRun.isPending ||
+        fetchRun.data?.status === "queued" ||
+        fetchRun.data?.status === "running"));
+  const refreshFailed =
+    fetchRun.data !== undefined &&
+    fetchRun.data.status !== "completed" &&
+    !refreshActive;
   const [mode, setMode] = useState<WorkbenchMode>("changes");
   const [changesViewMode, setChangesViewMode] =
     useState<ChangesViewMode>("split");
@@ -552,6 +562,8 @@ export function PullRequestDetailPage() {
     );
   }
   const pr = detail.data as PullRequestDetail;
+  const isArchived = pr.archivedAt != null;
+  const isPayloadPruned = pr.payloadPrunedAt != null;
   const fileTreeLabel =
     mode === "changes" ? "changed files" : "repository files";
   const selectChangedFile = (path: string) => {
@@ -596,20 +608,24 @@ export function PullRequestDetailPage() {
           </Link>
         </div>
       </div>
-      {pr.archivedAt && (
+      {isArchived && (
         <aside className="metadata-archive-banner" role="status">
           <strong>Archived</strong>
-          <span>Payload may have been cleaned.</span>
           <button type="button" onClick={() => restore.mutate()} disabled={restore.isPending}>
             {restore.isPending ? "Restoring…" : "Restore"}
           </button>
-          {pr.payloadPrunedAt && (
-            <button type="button" onClick={() => fetchPullRequest.mutate()} disabled={fetchPullRequest.isPending || fetchRunId !== null}>
-              {fetchPullRequest.isPending ? "Refreshing…" : "Refresh from GitHub"}
-            </button>
-          )}
           {restore.isError && <span role="alert">Unable to restore: {restore.error.message}</span>}
+        </aside>
+      )}
+      {isPayloadPruned && (
+        <aside className="metadata-archive-banner" role="status">
+          <strong>Cached details cleaned</strong>
+          <button type="button" onClick={() => fetchPullRequest.mutate()} disabled={refreshActive}>
+            {refreshActive ? "Refreshing…" : "Refresh from GitHub"}
+          </button>
           {fetchPullRequest.isError && <span role="alert">Unable to refresh: {fetchPullRequest.error.message}</span>}
+          {fetchRun.isError && <span role="alert">Unable to check refresh run: {fetchRun.error.message}</span>}
+          {refreshFailed && <span role="alert">Unable to refresh: {fetchRun.data.error ?? `fetch run ${fetchRun.data.status}`}</span>}
         </aside>
       )}
       {prepare.isPending && (

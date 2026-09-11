@@ -17,7 +17,10 @@ import {
 } from "@loongboard/database";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { MetadataMaintenanceService } from "../src/metadata-maintenance.js";
+import {
+  MetadataMaintenanceService,
+  SYNC_IDLE_POLL_DELAY_MS,
+} from "../src/metadata-maintenance.js";
 
 const fixtures: Array<{ database: DatabaseClient; root: string }> = [];
 
@@ -133,6 +136,68 @@ describe("MetadataMaintenanceService", () => {
     await expect(started.completion).resolves.toMatchObject({ status: "interrupted" });
     await expect(closing).resolves.toBeUndefined();
     expect(getMaintenanceRun(database, started.run.id)?.status).toBe("interrupted");
+  });
+
+  it("polls sync activity with a delay and resumes after the repository becomes idle", async () => {
+    const database = fixture();
+    let syncActive = true;
+    let delayCalls = 0;
+    let releaseDelay!: () => void;
+    const service = new MetadataMaintenanceService({
+      database,
+      calendarTimeZone: "UTC",
+      isSyncActive: () => syncActive,
+      delay: (milliseconds) => {
+        delayCalls += 1;
+        expect(milliseconds).toBe(SYNC_IDLE_POLL_DELAY_MS);
+        return new Promise<void>((resolve) => {
+          releaseDelay = resolve;
+        });
+      },
+    });
+    const started = service.start("repo", {
+      date: "2026-09-02",
+      includeMergedPrs: true,
+      includeClosedPrs: true,
+      includeClosedIssues: true,
+      prune: true,
+    });
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(delayCalls).toBe(1);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(delayCalls).toBe(1);
+
+    syncActive = false;
+    releaseDelay();
+    await expect(started.completion).resolves.toMatchObject({ status: "completed" });
+    await service.close();
+  });
+
+  it("interrupts a launched busy run promptly when closing", async () => {
+    const database = fixture();
+    let releaseDelay!: () => void;
+    const service = new MetadataMaintenanceService({
+      database,
+      calendarTimeZone: "UTC",
+      isSyncActive: () => true,
+      delay: () => new Promise<void>((resolve) => {
+        releaseDelay = resolve;
+      }),
+    });
+    const started = service.start("repo", {
+      date: "2026-09-02",
+      includeMergedPrs: true,
+      includeClosedPrs: true,
+      includeClosedIssues: true,
+      prune: true,
+    });
+
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    const closing = service.close();
+    await expect(closing).resolves.toBeUndefined();
+    await expect(started.completion).resolves.toMatchObject({ status: "interrupted" });
+    releaseDelay();
   });
 
   it("serializes queued runs for one repository", async () => {

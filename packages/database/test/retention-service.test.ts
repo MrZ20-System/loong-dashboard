@@ -306,6 +306,20 @@ describe("metadata retention", () => {
         archivedAt: null,
         payloadPrunedAt: "2026-09-11T00:00:00.000Z",
       });
+      expect(database.prepare(
+        `SELECT archived_at, payload_pruned_at
+         FROM pull_requests WHERE repository_id = 'repo' AND number = 3`,
+      ).get()).toEqual({
+        archived_at: null,
+        payload_pruned_at: "2026-09-11T00:00:00.000Z",
+      });
+      expect(database.prepare(
+        `SELECT archived_at, payload_pruned_at
+         FROM issues WHERE repository_id = 'repo' AND number = 2`,
+      ).get()).toEqual({
+        archived_at: null,
+        payload_pruned_at: "2026-09-11T00:00:00.000Z",
+      });
       expect(listCurrentPullRequestEnrichmentStates(database, "repo", [3])).toEqual([
         { number: 3, headSha: pullRequest(3, cutoff).headSha, enriched: false },
       ]);
@@ -313,7 +327,9 @@ describe("metadata retention", () => {
       upsertPullRequestPage(database, "repo", [pullRequest(3, "2026-09-11T00:00:00.000Z", {
         detailBody: "refetched PR body",
       })]);
-      expect(getPullRequestDetail(database, "repo", 3)?.payloadPrunedAt).toBeNull();
+      expect(getPullRequestDetail(database, "repo", 3)?.payloadPrunedAt).toBe(
+        "2026-09-11T00:00:00.000Z",
+      );
       replacePullRequestFiles(database, "repo", 3, pullRequest(3, cutoff).headSha, [], false);
       expect(getPullRequestDetail(database, "repo", 3)?.payloadPrunedAt).toBeNull();
       replaceIssueDetailCache(database, "repo", {

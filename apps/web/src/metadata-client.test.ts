@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  ApiRequestError,
   buildListUrl,
   fetchMergedPullRequests,
   fetchList,
@@ -7,7 +8,9 @@ import {
   isValidDate,
   readDateRange,
   readMetadataFilters,
+  request,
 } from "./metadata-client";
+import { AUTH_REQUIRED_EVENT } from "./auth-required-event";
 
 describe("metadata client", () => {
   it("constructs encoded local list queries without hidden GitHub calls", () => {
@@ -98,5 +101,39 @@ describe("metadata client", () => {
       return new Response(JSON.stringify({ items: [item], page: 2, pageSize: 100, totalCount: 101, totalPages: 2, calendarTimeZone: "Asia/Shanghai" }), { status: 200 });
     });
     await expect(fetchMergedPullRequests("repo", { search: "merged", domains: ["dom_a"], page: 2, limit: 100 }, undefined, fetchImpl)).resolves.toMatchObject({ items: [item], page: 2, totalPages: 2 });
+  });
+
+  it("dispatches auth-required before preserving the ApiRequestError", async () => {
+    const onAuthRequired = vi.fn();
+    window.addEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(
+      JSON.stringify({ error: { code: "AUTH_REQUIRED", message: "Unlock required" } }),
+      { status: 401, headers: { "Content-Type": "application/json" } },
+    ));
+    try {
+      await expect(request("/api/business", { parse: (value) => value }, {}, fetchImpl))
+        .rejects.toBeInstanceOf(ApiRequestError);
+      await expect(request("/api/business", { parse: (value) => value }, {}, fetchImpl))
+        .rejects.toMatchObject({ status: 401, code: "AUTH_REQUIRED" });
+      expect(onAuthRequired).toHaveBeenCalledTimes(2);
+    } finally {
+      window.removeEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
+    }
+  });
+
+  it("does not dispatch auth-required for other HTTP errors", async () => {
+    const onAuthRequired = vi.fn();
+    window.addEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
+    const fetchImpl = vi.fn<typeof fetch>(async () => new Response(
+      JSON.stringify({ error: { code: "INTERNAL_ERROR", message: "Failure" } }),
+      { status: 401, headers: { "Content-Type": "application/json" } },
+    ));
+    try {
+      await expect(request("/api/business", { parse: (value) => value }, {}, fetchImpl))
+        .rejects.toMatchObject({ status: 401, code: "INTERNAL_ERROR" });
+      expect(onAuthRequired).not.toHaveBeenCalled();
+    } finally {
+      window.removeEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
+    }
   });
 });

@@ -22,7 +22,7 @@ import {
 import type { FastifyInstance } from "fastify";
 
 import { IssueDetailService } from "../issue-detail-service.js";
-import { parseRequest, sendParsed } from "../route-helpers.js";
+import { assertEmptyRequestBody, parseRequest, sendParsed } from "../route-helpers.js";
 
 export interface MetadataRoutesDependencies {
   database: DatabaseClient;
@@ -133,6 +133,14 @@ export function registerMetadataRoutes(
   app.get("/api/repositories/:repositoryId/issues/:number", async (request, reply) => {
     const { repositoryId, number } = parseRequest(issueParamsSchema, request.params);
     const issue = await issueDetails.get(repositoryId, number);
+    if (issue === null) throw new IssueNotFoundError(repositoryId, number);
+    return sendParsed(reply, 200, issueDetailSchema, issue);
+  });
+
+  app.post("/api/repositories/:repositoryId/issues/:number/refresh", async (request, reply) => {
+    assertEmptyRequestBody(request.body);
+    const { repositoryId, number } = parseRequest(issueParamsSchema, request.params);
+    const issue = await issueDetails.refresh(repositoryId, number);
     if (issue === null) throw new IssueNotFoundError(repositoryId, number);
     return sendParsed(reply, 200, issueDetailSchema, issue);
   });

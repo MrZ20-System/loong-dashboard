@@ -41,6 +41,7 @@ import {
 
 const DEFAULT_BATCH_SIZE = 250;
 const DAY_MILLISECONDS = 24 * 60 * 60 * 1_000;
+export const SYNC_IDLE_POLL_DELAY_MS = 150;
 
 export interface MetadataMaintenanceServiceOptions {
   database: DatabaseClient;
@@ -51,6 +52,8 @@ export interface MetadataMaintenanceServiceOptions {
   isSyncActive?: (repositoryId: string) => boolean;
   /** Lets the coordinator hold one repository admission while a batch runs. */
   setRepositoryMaintenanceActive?: (repositoryId: string, active: boolean) => void;
+  /** Delays sync-idle polling; injected in tests to avoid real-time waits. */
+  delay?: (milliseconds: number) => Promise<void>;
   logger?: { error(...arguments_: readonly unknown[]): void };
 }
 
@@ -107,12 +110,15 @@ export class MetadataMaintenanceService {
   private readonly setRepositoryMaintenanceActive:
     | ((repositoryId: string, active: boolean) => void)
     | undefined;
+  private readonly delay: (milliseconds: number) => Promise<void>;
   private readonly logger: { error(...arguments_: readonly unknown[]): void };
   private readonly jobs = new Map<string, MaintenanceJob>();
   private readonly completions = new Map<string, Promise<MaintenanceRunRecord>>();
   /** One metadata mutation flow at a time for each repository. */
   private readonly repositoryQueues = new Map<string, string[]>();
   private readonly runningRepositories = new Set<string>();
+  private readonly closedPromise: Promise<void>;
+  private resolveClosed!: () => void;
   private closed = false;
 
   constructor(options: MetadataMaintenanceServiceOptions) {
@@ -125,7 +131,11 @@ export class MetadataMaintenanceService {
     this.now = options.now ?? (() => new Date());
     this.isSyncActive = options.isSyncActive ?? (() => false);
     this.setRepositoryMaintenanceActive = options.setRepositoryMaintenanceActive;
+    this.delay = options.delay ?? delay;
     this.logger = options.logger ?? console;
+    this.closedPromise = new Promise<void>((resolve) => {
+      this.resolveClosed = resolve;
+    });
   }
 
   /** Mark runs abandoned by a previous process before scheduling resumes. */
@@ -306,6 +316,7 @@ export class MetadataMaintenanceService {
 
   async close(): Promise<void> {
     this.closed = true;
+    this.resolveClosed();
     for (const [runId, job] of [...this.jobs]) {
       if (job.launched) continue;
       this.interruptRun(runId);
@@ -488,7 +499,10 @@ export class MetadataMaintenanceService {
   private waitUntilSyncIdle(repositoryId: string): Promise<void> {
     if (!this.isSyncActive(repositoryId)) return Promise.resolve();
     if (this.closed) return Promise.reject(new MetadataMaintenanceClosedError());
-    return immediate().then(() => this.waitUntilSyncIdle(repositoryId));
+    return Promise.race([this.delay(SYNC_IDLE_POLL_DELAY_MS), this.closedPromise]).then(() => {
+      if (this.closed) throw new MetadataMaintenanceClosedError();
+      return this.waitUntilSyncIdle(repositoryId);
+    });
   }
 
   private interruptRun(
@@ -527,6 +541,10 @@ export class MetadataMaintenanceService {
 
 function immediate(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
+}
+
+function delay(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
 function compactError(error: unknown): string {

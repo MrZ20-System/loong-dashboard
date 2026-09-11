@@ -1,9 +1,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AuthGate } from "./features/auth/AuthGate";
 import { SecuritySettings } from "./features/settings/SecuritySettings";
+import { AUTH_REQUIRED_EVENT } from "./auth-required-event";
 
 function json(value: unknown, status = 200): Response {
   return new Response(JSON.stringify(value), {
@@ -73,5 +74,26 @@ describe("password lock UI", () => {
     await waitFor(() => expect(calls.some(({ path, method }) => path === "/api/auth/disable" && method === "POST")).toBe(true));
     expect(await screen.findByText("Password lock disabled.")).toBeInTheDocument();
     client.clear();
+  });
+
+  it("re-locks after a business request reports AUTH_REQUIRED and removes its listener", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = new URL(String(input), "http://localhost");
+      if (url.pathname === "/api/auth/status") {
+        return json({ enabled: true, unlocked: true });
+      }
+      throw new Error(`Unexpected request: ${url.pathname}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const rendered = render(<AuthGate><div data-testid="business-content">Business</div></AuthGate>);
+    expect(await screen.findByTestId("business-content")).toBeInTheDocument();
+
+    act(() => window.dispatchEvent(new Event(AUTH_REQUIRED_EVENT)));
+    expect(await screen.findByRole("heading", { name: "LoongBoard" })).toBeInTheDocument();
+    expect(screen.queryByTestId("business-content")).not.toBeInTheDocument();
+
+    rendered.unmount();
+    act(() => window.dispatchEvent(new Event(AUTH_REQUIRED_EVENT)));
   });
 });

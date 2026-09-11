@@ -3,8 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  archiveBatch,
   completeSyncRunStream,
   createSyncRun,
+  getPullRequestDetail,
   getSyncRun,
   getRepositoryHistoryState,
   getRepositorySyncState,
@@ -14,6 +16,7 @@ import {
   openDatabase,
   reconcileRepositories,
   updateRepositoryHistoryState,
+  upsertPullRequestPage,
   type DatabaseClient,
 } from "@loongboard/database";
 import {
@@ -34,6 +37,7 @@ import type {
   IssueMetadata,
 } from "@loongboard/github";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { PullRequestEnrichmentService } from "../src/enrichment-service.js";
 
 const fixtures: Array<{ database: DatabaseClient; root: string }> = [];
 
@@ -587,6 +591,87 @@ describe("RepositorySyncCoordinator", () => {
     expect(listSyncRunTargets(database, run.syncRunId)).toEqual([
       expect.objectContaining({ number: 27, reason: "fetch_pr" }),
     ]);
+    await coordinator.close();
+  });
+
+  it("clears a pruned PR payload marker only after fetch enrichment restores files", async () => {
+    const database = fixture();
+    const cached = pullRequestItem({
+      number: 27,
+      status: "closed",
+      stateRaw: "CLOSED",
+      closedAt: "2026-09-02T00:00:00.000Z",
+      detailBody: "cached PR body",
+      updatedAt: "2026-09-03T00:00:00.000Z",
+    });
+    upsertPullRequestPage(database, "vllm", [cached]);
+    archiveBatch(database, {
+      repositoryId: "vllm",
+      cutoff: "2026-09-04T00:00:00.000Z",
+      archiveAt: "2026-09-11T00:00:00.000Z",
+      includeMergedPrs: false,
+      includeClosedPrs: true,
+      includeClosedIssues: false,
+      prune: true,
+    });
+    const marker = "2026-09-11T00:00:00.000Z";
+    expect(getPullRequestDetail(database, "vllm", 27)?.payloadPrunedAt).toBe(marker);
+
+    let fileResult: PullRequestFilesResult[] = [];
+    let fileFailure: Error | null = null;
+    const base = providerFor({ pull: undefined, issue: undefined });
+    const provider: GitHubMetadataProvider = {
+      ...base,
+      async fetchPullRequest() {
+        // Metadata restores the PR body, but the payload marker must remain
+        // until changed-file enrichment also succeeds.
+        return cached;
+      },
+      async fetchPullRequestFiles() {
+        if (fileFailure !== null) throw fileFailure;
+        return fileResult;
+      },
+    };
+    const coordinator = new RepositorySyncCoordinator({
+      database,
+      provider,
+      enricher: new PullRequestEnrichmentService({
+        database,
+        provider,
+        rateLimitFloor: 0,
+      }),
+      logger: { error: () => {} },
+      now: () => new Date("2026-09-11T10:00:00.000Z"),
+    });
+
+    const noPayloadRun = coordinator.startFetchPullRequest("vllm", 27);
+    await coordinator.waitForRun(noPayloadRun.syncRunId);
+    expect(getPullRequestDetail(database, "vllm", 27)?.payloadPrunedAt).toBe(marker);
+
+    fileFailure = new Error("file provider failed");
+    const failedEnrichmentRun = coordinator.startFetchPullRequest("vllm", 27);
+    await coordinator.waitForRun(failedEnrichmentRun.syncRunId);
+    expect(getPullRequestDetail(database, "vllm", 27)?.payloadPrunedAt).toBe(marker);
+
+    fileFailure = null;
+    fileResult = [{
+      number: 27,
+      files: [{
+        path: "src/restored.ts",
+        previousPath: null,
+        changeType: "added",
+        additions: 1,
+        deletions: 0,
+      }],
+      truncated: false,
+    }];
+    const restoredRun = coordinator.startFetchPullRequest("vllm", 27);
+    await expect(coordinator.waitForRun(restoredRun.syncRunId)).resolves.toMatchObject({
+      kind: "fetch_pr",
+      status: "completed",
+    });
+    expect(getPullRequestDetail(database, "vllm", 27)?.payloadPrunedAt).toBeNull();
+    expect(getRepositorySyncState(database, "vllm", "pull_request").watermarkUpdatedAt).toBeNull();
     await coordinator.close();
   });
 

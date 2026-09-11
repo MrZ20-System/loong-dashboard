@@ -22,10 +22,28 @@ export class IssueDetailService {
   async get(repositoryId: string, number: number): Promise<IssueDetail | null> {
     const state = getIssueDetailCacheState(this.options.database, repositoryId, number);
     if (state === null) return null;
+    // Payload-pruned Issues are intentionally offline reads. Their local row
+    // remains useful for core metadata, but a normal GET must not turn a
+    // retention marker into an implicit GitHub request.
+    if (state.payloadPrunedAt !== null) {
+      return this.getCore(repositoryId, number);
+    }
+    // An archived but unpruned Issue still has a complete local detail cache;
+    // serve it without attempting a lazy refresh.
+    if (state.archivedAt !== null) {
+      return getIssueDetail(this.options.database, repositoryId, number);
+    }
     if (state.syncedUpdatedAt === state.updatedAt) {
       return getIssueDetail(this.options.database, repositoryId, number);
     }
 
+    return this.refresh(repositoryId, number);
+  }
+
+  /** Explicit user-requested refresh, including archived/pruned Issues. */
+  async refresh(repositoryId: string, number: number): Promise<IssueDetail | null> {
+    const state = getIssueDetailCacheState(this.options.database, repositoryId, number);
+    if (state === null) return null;
     if (this.options.github === undefined) {
       throw new Error(
         `Cannot refresh issue #${number}: GitHub metadata provider is not configured`,
@@ -36,14 +54,24 @@ export class IssueDetailService {
     const active = this.refreshes.get(key);
     if (active !== undefined) return active;
 
-    const refresh = this.refresh(repositoryId, number).finally(() => {
+    const refresh = this.refreshFromGithub(repositoryId, number).finally(() => {
       if (this.refreshes.get(key) === refresh) this.refreshes.delete(key);
     });
     this.refreshes.set(key, refresh);
     return refresh;
   }
 
-  private async refresh(
+  private getCore(repositoryId: string, number: number): IssueDetail | null {
+    const issue = getIssueDetail(this.options.database, repositoryId, number);
+    if (issue === null) return null;
+    return {
+      ...issue,
+      detailBody: null,
+      comments: [],
+    };
+  }
+
+  private async refreshFromGithub(
     repositoryId: string,
     number: number,
   ): Promise<IssueDetail | null> {

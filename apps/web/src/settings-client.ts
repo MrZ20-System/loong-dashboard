@@ -24,6 +24,7 @@ import {
   type KnowledgeCheckpointSettings,
   type KnowledgeCheckpointSettingsUpdate,
 } from "@loongboard/contracts";
+import { dispatchAuthRequiredEvent } from "./auth-required-event";
 
 export type { AgentArchiveSettings, AgentArchiveSettingsUpdate, AgentRuntimeSettings, AgentRuntimeSettingsUpdate, CodeBackupSettings, CodeBackupSettingsUpdate, GitHubIntegration, JsonSource, KnowledgeCheckpointSettings, KnowledgeCheckpointSettingsUpdate, RepositorySettings } from "@loongboard/contracts";
 
@@ -39,6 +40,7 @@ async function json<T>(path: string, schema: { parse(value: unknown): T }, init:
   }
   const body: unknown = await response.json().catch(() => null);
   if (!response.ok) {
+    dispatchAuthRequiredEvent(response, body);
     const detail = typeof body === "object" && body !== null && "error" in body
       ? String((body as { error?: { message?: unknown } }).error?.message ?? response.statusText)
       : response.statusText;
