@@ -3,6 +3,7 @@ import type {
   AgentScope,
 } from "@loongboard/contracts";
 
+import type { AgentSessionTitleSource } from "./agent-service.js";
 import type { DatabaseClient } from "./types.js";
 
 /** Explicit allowlist of normalized session fields safe for archive export. */
@@ -16,6 +17,7 @@ export interface AgentArchiveSessionMetadata {
   readonly status: "idle" | "running" | "interrupted" | "error";
   readonly dshSessionId: string | null;
   readonly title: string | null;
+  readonly titleSource: AgentSessionTitleSource;
   readonly createdAt: string;
   readonly lastUsedAt: string;
 }
@@ -81,6 +83,7 @@ function mapSession(row: Record<string, unknown>): AgentArchiveSessionMetadata {
     status: row.status as AgentArchiveSessionMetadata["status"],
     dshSessionId: (row.dsh_session_id as string | null) ?? null,
     title: (row.title as string | null) ?? null,
+    titleSource: row.title_source as AgentSessionTitleSource,
     createdAt: row.created_at as string,
     lastUsedAt: row.last_used_at as string,
   };
@@ -126,7 +129,7 @@ export function listAgentArchiveProjection(
       `SELECT id, origin_kind, scope_type, repository_id, pr_number,
               issue_number, target_sha, knowledge_document_id, domain_id,
               origin_route, workspace_path, provider, model, reasoning_effort,
-              status, dsh_session_id, title, created_at, last_used_at
+              status, dsh_session_id, title, title_source, created_at, last_used_at
        FROM agent_sessions${sessionWhere}
        ORDER BY id ASC`,
     )

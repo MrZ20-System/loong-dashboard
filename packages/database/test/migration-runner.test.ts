@@ -102,6 +102,7 @@ describe("database migrations", () => {
         { id: "010_remove_daily_projections" },
         { id: "011_history_rate_limit_recovery" },
         { id: "012_metadata_retention" },
+        { id: "013_agent_session_title_source" },
       ]);
     } finally {
       database.close();
@@ -135,6 +136,7 @@ describe("database migrations", () => {
         expect.objectContaining({ id: "010_remove_daily_projections" }),
         expect.objectContaining({ id: "011_history_rate_limit_recovery" }),
         expect.objectContaining({ id: "012_metadata_retention" }),
+        expect.objectContaining({ id: "013_agent_session_title_source" }),
       ]);
       expect(
         database
@@ -266,6 +268,68 @@ describe("database migrations", () => {
         { name: "state", descending: 0 },
         { name: "updated_at", descending: 0 },
       ]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("adds a manual-protected title source on fresh databases", () => {
+    const database = openDatabase(createDatabasePath());
+
+    try {
+      const column = database
+        .prepare("PRAGMA table_info(agent_sessions)")
+        .all()
+        .find((row) => (row as { name: string }).name === "title_source") as
+        | { name: string; notnull: number; dflt_value: string }
+        | undefined;
+      expect(column).toEqual(expect.objectContaining({
+        name: "title_source",
+        notnull: 1,
+        dflt_value: "'manual'",
+      }));
+    } finally {
+      database.close();
+    }
+  });
+
+  it("preserves old titles and marks upgraded rows manual", () => {
+    const database = openDatabase(createDatabasePath());
+
+    try {
+      database
+        .prepare(
+          `INSERT INTO agent_sessions (
+             id, scope_type, title, title_source, dsh_home_path, workspace_path,
+             provider, model, reasoning_effort, status, created_at, last_used_at
+           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          "legacy-title-session",
+          "general",
+          "Existing user title",
+          "manual",
+          "/sessions/legacy-title",
+          "/workspace",
+          "deepseek-official",
+          "model",
+          "high",
+          "idle",
+          "2026-09-03T00:00:00.000Z",
+          "2026-09-03T00:00:00.000Z",
+        );
+
+      database.exec("ALTER TABLE agent_sessions DROP COLUMN title_source");
+      database.prepare("DELETE FROM schema_migrations WHERE id = ?").run(
+        "013_agent_session_title_source",
+      );
+      runMigrations(database);
+
+      expect(
+        database
+          .prepare("SELECT title, title_source FROM agent_sessions WHERE id = ?")
+          .get("legacy-title-session"),
+      ).toEqual({ title: "Existing user title", title_source: "manual" });
     } finally {
       database.close();
     }

@@ -12,6 +12,7 @@ import { listQueryModesMigration } from "./migrations/009-list-query-modes.js";
 import { removeDailyProjectionsMigration } from "./migrations/010-remove-daily-projections.js";
 import { historyRateLimitRecoveryMigration } from "./migrations/011-history-rate-limit-recovery.js";
 import { metadataRetentionMigration } from "./migrations/012-metadata-retention.js";
+import { agentSessionTitleSourceMigration } from "./migrations/013-agent-session-title-source.js";
 import {
   recoverInterruptedSyncRuns,
   recoverInterruptedSyncStates,
@@ -35,6 +36,7 @@ const migrations: readonly Migration[] = [
   removeDailyProjectionsMigration,
   historyRateLimitRecoveryMigration,
   metadataRetentionMigration,
+  agentSessionTitleSourceMigration,
 ];
 
 function orderedMigrations(items: readonly Migration[]): readonly Migration[] {

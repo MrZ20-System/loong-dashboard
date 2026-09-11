@@ -111,8 +111,11 @@ export {
   listAgentSessions,
   listBusyWorkspacePaths,
   listRunningKnowledgeSessionIds,
+  InvalidAgentSessionTitleError,
+  renameAgentSession,
   recoverInterruptedAgentSessions,
   requireAgentSession,
+  setGeneratedAgentSessionTitleIfProvisional,
   touchAgentSession,
   updateAgentMessage,
   updateAgentSession,
@@ -122,7 +125,10 @@ export type {
   AgentMessageRecord,
   AgentSessionListFilter,
   AgentSessionRecord,
+  AgentSessionSummaryWithTitleSource,
+  AgentSessionTitleSource,
   CreateAgentSessionInput,
+  GeneratedAgentSessionTitleResult,
 } from "./agent-service.js";
 export type {
   AgentArchiveMessage,

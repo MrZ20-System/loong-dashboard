@@ -4,8 +4,12 @@ import {
   appendAgentMessage,
   createAgentSession,
   findAgentSession,
+  InvalidAgentSessionTitleError,
   listAgentMessages,
+  listAgentSessions,
+  renameAgentSession,
   requireAgentSession,
+  setGeneratedAgentSessionTitleIfProvisional,
   updateAgentSession,
 } from "../src/agent-service.js";
 import { listAgentArchiveProjection } from "../src/agent-archive-service.js";
@@ -31,6 +35,8 @@ describe("agent session service", () => {
       now: "2026-09-03T00:00:00.000Z",
     });
     expect(created.status).toBe("idle");
+    expect(created.title).toBeNull();
+    expect(created.titleSource).toBe("provisional");
 
     const found = findAgentSession(database, general);
     expect(found?.id).toBe("sess_1");
@@ -57,6 +63,99 @@ describe("agent session service", () => {
 
     updateAgentSession(database, "sess_1", { status: "running", dshSessionId: "ds_9" });
     expect(requireAgentSession(database, "sess_1").dshSessionId).toBe("ds_9");
+    database.close();
+  });
+
+  it("persists title provenance and lets generated titles win only once", () => {
+    const database = freshDatabase();
+    createAgentSession(database, {
+      id: "sess_title",
+      scope: general,
+      dshHomePath: "/home/sess_title/dsh",
+      workspacePath: "/work/title",
+      provider: "deepseek-official",
+      model: "model",
+      reasoningEffort: "high",
+      now: "2026-09-03T00:00:00.000Z",
+    });
+
+    const first = setGeneratedAgentSessionTitleIfProvisional(
+      database,
+      "sess_title",
+      "  Generated title  ",
+    );
+    expect(first.updated).toBe(true);
+    expect(first.session.title).toBe("Generated title");
+    expect(first.session.titleSource).toBe("generated");
+    const second = setGeneratedAgentSessionTitleIfProvisional(
+      database,
+      "sess_title",
+      "A later title",
+    );
+    expect(second.updated).toBe(false);
+    expect(second.session.title).toBe("Generated title");
+    database.close();
+  });
+
+  it("protects a manual title from generated replacement", () => {
+    const database = freshDatabase();
+    createAgentSession(database, {
+      id: "sess_manual_title",
+      scope: general,
+      dshHomePath: "/home/sess_manual_title/dsh",
+      workspacePath: "/work/title",
+      provider: "deepseek-official",
+      model: "model",
+      reasoningEffort: "high",
+      now: "2026-09-03T00:00:00.000Z",
+    });
+    const renamed = renameAgentSession(database, "sess_manual_title", "  My title  ");
+    expect(renamed.title).toBe("My title");
+    expect(renamed.titleSource).toBe("manual");
+    expect(
+      setGeneratedAgentSessionTitleIfProvisional(database, "sess_manual_title", "Generated"),
+    ).toMatchObject({ updated: false, session: { title: "My title", titleSource: "manual" } });
+    database.close();
+  });
+
+  it("enforces one-line, non-empty, 80-code-point titles", () => {
+    const database = freshDatabase();
+    createAgentSession(database, {
+      id: "sess_title_validation",
+      scope: general,
+      dshHomePath: "/home/sess_title_validation/dsh",
+      workspacePath: "/work/title",
+      provider: "deepseek-official",
+      model: "model",
+      reasoningEffort: "high",
+      now: "2026-09-03T00:00:00.000Z",
+    });
+    const valid = "😀".repeat(80);
+    expect(renameAgentSession(database, "sess_title_validation", valid).title).toBe(valid);
+    for (const invalid of ["😀".repeat(81), "line\nbreak", "   "]) {
+      expect(() => renameAgentSession(database, "sess_title_validation", invalid)).toThrow(
+        InvalidAgentSessionTitleError,
+      );
+    }
+    database.close();
+  });
+
+  it("projects title provenance and searches titles first", () => {
+    const database = freshDatabase();
+    createAgentSession(database, {
+      id: "sess_search_title",
+      scope: general,
+      dshHomePath: "/home/sess_search_title/dsh",
+      workspacePath: "/work/title",
+      provider: "deepseek-official",
+      model: "model",
+      reasoningEffort: "high",
+      title: "Searchable conversation",
+      now: "2026-09-03T00:00:00.000Z",
+    });
+    expect(listAgentSessions(database, { search: "searchable" })).toMatchObject([
+      { id: "sess_search_title", title: "Searchable conversation", titleSource: "manual" },
+    ]);
     database.close();
   });
 
@@ -126,6 +225,7 @@ describe("agent session service", () => {
       expect(projection[1]?.messages.map((message) => message.contentMarkdown)).toEqual([
         "second",
       ]);
+      expect(projection[0]?.session.titleSource).toBe("provisional");
       expect(projection[0]?.session).not.toHaveProperty("dshHomePath");
       expect(listAgentArchiveProjection(database, { sessionIds: ["sess_archive_b"] })).toHaveLength(1);
     } finally {

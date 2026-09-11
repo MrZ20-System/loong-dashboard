@@ -568,6 +568,9 @@ export const agentSessions = sqliteTable(
     domainId: text("domain_id"),
     originRoute: text("origin_route"),
     title: text("title"),
+    titleSource: text("title_source", {
+      enum: ["provisional", "generated", "manual"],
+    }).notNull().default("manual"),
     dshSessionId: text("dsh_session_id"),
     dshHomePath: text("dsh_home_path").notNull(),
     workspacePath: text("workspace_path").notNull(),

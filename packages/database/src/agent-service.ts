@@ -22,6 +22,7 @@ export interface AgentSessionRecord {
   domainId: string | null;
   originRoute: string | null;
   title: string | null;
+  titleSource: AgentSessionTitleSource;
   dshSessionId: string | null;
   dshHomePath: string;
   workspacePath: string;
@@ -33,6 +34,22 @@ export interface AgentSessionRecord {
   lastUsedAt: string;
 }
 
+export type AgentSessionTitleSource = "provisional" | "generated" | "manual";
+
+/** The contract summary plus the database-owned title provenance. */
+export type AgentSessionSummaryWithTitleSource = AgentSessionSummary & {
+  titleSource: AgentSessionTitleSource;
+};
+
+export class InvalidAgentSessionTitleError extends Error {
+  readonly code = "INVALID_AGENT_SESSION_TITLE" as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "InvalidAgentSessionTitleError";
+  }
+}
+
 export interface CreateAgentSessionInput {
   id: string;
   scope: AgentScope;
@@ -42,6 +59,8 @@ export interface CreateAgentSessionInput {
   model: string;
   reasoningEffort: string;
   title?: string | null;
+  /** New sessions default to provisional when no title is supplied. */
+  titleSource?: AgentSessionTitleSource;
   now: string;
 }
 
@@ -60,7 +79,7 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
-function mapSession(row: Record<string, unknown>): AgentSessionSummary {
+function mapSession(row: Record<string, unknown>): AgentSessionSummaryWithTitleSource {
   const kind = (row.origin_kind ?? row.scope_type) as AgentScope["kind"];
   const scope: AgentScope = {
     kind,
@@ -88,9 +107,30 @@ function mapSession(row: Record<string, unknown>): AgentSessionSummary {
       kind: workspaceKind(kind),
     },
     title: (row.title as string | null) ?? null,
+    titleSource: row.title_source as AgentSessionTitleSource,
     createdAt: row.created_at as string,
     lastUsedAt: row.last_used_at as string,
   };
+}
+
+/** Normalize one user/runtime title without silently changing its content. */
+function normalizeTitle(title: string): string {
+  if (typeof title !== "string") {
+    throw new InvalidAgentSessionTitleError("Agent session title must be a string");
+  }
+  if (/\r|\n|\u2028|\u2029/u.test(title)) {
+    throw new InvalidAgentSessionTitleError("Agent session title must be one line");
+  }
+  const normalized = title.trim();
+  if (normalized.length === 0) {
+    throw new InvalidAgentSessionTitleError("Agent session title must not be empty");
+  }
+  if (Array.from(normalized).length > 80) {
+    throw new InvalidAgentSessionTitleError(
+      "Agent session title must be at most 80 Unicode code points",
+    );
+  }
+  return normalized;
 }
 
 /** Scope equality key used to find the default session for a chat. */
@@ -118,7 +158,7 @@ function scopeClause(scope: AgentScope): { sql: string; params: unknown[] } {
 export function requireAgentSession(
   database: DatabaseClient,
   sessionId: string,
-): AgentSessionSummary {
+): AgentSessionSummaryWithTitleSource {
   const row = database
     .prepare("SELECT * FROM agent_sessions WHERE id = ?")
     .get(sessionId) as Record<string, unknown> | undefined;
@@ -129,7 +169,7 @@ export function requireAgentSession(
 export function findAgentSession(
   database: DatabaseClient,
   scope: AgentScope,
-): AgentSessionSummary | null {
+): AgentSessionSummaryWithTitleSource | null {
   const { sql, params } = scopeClause(scope);
   const row = database
     .prepare(`SELECT * FROM agent_sessions WHERE ${sql} ORDER BY last_used_at DESC LIMIT 1`)
@@ -140,7 +180,7 @@ export function findAgentSession(
 export function createAgentSession(
   database: DatabaseClient,
   input: CreateAgentSessionInput,
-): AgentSessionSummary {
+): AgentSessionSummaryWithTitleSource {
   const { scope } = input;
   // scope_type is the legacy discriminator and cannot be widened without
   // rebuilding existing SQLite tables. origin_kind carries new repository /
@@ -148,15 +188,19 @@ export function createAgentSession(
   const legacyScopeType = scope.kind === "repository" || scope.kind === "domain"
     ? "general"
     : scope.kind;
+  const title = input.title === null || input.title === undefined
+    ? null
+    : normalizeTitle(input.title);
+  const titleSource = input.titleSource ?? (title === null ? "provisional" : "manual");
   database.prepare(
     `INSERT INTO agent_sessions (
       id, scope_type, origin_kind, repository_id, pr_number, issue_number, target_sha,
-      knowledge_document_id, domain_id, origin_route, title, dsh_session_id,
+      knowledge_document_id, domain_id, origin_route, title, title_source, dsh_session_id,
       dsh_home_path, workspace_path, provider, model, reasoning_effort, status,
       created_at, last_used_at
     ) VALUES (
       @id, @scopeType, @originKind, @repositoryId, @prNumber, @issueNumber, @targetSha,
-      @knowledgeDocumentId, @domainId, @originRoute, @title, NULL, @dshHomePath,
+      @knowledgeDocumentId, @domainId, @originRoute, @title, @titleSource, NULL, @dshHomePath,
       @workspacePath, @provider, @model, @reasoningEffort, 'idle', @createdAt,
       @lastUsedAt
     )`,
@@ -171,7 +215,8 @@ export function createAgentSession(
     knowledgeDocumentId: scope.knowledgeDocumentId ?? null,
     domainId: scope.domainId ?? null,
     originRoute: scope.route ?? null,
-    title: input.title ?? null,
+    title,
+    titleSource,
     dshHomePath: input.dshHomePath,
     workspacePath: input.workspacePath,
     provider: input.provider,
@@ -195,7 +240,7 @@ export function updateAgentSession(
     reasoningEffort?: string;
     title?: string | null;
   },
-): AgentSessionSummary {
+): AgentSessionSummaryWithTitleSource {
   const sets: string[] = [];
   const params: unknown[] = [];
   if (patch.status !== undefined) {
@@ -223,13 +268,54 @@ export function updateAgentSession(
     params.push(patch.reasoningEffort);
   }
   if (patch.title !== undefined) {
-    sets.push("title = ?");
-    params.push(patch.title);
+    if (patch.title === null) {
+      sets.push("title = NULL", "title_source = 'manual'");
+    } else {
+      sets.push("title = ?", "title_source = 'manual'");
+      params.push(normalizeTitle(patch.title));
+    }
   }
   if (sets.length > 0) {
     database.prepare(`UPDATE agent_sessions SET ${sets.join(", ")} WHERE id = ?`).run(...params, sessionId);
   }
   return requireAgentSession(database, sessionId);
+}
+
+/** Rename a session with explicit manual ownership of the resulting title. */
+export function renameAgentSession(
+  database: DatabaseClient,
+  sessionId: string,
+  title: string,
+): AgentSessionSummaryWithTitleSource {
+  return updateAgentSession(database, sessionId, { title });
+}
+
+export interface GeneratedAgentSessionTitleResult {
+  readonly updated: boolean;
+  readonly session: AgentSessionSummaryWithTitleSource;
+}
+
+/**
+ * Atomically promote a provisional title to a generated title. The source
+ * predicate makes a concurrent/manual rename win without application locks.
+ */
+export function setGeneratedAgentSessionTitleIfProvisional(
+  database: DatabaseClient,
+  sessionId: string,
+  title: string,
+): GeneratedAgentSessionTitleResult {
+  const normalized = normalizeTitle(title);
+  const result = database
+    .prepare(
+      `UPDATE agent_sessions
+       SET title = ?, title_source = 'generated'
+       WHERE id = ? AND title_source = 'provisional'`,
+    )
+    .run(normalized, sessionId);
+  return {
+    updated: result.changes === 1,
+    session: requireAgentSession(database, sessionId),
+  };
 }
 
 export function touchAgentSession(database: DatabaseClient, sessionId: string): void {
@@ -254,7 +340,7 @@ export interface AgentSessionListFilter {
 export function listAgentSessions(
   database: DatabaseClient,
   filter: AgentSessionListFilter = {},
-): AgentSessionSummary[] {
+): AgentSessionSummaryWithTitleSource[] {
   const clauses: string[] = [];
   const parameters: unknown[] = [];
   const add = (column: string, value: unknown) => {
