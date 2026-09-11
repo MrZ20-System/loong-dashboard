@@ -178,6 +178,24 @@ describe("AgentChatController conversation titles", () => {
     await controller.close();
   });
 
+  it("does not let native title discovery overwrite a manual title", async () => {
+    const { controller, database, runtime } = fixture();
+    const created = await controller.ensureSession({ scope: { kind: "general", route: "manual-before-native" } });
+    const updated = await controller.updateSession(created.session.id, { title: "Manual title" });
+    expect(updated.session.titleSource).toBe("manual");
+
+    await controller.acceptMessage(created.session.id, "first user message");
+    await waitForTurn(controller, created.session.id);
+    await new Promise((resolve) => setTimeout(resolve, 5));
+
+    expect(runtime.getTitleCalls).toBe(0);
+    expect(requireAgentSession(database, created.session.id)).toMatchObject({
+      title: "Manual title",
+      titleSource: "manual",
+    });
+    await controller.close();
+  });
+
   it("creates each scheduled occurrence with its own provisional task title", async () => {
     const { controller } = fixture();
     const first = await controller.ensureScheduledSession({

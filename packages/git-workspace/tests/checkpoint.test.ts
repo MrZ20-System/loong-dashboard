@@ -83,7 +83,7 @@ describe("runCheckpoint", () => {
     await git(["checkout", "main"]);
   });
 
-  it("pushes a source ref to a differently named remote branch without checkout", async () => {
+  it("canonical backup push resolves a source ref without checkout", async () => {
     await git(["remote", "add", "backup", remote]);
     const beforeBranch = await git(["branch", "--show-current"]);
     const result = await pushBackupRef({
@@ -101,7 +101,7 @@ describe("runCheckpoint", () => {
     ).toBe(result.sourceCommit);
   });
 
-  it("reports a non-fast-forward push without force or checkout", async () => {
+  it("canonical backup push rejects non-fast-forward updates without force or checkout", async () => {
     const remoteClone = path.join(root, "remote-clone");
     await execa("git", ["clone", remote, remoteClone]);
     await execa("git", ["config", "user.email", "remote@example.com"], { cwd: remoteClone });

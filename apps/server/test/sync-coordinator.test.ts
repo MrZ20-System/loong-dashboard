@@ -128,6 +128,137 @@ describe("RepositorySyncCoordinator", () => {
     await coordinator.close();
   });
 
+  it("advances the forward watermark only after a successful forward run", async () => {
+    const database = fixture();
+    const now = { value: new Date("2026-09-10T10:00:00.000Z") };
+    let failPullRequestForward = false;
+    const base = providerFor({ pull: undefined, issue: undefined });
+    const provider: GitHubMetadataProvider = {
+      ...base,
+      async *fetchPullRequestUpdates(input) {
+        if (failPullRequestForward) {
+          throw new Error("forward provider failed");
+        }
+        yield {
+          items: [],
+          pageInfo: { hasNextPage: false, endCursor: null },
+          rateLimit: { cost: 1, remaining: 4999, resetAt: "2026-09-10T00:00:00.000Z" },
+        };
+        expect(input.syncStartedAt).toBe("2026-09-10T10:00:00.000Z");
+      },
+    };
+    const coordinator = new RepositorySyncCoordinator({
+      database,
+      provider,
+      now: () => now.value,
+    });
+
+    const successfulRun = coordinator.start("vllm");
+    await expect(coordinator.waitForRun(successfulRun.syncRunId)).resolves.toMatchObject({
+      kind: "forward",
+      status: "completed",
+    });
+    expect(getRepositorySyncState(database, "vllm", "pull_request").watermarkUpdatedAt).toBe(
+      "2026-09-10T10:00:00.000Z",
+    );
+
+    now.value = new Date("2026-09-10T10:05:00.000Z");
+    failPullRequestForward = true;
+    const failedRun = coordinator.start("vllm");
+    await expect(coordinator.waitForRun(failedRun.syncRunId)).resolves.toMatchObject({
+      kind: "forward",
+      status: "partial",
+      streams: expect.arrayContaining([
+        expect.objectContaining({ entityKind: "pull_request", status: "failed" }),
+      ]),
+    });
+    expect(getRepositorySyncState(database, "vllm", "pull_request")).toMatchObject({
+      status: "failed",
+      watermarkUpdatedAt: "2026-09-10T10:00:00.000Z",
+    });
+
+    await coordinator.close();
+  });
+
+  it("keeps forward watermark and history cursor independent from history and PR fetch", async () => {
+    const database = fixture();
+    const base = providerFor({ pull: undefined, issue: undefined });
+    const historyInputs: HistorySyncInput[] = [];
+    const provider: GitHubMetadataProvider = {
+      ...base,
+      async *fetchPullRequestHistory(input) {
+        historyInputs.push(input);
+        yield {
+          items: [],
+          pageInfo: { hasNextPage: false, endCursor: null },
+          rateLimit: { cost: 1, remaining: 4999, resetAt: "2026-09-10T00:00:00.000Z" },
+        };
+      },
+      async *fetchIssueHistory() {
+        yield {
+          items: [],
+          pageInfo: { hasNextPage: false, endCursor: null },
+          rateLimit: { cost: 1, remaining: 4999, resetAt: "2026-09-10T00:00:00.000Z" },
+        };
+      },
+      async fetchPullRequest() {
+        return pullRequestItem({ number: 27 });
+      },
+    };
+    const coordinator = new RepositorySyncCoordinator({
+      database,
+      provider,
+      now: () => new Date("2026-09-10T10:00:00.000Z"),
+    });
+
+    const forwardRun = coordinator.start("vllm");
+    await coordinator.waitForRun(forwardRun.syncRunId);
+    const forwardWatermark = getRepositorySyncState(
+      database,
+      "vllm",
+      "pull_request",
+    ).watermarkUpdatedAt;
+    expect(forwardWatermark).toBe("2026-09-10T10:00:00.000Z");
+
+    updateRepositoryHistoryState(database, "vllm", "pull_request", {
+      enabled: true,
+      status: "idle",
+      targetDate: "2026-07-01",
+      cursor: "history-cursor",
+      recoveryAnchorUpdatedAt: "2026-08-01T00:00:00.000Z",
+    });
+    updateRepositoryHistoryState(database, "vllm", "issue", {
+      enabled: true,
+      status: "idle",
+      targetDate: "2026-07-01",
+      cursor: "issue-history-cursor",
+      recoveryAnchorUpdatedAt: "2026-08-01T00:00:00.000Z",
+    });
+
+    const historyRun = coordinator.startHistory("vllm", { targetDate: "2026-07-01" });
+    await coordinator.waitForRun(historyRun.syncRunId);
+    expect(historyInputs[0]).toMatchObject({ cursor: "history-cursor" });
+    expect(getRepositorySyncState(database, "vllm", "pull_request").watermarkUpdatedAt).toBe(
+      forwardWatermark,
+    );
+
+    updateRepositoryHistoryState(database, "vllm", "pull_request", {
+      enabled: true,
+      status: "idle",
+      cursor: "fetch-preserved-cursor",
+    });
+    const fetchRun = coordinator.startFetchPullRequest("vllm", 27);
+    await coordinator.waitForRun(fetchRun.syncRunId);
+    expect(getRepositorySyncState(database, "vllm", "pull_request").watermarkUpdatedAt).toBe(
+      forwardWatermark,
+    );
+    expect(getRepositoryHistoryState(database, "vllm", "pull_request").cursor).toBe(
+      "fetch-preserved-cursor",
+    );
+
+    await coordinator.close();
+  });
+
   it("bounds history to one durable page batch and never backfills current PR state", async () => {
     const database = fixture();
     const captures: {

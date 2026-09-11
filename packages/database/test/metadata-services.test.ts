@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  archiveBatch,
   completeSyncStream,
   createDomainRule,
   createSyncRun,
@@ -468,6 +469,45 @@ function comment(
 }
 
 describe("metadata upserts and queries", () => {
+  it("canonicalizes PR ordering, current archive filtering, and merged projection", () => {
+    withDatabase((database) => {
+      reconcileRepositories(database, [repository("repo")]);
+      upsertPullRequestPage(database, "repo", [
+        pullRequest(10, "2026-09-01T00:00:00.000Z"),
+        pullRequest(8, "2026-09-03T00:00:00.000Z"),
+        pullRequest(9, "2026-09-02T00:00:00.000Z", {
+          status: "merged",
+          stateRaw: "MERGED",
+          mergedAt: "2026-09-02T00:00:00.000Z",
+        }),
+        pullRequest(7, "2026-09-01T00:00:00.000Z", {
+          status: "merged",
+          stateRaw: "MERGED",
+          mergedAt: "2026-09-01T00:00:00.000Z",
+        }),
+      ]);
+      archiveBatch(database, {
+        repositoryId: "repo",
+        cutoff: "2026-09-04T00:00:00.000Z",
+        archiveAt: "2026-09-11T00:00:00.000Z",
+        includeMergedPrs: true,
+        includeClosedPrs: false,
+        includeClosedIssues: false,
+      });
+
+      expect(listPullRequests(database, "repo", {
+        calendarTimeZone: "UTC",
+      }).items.map((item) => item.number)).toEqual([8, 10]);
+      expect(listPullRequests(database, "repo", {
+        calendarTimeZone: "UTC",
+        sort: "number",
+      }).items.map((item) => item.number)).toEqual([10, 8]);
+      expect(listMergedPullRequests(database, "repo", {
+        calendarTimeZone: "UTC",
+      }).items.map((item) => item.number)).toEqual([9, 7]);
+    });
+  });
+
   it("replays PR and Issue pages idempotently while updating metadata", () => {
     withDatabase((database) => {
       reconcileRepositories(database, [repository("repo")]);

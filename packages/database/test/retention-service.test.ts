@@ -333,7 +333,7 @@ describe("metadata retention", () => {
     });
   });
 
-  it("never unarchives a terminal update, but automatically unarchives reopened metadata", () => {
+  it("canonicalizes Issue current filtering, reopen unarchive, and payload marker independence", () => {
     withDatabase((database) => {
       reconcileRepositories(database, [repository()]);
       upsertPullRequestPage(database, "repo", [
@@ -352,6 +352,7 @@ describe("metadata retention", () => {
         includeMergedPrs: true,
         includeClosedPrs: true,
         includeClosedIssues: true,
+        prune: true,
       });
       upsertPullRequestPage(database, "repo", [
         pullRequest(1, "2026-09-10T00:00:00.000Z", {
@@ -382,6 +383,10 @@ describe("metadata retention", () => {
       expect(database.prepare(
         "SELECT number, archived_at FROM issues",
       ).all()).toEqual([{ number: 1, archived_at: null }]);
+      expect(listIssues(database, "repo", { calendarTimeZone: "UTC" }).items.map((item) => item.number)).toEqual([1]);
+      expect(database.prepare(
+        "SELECT archived_at, payload_pruned_at FROM issues WHERE repository_id = 'repo' AND number = 1",
+      ).get()).toEqual({ archived_at: null, payload_pruned_at: "2026-09-11T00:00:00.000Z" });
     });
   });
 
