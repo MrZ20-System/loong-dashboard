@@ -4,7 +4,8 @@ LoongBoard 是本地优先、单用户的工程工作台。一个浏览器连接
 
 ## 当前能力
 
-- 按仓库浏览 PR、Issue 和日期活动，手动或定时同步元数据，筛选和分页。首次同步按更新时间读取最近 7/30 天的所有状态，后续按成功水位增量同步。
+- 按仓库浏览当前 PR、按 PR Number 排序、按真实 `mergedAt` 浏览 Merged 时间线，以及浏览 Issue 和日期活动；列表从本地 SQLite 进行筛选和 cursor 分页。
+- 手动或定时执行 forward metadata sync；History Backfill 以持久 cursor/anchor 持续扩大本地 PR/Issue 元数据覆盖范围，单 PR Fetch 独立补抓缺失项。
 - 根据 PR 变更文件路径及用户维护的规则生成确定性的 Domain 标签。
 - 从本地 Git 读取 PR diff、完整文件及目录树；PR 对话使用可复用 worktree。
 - 通过外部 DeepSeek Harness 原生 Host 运行 Agent，保存和恢复会话，实时展示文本、工具事件及交互请求，使用原生模型、命令和运行配置；Agent 页面、业务页与全局浮窗共享会话。
@@ -15,6 +16,8 @@ LoongBoard 是本地优先、单用户的工程工作台。一个浏览器连接
 ## 数据归属
 
 GitHub 是远端元数据源，SQLite 是列表读取模型。Git 是代码内容与实际 revision 的依据。Knowledge 正文以磁盘 Markdown 为准，Git 提供长期历史；SQLite 同时保存知识索引、短期版本、会话消息和调度状态，不能把整个数据库当作可丢缓存。Worktree 是缓存位置，但其中未提交改动仍需保护。
+
+`pull_requests` 是 PR 当前事实的唯一表。Pull Requests 以 `updated_at` 或 number 查询；Merged 只是其中 `merged_at IS NOT NULL` 的投影，按 `merged_at` 分组和排序，不拥有独立表或同步流程。产品不维护 PR Daily Snapshot、历史 EOD 状态或 timeline replay。
 
 ## 产品边界
 

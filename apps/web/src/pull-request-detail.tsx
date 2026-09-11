@@ -1,5 +1,6 @@
 import {
   keepPreviousData,
+  useMutation,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
@@ -38,6 +39,8 @@ import {
   fetchRepositoryTree,
   preparePullRequest,
 } from "./diff-client";
+import { ApiRequestError } from "./metadata-client";
+import { fetchSinglePullRequest, fetchSyncRun } from "./sync-client";
 import {
   prefetchChangedFileContents,
   prFileQueryOptions,
@@ -375,6 +378,22 @@ export function PullRequestDetailPage() {
     enabled,
   );
   const queryClient = useQueryClient();
+  const [fetchRunId, setFetchRunId] = useState<string | null>(null);
+  const fetchRun = useQuery({
+    queryKey: ["sync-run", repositoryId, fetchRunId],
+    enabled: fetchRunId !== null,
+    queryFn: ({ signal }) => fetchSyncRun(repositoryId, fetchRunId as string, signal),
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return fetchRunId !== null && (status === undefined || status === "queued" || status === "running")
+        ? 1_000
+        : false;
+    },
+  });
+  const fetchPullRequest = useMutation({
+    mutationFn: () => fetchSinglePullRequest(repositoryId, number),
+    onSuccess: (accepted) => setFetchRunId(accepted.syncRunId),
+  });
   const [mode, setMode] = useState<WorkbenchMode>("changes");
   const [changesViewMode, setChangesViewMode] =
     useState<ChangesViewMode>("split");
@@ -461,25 +480,66 @@ export function PullRequestDetailPage() {
     setFullSelectedPath(changedHeadFile?.path ?? headFiles[0] ?? null);
   }, [files, fullSelectedPath, headFiles, headFileSet]);
 
+  useEffect(() => {
+    if (fetchRun.data?.status !== "completed") return;
+    void queryClient.invalidateQueries({ queryKey: ["pr", repositoryId, number] });
+    void queryClient.invalidateQueries({ queryKey: ["pr-prepare", repositoryId, number] });
+  }, [fetchRun.data?.status, number, queryClient, repositoryId]);
+
   const fullChangedFile =
     fullSelectedPath === null
       ? null
       : files.find((file) => file.path === fullSelectedPath) ?? null;
 
-  if (!enabled) return <p role="alert">Invalid pull request number.</p>;
-  if (detail.isPending) return <p role="status">Loading pull request…</p>;
+  if (!enabled) {
+    return (
+      <section className="pr-detail pr-detail--focus pr-detail--unavailable" aria-labelledby="pr-unavailable-title">
+        <div className="pr-unavailable-card">
+          <h2 id="pr-unavailable-title">Pull request unavailable</h2>
+          <p role="alert">Invalid pull request number.</p>
+        </div>
+      </section>
+    );
+  }
+  if (detail.isPending) {
+    return (
+      <section className="pr-detail pr-detail--focus pr-detail--unavailable" aria-labelledby="pr-unavailable-title">
+        <div className="pr-unavailable-card">
+          <h2 id="pr-unavailable-title">Pull request</h2>
+          <p role="status">Loading pull request…</p>
+        </div>
+      </section>
+    );
+  }
   if (detail.isError) {
     const notFound =
-      detail.error instanceof Error && /not found/i.test(detail.error.message);
+      (detail.error instanceof ApiRequestError && detail.error.status === 404) ||
+      (detail.error instanceof Error && /not found|not available locally/i.test(detail.error.message));
+    const activeFetch = fetchPullRequest.isPending || (fetchRunId !== null && (fetchRun.isPending || fetchRun.data?.status === "queued" || fetchRun.data?.status === "running"));
+    const fetchFailed = fetchRun.data !== undefined && fetchRun.data.status !== "completed" && !activeFetch;
     return (
-      <section>
-        <h2>Pull request unavailable</h2>
-        <p role="alert">{detail.error.message}</p>
+      <section className="pr-detail pr-detail--focus pr-detail--unavailable" aria-labelledby="pr-unavailable-title">
+        <div className="pr-unavailable-card">
+        <h2 id="pr-unavailable-title">Pull request unavailable</h2>
+        {notFound ? <p role="alert">PR #{number} isn&apos;t available locally.</p> : <p role="alert">{detail.error.message}</p>}
+        {notFound && (
+          <div className="pr-fetch-missing">
+            <button type="button" className="button-primary" onClick={() => fetchPullRequest.mutate()} disabled={fetchPullRequest.isPending || activeFetch}>
+              {fetchPullRequest.isPending || activeFetch ? "Fetching PR…" : "Fetch PR"}
+            </button>
+            {fetchPullRequest.isError && <p role="alert">Unable to fetch PR: {fetchPullRequest.error.message}</p>}
+            {fetchRun.isError && <p role="alert">Unable to check fetch run: {fetchRun.error.message}</p>}
+            {activeFetch && <p role="status">Fetching PR from GitHub…</p>}
+            {fetchRun.data?.status === "completed" && <p role="status">PR fetched. Refreshing local details…</p>}
+            {fetchFailed && <p role="alert">Fetch PR failed: {fetchRun.data?.error ?? `run ${fetchRun.data?.status}`}</p>}
+          </div>
+        )}
         {notFound && (
           <Link to={`/repositories/${encodeURIComponent(repositoryId)}/pulls`}>
             Back to pull requests
           </Link>
         )}
+        </div>
       </section>
     );
   }

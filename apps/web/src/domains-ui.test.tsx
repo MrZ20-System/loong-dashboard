@@ -5,7 +5,7 @@ import { App, appQueryClient } from "./App";
 
 const repository = {
   id: "repo", key: "repo", displayName: "LoongBoard", githubOwner: "acme", githubName: "project",
-  localPath: "/tmp/project", remoteName: "origin", defaultBranch: "main", worktreeSlots: 1, enabled: true,
+  localPath: "/tmp/project", remoteName: "origin", defaultBranch: "main", worktreeSlots: 1, enabled: true, mergedPullRequestCount: 0,
 };
 
 const ciRule = { id: "dom_ci", repositoryId: "repo", name: "CI", color: "#5b8def", position: 0, enabled: true, includePatterns: [".github/**"], excludePatterns: [], createdAt: "2026-09-03T00:00:00.000Z", updatedAt: "2026-09-03T00:00:00.000Z" };
@@ -35,7 +35,7 @@ function mockApi(options: { pulls?: unknown[]; domains?: unknown[]; reclassifica
       }
       return json({ items: options.domains ?? [], reclassification: options.reclassification ?? { running: false, pendingCount: null } });
     }
-    if (url.pathname.endsWith("/pulls")) return json({ items: options.pulls ?? [], nextCursor: null, calendarTimeZone: "Asia/Shanghai" });
+    if (url.pathname.endsWith("/pulls")) return json({ items: options.pulls ?? [], page: 1, pageSize: 100, totalCount: (options.pulls ?? []).length, totalPages: 1, calendarTimeZone: "Asia/Shanghai" });
     return json({ error: { code: "INTERNAL_ERROR", message: "not found" } }, 404);
   });
   vi.stubGlobal("fetch", fetchMock);

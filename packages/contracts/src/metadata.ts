@@ -12,6 +12,18 @@ import {
 } from "./validation.js";
 
 const nonNegativeIntegerSchema = z.number().int().nonnegative();
+const listSearchSchema = z.string().trim().max(200).optional();
+export const pullRequestListSortSchema = z.enum(["updated", "number"]);
+
+/** Page-based list controls used by Pull Requests and Merged projections. */
+const pageQuerySchema = z.preprocess(
+  (value) => (value === undefined ? undefined : Number(value)),
+  z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+);
+const pageSizeQuerySchema = z.preprocess(
+  (value) => (value === undefined ? undefined : Number(value)),
+  z.number().int().positive().max(100).optional(),
+);
 
 export const pullRequestListItemSchema = z
   .object({
@@ -64,7 +76,39 @@ export const activityDaySchema = z
 export const pullRequestsResponseSchema = z
   .object({
     items: z.array(pullRequestListItemSchema),
-    nextCursor: opaqueCursorSchema.nullable(),
+    page: z.number().int().positive(),
+    pageSize: z.number().int().positive().max(100),
+    totalCount: z.number().int().nonnegative(),
+    totalPages: z.number().int().nonnegative(),
+    calendarTimeZone: z.string().trim().min(1),
+  })
+  .strict();
+
+/** Current PR metadata projected onto the immutable merge-time timeline. */
+export const mergedPullRequestListItemSchema = pullRequestListItemSchema
+  .extend({ mergedAt: utcDateTimeSchema })
+  .strict();
+
+export const mergedPullRequestsQuerySchema = z
+  .object({
+    page: pageQuerySchema,
+    search: listSearchSchema,
+    limit: pageSizeQuerySchema,
+    domain: z.preprocess(
+      (value) =>
+        value === undefined ? undefined : typeof value === "string" ? [value] : value,
+      z.array(domainRuleIdSchema).max(20).optional(),
+    ),
+  })
+  .strict();
+
+export const mergedPullRequestsResponseSchema = z
+  .object({
+    items: z.array(mergedPullRequestListItemSchema),
+    page: z.number().int().positive(),
+    pageSize: z.number().int().positive().max(100),
+    totalCount: z.number().int().nonnegative(),
+    totalPages: z.number().int().nonnegative(),
     calendarTimeZone: z.string().trim().min(1),
   })
   .strict();
@@ -107,7 +151,10 @@ export const pullRequestsQuerySchema = z.preprocess(
       from: calendarDateSchema.optional(),
       to: calendarDateSchema.optional(),
       status: pullRequestStatusSchema.optional(),
-      cursor: opaqueCursorSchema.optional(),
+      sort: pullRequestListSortSchema.optional(),
+      search: listSearchSchema,
+      page: pageQuerySchema,
+      limit: pageSizeQuerySchema,
       // Fastify surfaces a repeated query key as an array; a single value is
       // normalized so `?domain=a` and `?domain=a&domain=b` share one code path.
       // Semantics: a pull request matches when it carries ANY selected domain.
@@ -131,6 +178,11 @@ export const issuesQuerySchema = z.preprocess(
       from: calendarDateSchema.optional(),
       to: calendarDateSchema.optional(),
       status: issueStatusSchema.optional(),
+      search: listSearchSchema,
+      limit: z.preprocess(
+        (value) => (value === undefined ? undefined : Number(value)),
+        z.number().int().positive().max(100).optional(),
+      ),
       cursor: opaqueCursorSchema.optional(),
     })
     .strict()
@@ -182,6 +234,10 @@ export const issueDetailSchema = issueListItemSchema.extend({
 });
 
 export type PullRequestListItem = z.infer<typeof pullRequestListItemSchema>;
+export type MergedPullRequestListItem = z.infer<typeof mergedPullRequestListItemSchema>;
+export type MergedPullRequestsQuery = z.infer<typeof mergedPullRequestsQuerySchema>;
+export type MergedPullRequestsResponse = z.infer<typeof mergedPullRequestsResponseSchema>;
+export type PullRequestListSort = z.infer<typeof pullRequestListSortSchema>;
 export type PullRequestDetail = z.infer<typeof pullRequestDetailSchema>;
 export type IssueComment = z.infer<typeof issueCommentSchema>;
 export type IssueListItem = z.infer<typeof issueListItemSchema>;

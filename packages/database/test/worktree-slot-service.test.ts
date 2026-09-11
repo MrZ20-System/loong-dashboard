@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   createAgentSession,
+  deleteWorktreeSlot,
   listWorktreeSlots,
   openDatabase,
   reconcileRepositories,
@@ -150,6 +151,27 @@ describe("worktree slot service", () => {
       expect(reused.busySessionId).toBe("sess_busy");
       expect(reused.prNumber).toBe(2);
       expect(reused.targetSha).toBe(SHA_B);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("deletes only exact physical slot metadata after janitor removal", () => {
+    const database = freshDatabase();
+    try {
+      const row = recordWorktreeSlotUse(database, {
+        repositoryId: "alpha",
+        slotName: "slot-01",
+        path: "/worktrees/alpha/slot-01",
+        prNumber: 1,
+        targetSha: SHA_A,
+        lastUsedAt: T1,
+      });
+      expect(
+        deleteWorktreeSlot(database, "alpha", "slot-01", "/worktrees/alpha/other"),
+      ).toBe(false);
+      expect(deleteWorktreeSlot(database, "alpha", "slot-01", row.path)).toBe(true);
+      expect(listWorktreeSlots(database, "alpha")).toEqual([]);
     } finally {
       database.close();
     }

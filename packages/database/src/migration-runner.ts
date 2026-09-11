@@ -6,7 +6,14 @@ import { issueStateConstraintMigration } from "./migrations/003-issue-state-cons
 import { domainClassificationMigration } from "./migrations/004-domain-classification.js";
 import { issueDetailCacheMigration } from "./migrations/005-issue-detail-cache.js";
 import { agentRuntimeSchedulerMigration } from "./migrations/006-agent-runtime-scheduler.js";
-import { recoverInterruptedSyncStates } from "./sync-service.js";
+import { repositorySyncHistoryMigration } from "./migrations/007-repository-sync-history.js";
+import { pullRequestLifecycleMigration } from "./migrations/008-pull-request-lifecycle.js";
+import { listQueryModesMigration } from "./migrations/009-list-query-modes.js";
+import { removeDailyProjectionsMigration } from "./migrations/010-remove-daily-projections.js";
+import {
+  recoverInterruptedSyncRuns,
+  recoverInterruptedSyncStates,
+} from "./sync-service.js";
 
 export interface Migration {
   readonly id: string;
@@ -20,6 +27,10 @@ const migrations: readonly Migration[] = [
   domainClassificationMigration,
   issueDetailCacheMigration,
   agentRuntimeSchedulerMigration,
+  repositorySyncHistoryMigration,
+  pullRequestLifecycleMigration,
+  listQueryModesMigration,
+  removeDailyProjectionsMigration,
 ];
 
 function orderedMigrations(items: readonly Migration[]): readonly Migration[] {
@@ -74,6 +85,7 @@ export function openDatabase(databasePath: string): Database.Database {
   try {
     runMigrations(database);
     recoverInterruptedSyncStates(database);
+    recoverInterruptedSyncRuns(database);
     return database;
   } catch (error) {
     database.close();

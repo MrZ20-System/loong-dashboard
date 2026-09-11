@@ -91,3 +91,29 @@ The same-input comparison was reviewed at full resolution. It confirms the reque
 No actionable P0, P1, or P2 findings remain in the requested Issue-header scope.
 
 final result: passed
+
+## Merged page pagination addendum (2026-09-10)
+
+## Comparison inputs
+
+- Source reference: user-provided GitHub-style merged-list screenshot (`1092 x 600`, desktop, light theme).
+- Implemented view: `http://127.0.0.1:5173/repositories/vllm-ascend/merged`
+- Implementation capture: in-app browser CUA snapshots captured during this task at the current 1357 x 987 desktop viewport; the browser bridge does not persist its snapshot buffer as a workspace file.
+- Theme and state: light theme, vLLM Ascend Merged page, page 1 and page 4.
+
+## Comparison history
+
+1. The baseline used a weak date label and thin divider, a generic check mark for every merged row, no merged count in the sidebar, and a separate load-more interaction.
+2. The first implementation introduced shared indexed pagination, a merge icon, the sidebar count, and tinted date groups with a visible timeline.
+3. The acceptance pass strengthened URL canonicalization, numeric substring search, narrow-screen wrapping, and the visual hierarchy of each date group.
+
+## Final comparison
+
+- Full view: date sections are now immediately distinguishable through a tinted bordered header, merge-node icon, count label, connected timeline, and a bordered list card.
+- Focused component: row state uses the product's Codicon merge icon instead of a check mark; the same shared pagination renders page indexes, Previous/Next, ellipses, and an arbitrary-page input on PR and Merged pages.
+- Data/UI consistency: the sidebar shows the exact Merged count and the page summary shows the visible item range and total.
+- Interaction checks: direct navigation to Merged page 4 worked; stale PR/Merged cursor parameters were removed; Issues removed page parameters and retained cursor mode; numeric search `2026` matched titles and authors containing that continuous substring.
+- Responsive check: the 390px rules now constrain root width, hide the secondary sync-status text, tighten the header, wrap metadata controls, and make page indexes horizontally scrollable within their own control instead of widening the page.
+- No actionable P0, P1, or P2 visual finding remains in the requested flow. No visible application error boundary appeared during browser acceptance. The current browser bridge does not expose a console-log API, so console inspection was not claimed.
+
+final result: passed

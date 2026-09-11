@@ -14,15 +14,23 @@
 | Repository / Issue | 配置的本地仓库根目录 |
 | Domain | system workspace，包含 domains/ 与 prompts/ |
 | Knowledge / 普通 general | knowledge 根目录 |
-| 调度创建的 general | 任务显式配置的 workspace |
+| 调度创建的 general | 任务显式配置的 workspace；每次 scheduled run 都创建独立持久会话 |
 
 origin 是创建来源，workspace 是执行绑定。全局 Agent、业务面板和 Dock 通过相同产品 session ID 打开会话。每个会话拥有独立 `runtime.statePath/agent-sessions/<id>/dsh-home`。DSH 保存原生 transcript，LoongBoard 保存 opaque runtime ID、项目索引及 normalized 消息兼容缓存，不读取或重建 DSH 内部日志。
 
 原生 Host 仅监听 loopback。启动 token 和认证 cookie 留在 adapter，浏览器只访问 LoongBoard API。GitHub token 不注入 DSH 子进程。Settings 保存的 provider secret 通过 DSH 的动态 provider settings 和 credentials 服务配置到对应独立 home；provider 与凭证引用由 DSH 发现，产品不维护静态环境变量映射。生产运行使用受控的 `env`、`startupTimeoutMs` 和测试/嵌入用 `transportFactory` 参数；adapter 负责回收原生 Host 进程及其 stream，不把 provider secret 复制到进程环境。
 
+## Conversation Archive
+
+DSH 的 session/runtime 仍是 conversation source of truth。当前 adapter 没有可依赖的稳定官方 conversation export 时，`AgentArchiveExporter` 只从 SQLite 中 LoongBoard 已保存的 normalized session metadata 与 messages 生成独立 archive repository 的 `conversations/<safe-session-id>/metadata.json` 和 `transcript.jsonl`。它不读取或复制 `dsh-home`、provider secrets、credentials、cache 或任何 runtime 目录，也不把 archive 反向当作 DSH 状态。
+
+Archive export 与 push 由独立的 `agent.archive.checkpoint` / `agent.archive.push` system tasks 调度。前者导出 allowlist 后在已存在的 Git 仓库执行 checkpoint，后者仅通过 source ref → remote backup branch 的显式 refspec 推送；不会 checkout、force push、pull/rebase/merge 或自动 `git init`。Archive 路径边界拒绝 runtime state、session/provider secrets、worktrees、Knowledge 和代码仓库内路径。
+
+导出使用固定字段 allowlist、稳定 session/message 顺序、完整 JSONL 行和 canonical JSON；每个文件通过临时文件 rename 原子替换，内容未变化时不重写，重复执行幂等。session id 必须是安全的单目录名；路径穿越会在任何写入前拒绝。数据库 projection 一次读取 sessions、一次按 session id 批量读取 messages，避免按会话 N+1 查询。
+
 ## 能力与交互
 
-模型和 reasoning 来自 `session/modelCatalog`，命令来自 `commands/list`。Settings 只配置新会话默认值；composer 修改当前会话的配置，adapter 在下一次 prompt 前调用 `session/selectModel`。普通 prompt 进入原生队列，slash command 先交给 `commands/execute`，未匹配的内容按普通 prompt 处理。
+模型和 reasoning 来自 `session/modelCatalog`，命令来自 `commands/list`。system.yaml 提供安装级 fallback，启动时 `settings.json` 中已保存的 Agent operational overrides 会 hydrate 到 AgentChatController/runtime；Settings 只配置新会话默认值，Scheduled Task 自身保存的 provider/model/reasoning 仍是调度 run 的 authority。composer 修改当前会话的配置，adapter 在下一次 prompt 前调用 `session/selectModel`。普通 prompt 进入原生队列，slash command 先交给 `commands/execute`，未匹配的内容按普通 prompt 处理。
 
 原生 Host 的 approval request 映射为通用交互请求，由用户点击 runtime 提供的选项后答复；不会自动允许。其他尚未适配的交互委托给 Host 的默认处理链。当前适配层不等同于完整官方客户端，复杂原生视图仍可增量扩展。
 

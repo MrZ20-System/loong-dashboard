@@ -26,6 +26,7 @@ export const repositorySummarySchema = z
     enabled: z.boolean(),
     /** Cached local row counts used by the repository navigation. */
     pullRequestCount: z.number().int().nonnegative().optional(),
+    mergedPullRequestCount: z.number().int().nonnegative().optional(),
     issueCount: z.number().int().nonnegative().optional(),
   })
   .strict()

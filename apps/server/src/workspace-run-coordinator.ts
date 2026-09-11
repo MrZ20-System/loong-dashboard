@@ -14,6 +14,11 @@ export class WorkspaceRunCoordinator {
     return this.active.has(resolve(path));
   }
 
+  /** Snapshot live ownership for maintenance; callers must treat it as advisory. */
+  busyPaths(): readonly string[] {
+    return [...this.active];
+  }
+
   /**
    * Claim the workspace. Returns an idempotent release function, or null
    * when another agent turn already owns the workspace.

@@ -51,6 +51,7 @@ function mapRepository(row: Record<string, unknown>): RepositoryRecord {
     worktreeSlots: row.worktree_slots as number,
     enabled: (row.enabled as number) === 1,
     pullRequestCount: Number(row.pull_request_count ?? 0),
+    mergedPullRequestCount: Number(row.merged_pull_request_count ?? 0),
     issueCount: Number(row.issue_count ?? 0),
     createdAt: row.created_at as string,
     updatedAt: row.updated_at as string,
@@ -187,7 +188,18 @@ export function reconcileRepositories(
 
 function listAllRepositories(database: DatabaseClient): RepositoryRecord[] {
   const rows = database
-    .prepare("SELECT * FROM repositories ORDER BY key ASC")
+    .prepare(
+      `SELECT repositories.*,
+              (SELECT COUNT(*) FROM pull_requests
+               WHERE pull_requests.repository_id = repositories.id) AS pull_request_count,
+              (SELECT COUNT(*) FROM pull_requests
+               WHERE pull_requests.repository_id = repositories.id
+                 AND pull_requests.merged_at IS NOT NULL) AS merged_pull_request_count,
+              (SELECT COUNT(*) FROM issues
+               WHERE issues.repository_id = repositories.id) AS issue_count
+       FROM repositories
+       ORDER BY key ASC`,
+    )
     .all() as Array<Record<string, unknown>>;
   return rows.map(mapRepository);
 }
@@ -198,6 +210,9 @@ export function listRepositories(database: DatabaseClient): RepositoryRecord[] {
       `SELECT repositories.*,
               (SELECT COUNT(*) FROM pull_requests
                WHERE pull_requests.repository_id = repositories.id) AS pull_request_count,
+              (SELECT COUNT(*) FROM pull_requests
+               WHERE pull_requests.repository_id = repositories.id
+                 AND pull_requests.merged_at IS NOT NULL) AS merged_pull_request_count,
               (SELECT COUNT(*) FROM issues
                WHERE issues.repository_id = repositories.id) AS issue_count
        FROM repositories
@@ -217,6 +232,9 @@ export function getRepository(
       `SELECT repositories.*,
               (SELECT COUNT(*) FROM pull_requests
                WHERE pull_requests.repository_id = repositories.id) AS pull_request_count,
+              (SELECT COUNT(*) FROM pull_requests
+               WHERE pull_requests.repository_id = repositories.id
+                 AND pull_requests.merged_at IS NOT NULL) AS merged_pull_request_count,
               (SELECT COUNT(*) FROM issues
                WHERE issues.repository_id = repositories.id) AS issue_count
        FROM repositories WHERE id = ?

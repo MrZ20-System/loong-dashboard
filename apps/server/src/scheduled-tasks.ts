@@ -27,8 +27,13 @@ import type { SchedulerEngine } from "./scheduler.js";
 /** Actions backed by existing Server services; arbitrary command strings are rejected. */
 export const SUPPORTED_SYSTEM_ACTIONS = [
   "repository.sync",
+  "repository.worktrees.cleanup",
+  "git.checkpoint",
+  "git.push",
   "knowledge.checkpoint",
   "knowledge.push",
+  "agent.archive.checkpoint",
+  "agent.archive.push",
 ] as const;
 
 function requireSupportedSystemAction(action: string | undefined): void {

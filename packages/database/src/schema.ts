@@ -71,6 +71,158 @@ export const repositorySyncState = sqliteTable(
   ],
 );
 
+export const repositorySyncRuns = sqliteTable(
+  "repository_sync_runs",
+  {
+    id: text("id").primaryKey(),
+    repositoryId: text("repository_id")
+      .notNull()
+      .references(() => repositories.id, { onDelete: "cascade" }),
+    kind: text("kind", { enum: ["forward", "history", "fetch_pr"] }).notNull(),
+    trigger: text("trigger", {
+      enum: ["automatic", "manual", "api", "system"],
+    }).notNull(),
+    status: text("status", {
+      enum: ["queued", "running", "completed", "partial", "failed", "interrupted"],
+    }).notNull(),
+    requestedAt: text("requested_at").notNull(),
+    startedAt: text("started_at"),
+    finishedAt: text("finished_at"),
+    selectorJson: text("selector_json").notNull().default("{}"),
+    itemsSeen: integer("items_seen").notNull().default(0),
+    itemsWritten: integer("items_written").notNull().default(0),
+    error: text("error"),
+  },
+  (table) => [
+    index("repository_sync_runs_repository_started_idx").on(
+      table.repositoryId,
+      desc(table.startedAt),
+    ),
+    index("repository_sync_runs_repository_kind_status_idx").on(
+      table.repositoryId,
+      table.kind,
+      table.status,
+    ),
+    check(
+      "repository_sync_runs_kind_check",
+      sql`${table.kind} IN ('forward', 'history', 'fetch_pr')`,
+    ),
+    check(
+      "repository_sync_runs_trigger_check",
+      sql`${table.trigger} IN ('automatic', 'manual', 'api', 'system')`,
+    ),
+    check(
+      "repository_sync_runs_status_check",
+      sql`${table.status} IN ('queued', 'running', 'completed', 'partial', 'failed', 'interrupted')`,
+    ),
+    check("repository_sync_runs_items_seen_check", sql`${table.itemsSeen} >= 0`),
+    check("repository_sync_runs_items_written_check", sql`${table.itemsWritten} >= 0`),
+  ],
+);
+
+export const repositorySyncRunStreams = sqliteTable(
+  "repository_sync_run_streams",
+  {
+    runId: text("run_id")
+      .notNull()
+      .references(() => repositorySyncRuns.id, { onDelete: "cascade" }),
+    entityKind: text("entity_kind", { enum: ["pull_request", "issue"] }).notNull(),
+    status: text("status", {
+      enum: ["queued", "running", "completed", "partial", "failed", "interrupted"],
+    }).notNull(),
+    pagesFetched: integer("pages_fetched").notNull().default(0),
+    itemsSeen: integer("items_seen").notNull().default(0),
+    itemsWritten: integer("items_written").notNull().default(0),
+    watermarkBefore: text("watermark_before"),
+    watermarkAfter: text("watermark_after"),
+    rateLimitRemaining: integer("rate_limit_remaining"),
+    startedAt: text("started_at"),
+    finishedAt: text("finished_at"),
+    error: text("error"),
+  },
+  (table) => [
+    primaryKey({ columns: [table.runId, table.entityKind] }),
+    index("repository_sync_run_streams_status_idx").on(table.status, table.finishedAt),
+    check(
+      "repository_sync_run_streams_entity_kind_check",
+      sql`${table.entityKind} IN ('pull_request', 'issue')`,
+    ),
+    check(
+      "repository_sync_run_streams_status_check",
+      sql`${table.status} IN ('queued', 'running', 'completed', 'partial', 'failed', 'interrupted')`,
+    ),
+    check("repository_sync_run_streams_pages_check", sql`${table.pagesFetched} >= 0`),
+    check("repository_sync_run_streams_items_seen_check", sql`${table.itemsSeen} >= 0`),
+    check("repository_sync_run_streams_items_written_check", sql`${table.itemsWritten} >= 0`),
+    check(
+      "repository_sync_run_streams_rate_limit_check",
+      sql`${table.rateLimitRemaining} IS NULL OR ${table.rateLimitRemaining} >= 0`,
+    ),
+  ],
+);
+
+export const repositorySyncRunTargets = sqliteTable(
+  "repository_sync_run_targets",
+  {
+    runId: text("run_id")
+      .notNull()
+      .references(() => repositorySyncRuns.id, { onDelete: "cascade" }),
+    repositoryId: text("repository_id")
+      .notNull()
+      .references(() => repositories.id, { onDelete: "cascade" }),
+    prNumber: integer("pr_number").notNull(),
+    headSha: text("head_sha").notNull(),
+    reason: text("reason", { enum: ["new", "head_changed", "retry", "history", "fetch_pr"] }).notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.runId, table.repositoryId, table.prNumber] }),
+    index("repository_sync_run_targets_repository_idx").on(
+      table.repositoryId,
+      table.prNumber,
+    ),
+    check("repository_sync_run_targets_pr_number_check", sql`${table.prNumber} > 0`),
+  ],
+);
+
+export const repositoryHistoryState = sqliteTable(
+  "repository_history_state",
+  {
+    repositoryId: text("repository_id")
+      .notNull()
+      .references(() => repositories.id, { onDelete: "cascade" }),
+    entityKind: text("entity_kind", { enum: ["pull_request", "issue"] }).notNull(),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(false),
+    status: text("status", {
+      enum: ["idle", "running", "paused", "failed", "completed"],
+    }).notNull().default("idle"),
+    targetDate: text("target_date"),
+    oldestCoveredDay: text("oldest_covered_day"),
+    cursor: text("cursor"),
+    recoveryAnchorUpdatedAt: text("recovery_anchor_updated_at"),
+    lastRunId: text("last_run_id").references(() => repositorySyncRuns.id, {
+      onDelete: "set null",
+    }),
+    lastError: text("last_error"),
+    updatedAt: text("updated_at").notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.repositoryId, table.entityKind] }),
+    index("repository_history_state_target_idx").on(
+      table.repositoryId,
+      table.entityKind,
+      table.oldestCoveredDay,
+    ),
+    check(
+      "repository_history_state_entity_kind_check",
+      sql`${table.entityKind} IN ('pull_request', 'issue')`,
+    ),
+    check(
+      "repository_history_state_status_check",
+      sql`${table.status} IN ('idle', 'running', 'paused', 'failed', 'completed')`,
+    ),
+  ],
+);
+
 export const pullRequests = sqliteTable(
   "pull_requests",
   {
@@ -113,6 +265,13 @@ export const pullRequests = sqliteTable(
       desc(table.updatedAt),
       desc(table.number),
     ),
+    index("pull_requests_repository_number_idx").on(
+      table.repositoryId,
+      desc(table.number),
+    ),
+    index("pull_requests_repository_merged_at_number_idx")
+      .on(table.repositoryId, desc(table.mergedAt), desc(table.number))
+      .where(sql`${table.mergedAt} IS NOT NULL`),
     index("pull_requests_status_updated_idx").on(
       table.repositoryId,
       table.status,
@@ -542,6 +701,10 @@ export const schema = {
   pullRequestFiles,
   pullRequests,
   repositories,
+  repositoryHistoryState,
+  repositorySyncRunStreams,
+  repositorySyncRunTargets,
+  repositorySyncRuns,
   repositorySyncState,
   scheduledTaskRuns,
   scheduledTasks,

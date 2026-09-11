@@ -4,6 +4,7 @@ export { openDatabase, runMigrations } from "./migration-runner.js";
 export type { Migration } from "./migration-runner.js";
 export * from "./schema.js";
 export {
+  addDaysToCalendarDate,
   calendarDateRangeToUtc,
   calendarDateToUtc,
   utcDateToCalendarDate,
@@ -17,21 +18,39 @@ export {
 } from "./repository-service.js";
 export {
   completeSyncStream,
+  completeSyncRunStream,
+  createSyncRun,
   failSyncStream,
+  failSyncRunStream,
+  getSyncRun,
   getRepositorySyncState,
   getRepositorySyncStatus,
+  getRepositoryHistoryState,
   InvalidSyncTransitionError,
+  listSyncRuns,
+  markSyncRunStarted,
+  recordSyncRunPage,
+  recordSyncRunTarget,
+  listSyncRunTargets,
   recoverInterruptedSyncStates,
+  recoverInterruptedSyncRuns,
   startSyncStream,
   startRepositorySync,
   SyncAlreadyRunningError,
+  SyncRunNotFoundError,
+  updateRepositoryHistoryState,
 } from "./sync-service.js";
 export type {
   BeginStreamInput,
   CompleteStreamInput,
   FailStreamInput,
+  CreateSyncRunInput,
+  SyncRunPageUpdate,
+  SyncRunTargetInput,
+  UpdateHistoryStateInput,
 } from "./sync-service.js";
 export {
+  deleteWorktreeSlot,
   listWorktreeSlots,
   recordWorktreeSlotUse,
 } from "./worktree-slot-service.js";
@@ -47,6 +66,7 @@ export {
   getPullRequestActivityDays,
   InvalidCursorError,
   listIssues,
+  listMergedPullRequests,
   listPullRequests,
   replaceIssueDetailCache,
   upsertIssuePage,
@@ -71,6 +91,7 @@ export type {
 } from "./domain-service.js";
 export {
   getPullRequestFiles,
+  listCurrentPullRequestEnrichmentStates,
   listDomainTagsForPullRequests,
   listPullRequestFileSets,
   listPullRequestsNeedingFileEnrichment,
@@ -94,12 +115,19 @@ export {
   updateAgentMessage,
   updateAgentSession,
 } from "./agent-service.js";
+export { listAgentArchiveProjection } from "./agent-archive-service.js";
 export type {
   AgentMessageRecord,
   AgentSessionListFilter,
   AgentSessionRecord,
   CreateAgentSessionInput,
 } from "./agent-service.js";
+export type {
+  AgentArchiveMessage,
+  AgentArchiveProjection,
+  AgentArchiveSessionMetadata,
+  ListAgentArchiveProjectionOptions,
+} from "./agent-archive-service.js";
 export {
   addDocumentVersion,
   deleteKnowledgeDocument,
@@ -144,6 +172,7 @@ export type {
   ScheduledTaskUpdateInput,
 } from "./scheduler-service.js";
 export type {
+  PullRequestEnrichmentState,
   PullRequestEnrichmentTarget,
   StoredPullRequestFiles,
 } from "./classification-service.js";
@@ -163,6 +192,8 @@ export type {
   IssueStatus,
   IssueListOptions,
   ListPage,
+  PageList,
+  MergedPullRequestListOptions,
   PullRequestFileRecord,
   PullRequestFileSet,
   PullRequestListItem,
@@ -173,6 +204,12 @@ export type {
   RepositorySyncState,
   RepositorySyncStatus,
   SyncRun,
+  SyncRunKind,
+  SyncRunRecord,
+  SyncRunStatus,
+  SyncRunStreamRecord,
+  SyncRunTrigger,
+  RepositoryHistoryState,
   SyncStatus,
   SyncStreamUpdate,
 } from "./types.js";

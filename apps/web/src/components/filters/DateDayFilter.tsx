@@ -54,14 +54,13 @@ export function DateDayFilter({
     };
   }, [from, open, today, to]);
 
-  const label =
-    pendingFrom !== null
-      ? `Choose end after ${pendingFrom}`
-      : from !== null && to !== null
-        ? `${from} – ${to}`
-        : from !== null
-          ? `From ${from}`
-          : "All dates";
+  const label = pendingFrom !== null
+    ? `Choose end after ${pendingFrom}`
+    : from !== null && to !== null
+      ? `${from} – ${to}`
+      : from !== null
+        ? `From ${from}`
+        : "All dates";
 
   const selectDay = (value: string) => {
     if (selectionFrom === null) {

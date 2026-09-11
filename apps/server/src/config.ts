@@ -47,7 +47,10 @@ const baseSystemConfigSchema = z
             autoCommit: z.boolean().optional().default(false),
             autoPush: z.boolean().optional().default(false),
             remote: z.string().trim().min(1).optional().default("origin"),
-            branch: z.string().trim().min(1).optional().default("main"),
+            sourceRef: z.string().trim().min(1).optional(),
+            remoteBranch: z.string().trim().min(1).optional().default("loongboard-knowledge-backup"),
+            /** Legacy alias for sourceRef. */
+            branch: z.string().trim().min(1).optional(),
           })
           .optional(),
       })

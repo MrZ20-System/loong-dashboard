@@ -28,7 +28,7 @@ function RepositoryGroup({
   const location = useLocation();
   const activeId = activeRepositoryId(location.pathname);
   const isActive = activeId === repositoryId;
-  const counts = repository as RepositorySummary & { pullRequestCount?: number; issueCount?: number };
+  const counts = repository as RepositorySummary & { pullRequestCount?: number; issueCount?: number; mergedPullRequestCount?: number };
   const [expanded, setExpanded] = useState(() => isActive);
   return (
     <section
@@ -72,6 +72,9 @@ function RepositoryGroup({
             to={`/repositories/${encodeURIComponent(repositoryId)}/pulls`}
           >
             Pull requests{typeof counts.pullRequestCount === "number" && <span className="sidebar-count">{counts.pullRequestCount}</span>}
+          </NavLink>
+          <NavLink to={`/repositories/${encodeURIComponent(repositoryId)}/merged`}>
+            Merged{typeof counts.mergedPullRequestCount === "number" && <span className="sidebar-count">{counts.mergedPullRequestCount}</span>}
           </NavLink>
           <NavLink
             to={`/repositories/${encodeURIComponent(repositoryId)}/issues`}

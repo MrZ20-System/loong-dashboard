@@ -14,6 +14,7 @@ const repository = {
   defaultBranch: "main",
   worktreeSlots: 1,
   enabled: true,
+  mergedPullRequestCount: 0,
 };
 const repositoryB = { ...repository, id: "repo-b", key: "repo-b", displayName: "LoongBoard B", githubName: "project-b" };
 
@@ -52,12 +53,13 @@ function json(value: unknown, status = 200) {
   return new Response(JSON.stringify(value), { status, headers: { "Content-Type": "application/json" } });
 }
 
-function mockApi(options: { pulls?: unknown[]; issues?: unknown[]; pullPages?: unknown[][]; issuePages?: unknown[][]; pullsByRepository?: Record<string, unknown[][]>; syncStatuses?: StreamStatus[]; syncSnapshots?: SyncSnapshot[]; syncSnapshotsByRepository?: Record<string, SyncSnapshot[]>; syncDelayMs?: number; syncRunIds?: string[]; syncLookbackDays?: 7 | 30; bootstrapSync?: boolean; repositories?: typeof repository[]; onSyncStatusAbort?: (repositoryId: string) => void; domains?: unknown[]; reclassification?: { running: boolean; pendingCount: number | null }; onDomainMutation?: (method: string, url: string, body: unknown) => Response | undefined } = {}) {
+function mockApi(options: { pulls?: unknown[]; issues?: unknown[]; pullPages?: unknown[][]; issuePages?: unknown[][]; mergedPages?: unknown[][]; pullsByRepository?: Record<string, unknown[][]>; syncStatuses?: StreamStatus[]; syncSnapshots?: SyncSnapshot[]; syncSnapshotsByRepository?: Record<string, SyncSnapshot[]>; syncDelayMs?: number; syncRunIds?: string[]; syncLookbackDays?: 7 | 30; bootstrapSync?: boolean; repositories?: typeof repository[]; onSyncStatusAbort?: (repositoryId: string) => void; domains?: unknown[]; reclassification?: { running: boolean; pendingCount: number | null }; onDomainMutation?: (method: string, url: string, body: unknown) => Response | undefined } = {}) {
   const pulls = options.pulls ?? [pull(2), pull(1)];
   const issues = options.issues ?? [issue(7)];
   let pullPage = 0;
   const pullPagesByRepository = new Map<string, number>();
   let issuePage = 0;
+  let mergedPage = 0;
   let syncIndex = 0;
   const syncIndexesByRepository = new Map<string, number>();
   let syncRunIndex = 0;
@@ -117,16 +119,43 @@ function mockApi(options: { pulls?: unknown[]; issues?: unknown[]; pullPages?: u
     if (url.pathname.endsWith("/pulls")) {
       const repositoryId = url.pathname.split("/")[3] ?? "repo";
       const repositoryPullPages = options.pullsByRepository?.[repositoryId] ?? pullPages;
-      const pageIndex = options.pullsByRepository ? (pullPagesByRepository.get(repositoryId) ?? 0) : pullPage;
-      const items = repositoryPullPages[Math.min(pageIndex, repositoryPullPages.length - 1)];
+      const requestedPage = Number(url.searchParams.get("page") ?? "");
+      const pageIndex = Number.isInteger(requestedPage) && requestedPage > 1
+        ? requestedPage - 1
+        : options.pullsByRepository ? (pullPagesByRepository.get(repositoryId) ?? 0) : pullPage;
+      const query = url.searchParams.get("search")?.trim().toLowerCase() ?? "";
+      const allItems = repositoryPullPages.flat();
+      const items = query
+        ? allItems.filter((item) => {
+            const row = item as { number: number; title: string; authorLogin: string | null };
+            const numberQuery = query.startsWith("#") ? query.slice(1) : query;
+            return String(row.number).includes(numberQuery) || row.title.toLowerCase().includes(query) || row.authorLogin?.toLowerCase().includes(query) === true;
+          })
+        : repositoryPullPages[Math.min(pageIndex, repositoryPullPages.length - 1)];
       if (options.pullsByRepository) pullPagesByRepository.set(repositoryId, pageIndex + 1);
       else pullPage += 1;
-      return json({ items, nextCursor: pageIndex + 1 < repositoryPullPages.length ? "next-page" : null, calendarTimeZone: "Asia/Shanghai" });
+      return json({ items, page: pageIndex + 1, pageSize: 100, totalCount: query ? items.length : repositoryPullPages.flat().length, totalPages: query ? 1 : repositoryPullPages.length, calendarTimeZone: "Asia/Shanghai" });
     }
     if (url.pathname.endsWith("/issues")) {
       const issuePages = options.issuePages ?? [issues];
-      const items = issuePages[Math.min(issuePage++, issuePages.length - 1)];
-      return json({ items, nextCursor: null, calendarTimeZone: "Asia/Shanghai" });
+      const query = url.searchParams.get("search")?.trim().toLowerCase() ?? "";
+      const cursor = url.searchParams.get("cursor");
+      const pageIndex = cursor ? 1 : issuePage++;
+      const pageItems = issuePages[Math.min(pageIndex, issuePages.length - 1)];
+      const items = query
+        ? issuePages.flat().filter((item) => {
+            const row = item as { number: number; title: string; authorLogin: string | null };
+            const numberQuery = query.startsWith("#") ? query.slice(1) : query;
+            return String(row.number).includes(numberQuery) || row.title.toLowerCase().includes(query) || row.authorLogin?.toLowerCase().includes(query) === true;
+          })
+        : pageItems;
+      return json({ items, nextCursor: query || cursor ? null : issuePages.length > 1 ? "issue-page-2" : null, calendarTimeZone: "Asia/Shanghai" });
+    }
+    if (url.pathname.endsWith("/merged")) {
+      const pages = options.mergedPages ?? [[]];
+      const requestedPage = Number(url.searchParams.get("page") ?? "");
+      const pageIndex = Math.min(Number.isInteger(requestedPage) && requestedPage > 0 ? requestedPage - 1 : mergedPage++, pages.length - 1);
+      return json({ items: pages[pageIndex], page: pageIndex + 1, pageSize: 100, totalCount: pages.flat().length, totalPages: pages.length, calendarTimeZone: "Asia/Shanghai" });
     }
     return json({ error: { code: "INTERNAL_ERROR", message: "not found" } }, 404);
   });
@@ -189,6 +218,16 @@ describe("LoongBoard metadata routes", () => {
     expect(await screen.findByRole("heading", { name: "Pull request unavailable" })).toBeInTheDocument();
   });
 
+  it("renders the independent Merged projection with repository navigation and context", async () => {
+    const merged = { ...pull(42, "Merged scheduler fix"), mergedAt: "2026-09-10T08:30:00.000Z", status: "merged" as const };
+    mockApi({ mergedPages: [[merged]] });
+    renderApp("/repositories/repo/merged");
+    expect(await screen.findByRole("heading", { name: "Merged" })).toBeInTheDocument();
+    expect(screen.getByText("Merged scheduler fix")).toBeInTheDocument();
+    expect(primaryNavigation().getByRole("link", { name: /Merged/ })).toHaveAttribute("href", "/repositories/repo/merged");
+    expect(screen.getByText(/LoongBoard · Merged/, { selector: ".topbar__context strong" })).toBeInTheDocument();
+  });
+
   it("renders Issue fields without the redundant summary metrics row", async () => {
     mockApi({ issues: [issue(7, "A tracked issue")] });
     renderApp("/repositories/repo/issues");
@@ -210,11 +249,11 @@ describe("LoongBoard metadata routes", () => {
     expect(await screen.findByRole("heading", { name: "Issue unavailable" })).toBeInTheDocument();
   });
 
-  it("searches issues only by exact number, author, or contiguous title", async () => {
+  it("searches issues by number substring, author, or contiguous title", async () => {
     mockApi({
       issues: [
         { ...issue(7, "Track scheduler latency"), authorLogin: "IssueOwner" },
-        { ...issue(70, "Unrelated report"), authorLogin: "someone-else" },
+        { ...issue(80, "Unrelated report"), authorLogin: "someone-else" },
       ],
     });
     renderApp("/repositories/repo/issues");
@@ -225,48 +264,67 @@ describe("LoongBoard metadata routes", () => {
     );
 
     fireEvent.change(search, { target: { value: "7" } });
-    expect(screen.getByText("Track scheduler latency")).toBeInTheDocument();
-    expect(screen.queryByText("Unrelated report")).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("Track scheduler latency")).toBeInTheDocument();
+      expect(screen.queryByText("Unrelated report")).not.toBeInTheDocument();
+    });
+
+    fireEvent.change(search, { target: { value: "#7" } });
+    await waitFor(() => {
+      expect(screen.getByText("Track scheduler latency")).toBeInTheDocument();
+      expect(screen.queryByText("Unrelated report")).not.toBeInTheDocument();
+    });
 
     fireEvent.change(search, { target: { value: "issueowner" } });
-    expect(screen.getByText("Track scheduler latency")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("Track scheduler latency")).toBeInTheDocument());
 
     fireEvent.change(search, { target: { value: "scheduler latency" } });
-    expect(screen.getByText("Track scheduler latency")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("Track scheduler latency")).toBeInTheDocument());
 
     fireEvent.change(search, { target: { value: "scheduler track" } });
-    expect(screen.queryByText("Track scheduler latency")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("Track scheduler latency")).not.toBeInTheDocument());
   });
 
-  it("searches pull requests only by exact number, author, or contiguous title", async () => {
+  it("searches pull requests by number substring, author, or contiguous title", async () => {
     mockApi({
       pulls: [
         { ...pull(53_906, "Add GLM flash support"), authorLogin: "ZJY0516" },
-        { ...pull(5_390, "Unrelated change"), authorLogin: "someone-else" },
+        { ...pull(5_912, "Unrelated change"), authorLogin: "someone-else" },
       ],
     });
     renderApp("/repositories/repo/pulls");
     const search = await screen.findByRole("searchbox", { name: "Search list" });
 
     fireEvent.change(search, { target: { value: "53906" } });
-    expect(screen.getByText("Add GLM flash support")).toBeInTheDocument();
-    expect(screen.queryByText("Unrelated change")).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText("Add GLM flash support")).toBeInTheDocument();
+      expect(screen.queryByText("Unrelated change")).not.toBeInTheDocument();
+    });
+
+    fireEvent.change(search, { target: { value: "#390" } });
+    await waitFor(() => {
+      expect(screen.getByText("Add GLM flash support")).toBeInTheDocument();
+      expect(screen.queryByText("Unrelated change")).not.toBeInTheDocument();
+    });
 
     fireEvent.change(search, { target: { value: "zjy0516" } });
-    expect(screen.getByText("Add GLM flash support")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("Add GLM flash support")).toBeInTheDocument());
 
     fireEvent.change(search, { target: { value: "GLM flash" } });
-    expect(screen.getByText("Add GLM flash support")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("Add GLM flash support")).toBeInTheDocument());
 
     fireEvent.change(search, { target: { value: "GLM support" } });
-    expect(screen.queryByText("Add GLM flash support")).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("Add GLM flash support")).not.toBeInTheDocument());
   });
 
   it("sanitizes invalid URL filters and resets cursor", async () => {
     const fetchMock = mockApi();
     renderApp("/repositories/repo/pulls?date=2026-02-29&status=nope&cursor=stale");
     await screen.findByRole("heading", { name: "Pull requests" });
-    await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input) === "/api/repositories/repo/pulls")).toBe(true));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => {
+      const url = new URL(String(input), "http://localhost");
+      return url.pathname === "/api/repositories/repo/pulls" && !url.searchParams.has("date") && !url.searchParams.has("status") && !url.searchParams.has("cursor");
+    })).toBe(true));
   });
 
   it("keeps legacy date URLs compatible while requesting from/to", async () => {
@@ -291,7 +349,7 @@ describe("LoongBoard metadata routes", () => {
     renderApp("/repositories/repo/pulls");
     expect(await screen.findByText("Pull 9")).toBeInTheDocument();
     expect(screen.getAllByText("open").some((element) => element.closest(".feed-row") !== null)).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "Load more" }));
+    fireEvent.click(screen.getByRole("button", { name: "Next" }));
     expect(await screen.findByText("Pull 8")).toBeInTheDocument();
     expect(screen.getAllByText("merged").some((element) => element.closest(".feed-row") !== null)).toBe(true);
   });
@@ -342,9 +400,8 @@ describe("LoongBoard metadata routes", () => {
         { pullRequests: "idle", issues: "failed" },
       ],
     });
-    appQueryClient.setQueryData(["metadata", "repo", "issues", "::", null], {
-      pages: [{ items: [oldIssue], nextCursor: null, calendarTimeZone: "Asia/Shanghai" }],
-      pageParams: [null],
+    appQueryClient.setQueryData(["metadata", "repo", "issues", "updated", "::::", 1, null], {
+      items: [oldIssue], page: 1, pageSize: 100, totalCount: 1, totalPages: 1, calendarTimeZone: "Asia/Shanghai",
     });
     renderApp("/repositories/repo/pulls");
     expect(await screen.findByText("Old pull")).toBeInTheDocument();
@@ -369,9 +426,8 @@ describe("LoongBoard metadata routes", () => {
         { pullRequests: "failed", issues: "idle" },
       ],
     });
-    appQueryClient.setQueryData(["metadata", "repo", "pulls", "::", null], {
-      pages: [{ items: [oldPull], nextCursor: null, calendarTimeZone: "Asia/Shanghai" }],
-      pageParams: [null],
+    appQueryClient.setQueryData(["metadata", "repo", "pulls", "updated", "::::", 1, null], {
+      items: [oldPull], page: 1, pageSize: 100, totalCount: 1, totalPages: 1, calendarTimeZone: "Asia/Shanghai",
     });
     renderApp("/repositories/repo/issues");
     expect(await screen.findByText("Old issue")).toBeInTheDocument();
@@ -396,9 +452,8 @@ describe("LoongBoard metadata routes", () => {
         { pullRequests: "idle", issues: "failed" },
       ],
     });
-    appQueryClient.setQueryData(["metadata", "repo", "issues", "::", null], {
-      pages: [{ items: [oldIssue], nextCursor: null, calendarTimeZone: "Asia/Shanghai" }],
-      pageParams: [null],
+    appQueryClient.setQueryData(["metadata", "repo", "issues", "updated", "::::", 1, null], {
+      items: [oldIssue], page: 1, pageSize: 100, totalCount: 1, totalPages: 1, calendarTimeZone: "Asia/Shanghai",
     });
     renderApp("/repositories/repo/pulls");
     expect(await screen.findByText("Old pull")).toBeInTheDocument();
@@ -406,9 +461,9 @@ describe("LoongBoard metadata routes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
     expect(await screen.findByText("Delayed synced pull", {}, { timeout: 4_000 })).toBeInTheDocument();
     expect(await screen.findByText(/Last sync failed/, {}, { timeout: 4_000 })).toBeInTheDocument();
-    const issueQuery = appQueryClient.getQueryCache().find({ queryKey: ["metadata", "repo", "issues", "::", null] });
+    const issueQuery = appQueryClient.getQueryCache().find({ queryKey: ["metadata", "repo", "issues", "updated", "::::", 1, null] });
     expect(issueQuery?.state.isInvalidated).toBe(false);
-    expect(issueQuery?.state.data).toMatchObject({ pages: [{ items: [oldIssue] }] });
+    expect(issueQuery?.state.data).toMatchObject({ items: [oldIssue] });
     fireEvent.click(primaryNavigation().getByRole("link", { name: "Issues" }));
     expect(await screen.findByText("Existing Issue")).toBeInTheDocument();
   });
@@ -426,9 +481,8 @@ describe("LoongBoard metadata routes", () => {
         { pullRequests: "failed", issues: "idle" },
       ],
     });
-    appQueryClient.setQueryData(["metadata", "repo", "pulls", "::", null], {
-      pages: [{ items: [oldPull], nextCursor: null, calendarTimeZone: "Asia/Shanghai" }],
-      pageParams: [null],
+    appQueryClient.setQueryData(["metadata", "repo", "pulls", "updated", "::::", 1, null], {
+      items: [oldPull], page: 1, pageSize: 100, totalCount: 1, totalPages: 1, calendarTimeZone: "Asia/Shanghai",
     });
     renderApp("/repositories/repo/issues");
     expect(await screen.findByText("Old issue")).toBeInTheDocument();
@@ -436,9 +490,9 @@ describe("LoongBoard metadata routes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
     expect(await screen.findByText("Delayed synced issue", {}, { timeout: 4_000 })).toBeInTheDocument();
     expect(await screen.findByText(/Last sync failed/, {}, { timeout: 4_000 })).toBeInTheDocument();
-    const pullQuery = appQueryClient.getQueryCache().find({ queryKey: ["metadata", "repo", "pulls", "::", null] });
+    const pullQuery = appQueryClient.getQueryCache().find({ queryKey: ["metadata", "repo", "pulls", "updated", "::::", 1, null] });
     expect(pullQuery?.state.isInvalidated).toBe(false);
-    expect(pullQuery?.state.data).toMatchObject({ pages: [{ items: [oldPull] }] });
+    expect(pullQuery?.state.data).toMatchObject({ items: [oldPull] });
     fireEvent.click(primaryNavigation().getByRole("link", { name: "Pull requests" }));
     expect(await screen.findByText("Existing pull")).toBeInTheDocument();
   });

@@ -16,7 +16,10 @@ import {
 import { MarkdownView } from "./markdown";
 import { PanelCollapseButton } from "./components/pr/ResizableSidePanel";
 import { fetchAgentRuntimeSettings } from "./settings-client";
-import type { AgentRuntimeModelCapability } from "@loongboard/contracts";
+import type {
+  AgentRuntimeCommandCapability,
+  AgentRuntimeModelCapability,
+} from "@loongboard/contracts";
 import { useAgentSessionSelection } from "./features/agent/agent-session-context";
 
 interface LiveTool {
@@ -72,7 +75,8 @@ export function AgentChatPanel({
   const [error, setError] = useState<string | null>(null);
   const [model, setModel] = useState("");
   const [reasoning, setReasoning] = useState("");
-  const [command, setCommand] = useState("");
+  const [commandMenuIndex, setCommandMenuIndex] = useState(0);
+  const [commandMenuDismissed, setCommandMenuDismissed] = useState(false);
   const [internalCollapsed, setInternalCollapsed] = useState(false);
   const isCollapsed = collapsed ?? internalCollapsed;
   const toggleCollapsed = () => {
@@ -268,6 +272,19 @@ export function AgentChatPanel({
   const selectedModel = models.find((item: AgentRuntimeModelCapability) => item.id === (model || currentSession?.model));
   const reasonings = Array.from(new Set([...selectedModel?.reasoningEfforts ?? capabilities.data?.capabilities?.reasoning ?? [], ...(currentSession?.reasoningEffort ? [currentSession.reasoningEffort] : [])]));
   const commands = capabilities.data?.capabilities?.commands ?? [];
+  const commandToken = useMemo(() => {
+    const match = /(?:^|\s)\/([^\s]*)$/.exec(prompt);
+    if (match === null) return null;
+    const query = match[1] ?? "";
+    return { start: prompt.length - query.length - 1, query };
+  }, [prompt]);
+  const commandMatches = useMemo(() => {
+    const query = commandToken?.query.toLocaleLowerCase() ?? "";
+    return commands.filter((item: AgentRuntimeCommandCapability) =>
+      `${item.id} ${item.label ?? ""}`.toLocaleLowerCase().includes(query),
+    );
+  }, [commandToken?.query, commands]);
+  const commandMenuOpen = commandToken !== null && !commandMenuDismissed;
   const persistedInteractions = items.reduce<Array<{ requestId: string; title: string; description?: string; options: Array<{ id: string; label: string }>; resolved: boolean }>>((result, item) => {
     const metadata = item.metadataJson;
     if (metadata.type === "interaction.requested" && typeof metadata.requestId === "string" && typeof metadata.title === "string" && Array.isArray(metadata.options)) {
@@ -298,6 +315,13 @@ export function AgentChatPanel({
       return;
     }
     submit.mutate(content);
+  };
+  const chooseCommand = (item: AgentRuntimeCommandCapability) => {
+    if (commandToken === null) return;
+    const before = prompt.slice(0, commandToken.start);
+    setPrompt(`${before}/${item.id} `);
+    setCommandMenuDismissed(false);
+    setCommandMenuIndex(0);
   };
   const resolvedPanelId = panelId ?? "agent-chat-panel";
 
@@ -419,18 +443,70 @@ export function AgentChatPanel({
               send();
             }}
           >
-            <textarea
-              aria-label="Message the agent"
-              value={prompt}
-              rows={3}
-              placeholder="Ask the agent…"
-              onChange={(event) => setPrompt(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) send();
-              }}
-            />
+            <div className="agent-composer__input">
+              <textarea
+                aria-label="Message the agent"
+                value={prompt}
+                rows={3}
+                placeholder="Ask the agent…"
+                onChange={(event) => {
+                  setPrompt(event.target.value);
+                  setCommandMenuDismissed(false);
+                  setCommandMenuIndex(0);
+                }}
+                onKeyDown={(event) => {
+                  if (commandMenuOpen && event.key === "Escape") {
+                    event.preventDefault();
+                    setCommandMenuDismissed(true);
+                    return;
+                  }
+                  if (commandMenuOpen && event.key === "ArrowDown") {
+                    event.preventDefault();
+                    setCommandMenuIndex((index) => commandMatches.length === 0 ? 0 : (index + 1) % commandMatches.length);
+                    return;
+                  }
+                  if (commandMenuOpen && event.key === "ArrowUp") {
+                    event.preventDefault();
+                    setCommandMenuIndex((index) => commandMatches.length === 0 ? 0 : (index - 1 + commandMatches.length) % commandMatches.length);
+                    return;
+                  }
+                  if (commandMenuOpen && event.key === "Enter" && !event.metaKey && !event.ctrlKey && commandMatches.length > 0) {
+                    event.preventDefault();
+                    chooseCommand(commandMatches[commandMenuIndex] ?? commandMatches[0]);
+                    return;
+                  }
+                  if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) send();
+                }}
+              />
+              {commandMenuOpen && (
+                <div className="agent-command-menu" role="listbox" aria-label="Runtime commands">
+                  {capabilities.isPending ? (
+                    <p className="agent-command-menu__empty" role="status">Loading runtime commands…</p>
+                  ) : commands.length === 0 ? (
+                    <p className="agent-command-menu__empty" role="status">No runtime commands available.</p>
+                  ) : commandMatches.length === 0 ? (
+                    <p className="agent-command-menu__empty" role="status">No matching runtime commands.</p>
+                  ) : (
+                    commandMatches.map((item: AgentRuntimeCommandCapability, index: number) => (
+                      <button
+                        type="button"
+                        role="option"
+                        aria-selected={index === commandMenuIndex}
+                        className="agent-command-menu__item"
+                        key={item.id}
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={() => chooseCommand(item)}
+                      >
+                        <strong>/{item.id}</strong>
+                        {item.label !== undefined && item.label !== item.id && <span>{item.label}</span>}
+                        {item.description !== undefined && <small>{item.description}</small>}
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
             <div className="agent-composer-actions">
-              {commands.length > 0 && <label className="agent-composer-select">Command<select aria-label="Agent command" value={command} onChange={(event) => { const value = event.target.value; setCommand(""); if (value) { const slashCommand = value.startsWith("/") ? value : `/${value}`; setPrompt((current) => `${slashCommand} ${current}`.trim()); } }} disabled={running || reconfigure.isPending}><option value="">Commands</option>{commands.map((item) => <option key={item.id} value={item.id}>{item.label ?? item.id}</option>)}</select></label>}
               <label className="agent-composer-select">Model<select aria-label="Agent model" value={model || currentSession?.model || ""} onChange={(event) => { const item = models.find((candidate: AgentRuntimeModelCapability) => candidate.id === event.target.value); setModel(event.target.value); setReasoning(""); if (currentSessionId !== null && item) reconfigure.mutate({ model: item.id, provider: item.provider, ...(item.reasoningEfforts[0] ? { reasoningEffort: item.reasoningEfforts[0] } : {}) }); }} disabled={running || reconfigure.isPending}><option value="">Runtime default</option>{models.map((item: AgentRuntimeModelCapability) => <option key={item.id} value={item.id}>{item.label ?? item.id} · {item.provider}</option>)}</select></label>
               <label className="agent-composer-select">Reasoning<select aria-label="Agent reasoning" value={reasoning || currentSession?.reasoningEffort || ""} onChange={(event) => { setReasoning(event.target.value); if (currentSessionId !== null) reconfigure.mutate({ reasoningEffort: event.target.value }); }} disabled={running || reconfigure.isPending}><option value="">Runtime default</option>{reasonings.map((item: string) => <option key={item} value={item}>{item}</option>)}</select></label>
               <button type="submit" disabled={prompt.trim().length === 0 || currentSessionId === null || running || revisionMismatch || submit.isPending}>

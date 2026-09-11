@@ -17,6 +17,7 @@ import {
   listAgentSessions,
   sendAgentMessage,
 } from "./agent-chat-client";
+import { fetchAgentRuntimeSettings } from "./settings-client";
 
 vi.mock("./agent-chat-client", () => ({
   cancelAgentTurn: vi.fn(),
@@ -27,6 +28,10 @@ vi.mock("./agent-chat-client", () => ({
   listAgentSessions: vi.fn(),
   sendAgentMessage: vi.fn(),
   syncAgentWorkspace: vi.fn(),
+}));
+
+vi.mock("./settings-client", () => ({
+  fetchAgentRuntimeSettings: vi.fn(),
 }));
 
 const targetSha = "b".repeat(40);
@@ -59,7 +64,7 @@ function view(workspaceRevision: string | null): AgentSessionResponse {
   };
 }
 
-function renderPanel(agentView: AgentSessionResponse) {
+function renderPanel(agentView: AgentSessionResponse, commands: Array<{ id: string; label?: string; description?: string }> = []) {
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
@@ -67,6 +72,27 @@ function renderPanel(agentView: AgentSessionResponse) {
   vi.mocked(fetchAgentSession).mockResolvedValue(agentView);
   vi.mocked(fetchAgentMessages).mockResolvedValue({ items: [] });
   vi.mocked(listAgentSessions).mockResolvedValue({ items: [] });
+  vi.mocked(fetchAgentRuntimeSettings).mockResolvedValue({
+    status: "connected",
+    version: "test",
+    profile: "test",
+    connected: true,
+    defaultProvider: "test-provider",
+    defaultModel: "test-model",
+    defaultReasoning: "high",
+    retentionMinutes: 0,
+    capabilities: {
+      runtimeKind: "test-runtime",
+      version: "test",
+      profile: "test",
+      connected: true,
+      models: [],
+      reasoning: [],
+      commands,
+      features: [],
+      discovery: "runtime",
+    },
+  });
   render(
     <QueryClientProvider client={queryClient}>
       <AgentChatPanel scope={prScope} heading="PR chat" />
@@ -115,6 +141,9 @@ describe("AgentChatPanel PR revision gating", () => {
 
   it("enables Send when the workspace revision equals the target", async () => {
     renderPanel(view(targetSha));
+    const panel = await screen.findByRole("complementary", { name: "PR chat" });
+    expect(panel.querySelector(".agent-messages")).toHaveClass("agent-messages");
+    expect(panel.querySelector(".agent-composer")).toHaveClass("agent-composer");
     const send = await screen.findByRole("button", { name: "Send" });
     fireEvent.change(screen.getByLabelText("Message the agent"), {
       target: { value: "right revision" },
@@ -128,5 +157,45 @@ describe("AgentChatPanel PR revision gating", () => {
     expect(
       screen.queryByText(/Workspace does not match this PR revision/),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("AgentChatPanel runtime command composer", () => {
+  it("filters runtime commands by id or label and inserts the selected id", async () => {
+    renderPanel(view(targetSha), [
+      { id: "review", label: "Review PR", description: "Inspect the change" },
+      { id: "refactor", label: "Refactor" },
+    ]);
+
+    const input = await screen.findByLabelText("Message the agent");
+    fireEvent.change(input, { target: { value: "/rev" } });
+    const menu = await screen.findByRole("listbox", { name: "Runtime commands" });
+    expect(input.parentElement).toHaveClass("agent-composer__input");
+    expect(menu).toHaveClass("agent-command-menu");
+    expect(menu.parentElement).toBe(input.parentElement);
+    expect(await screen.findByRole("option", { name: /review.*Review PR/i })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /refactor/i })).not.toBeInTheDocument();
+
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(input).toHaveValue("/review ");
+
+    fireEvent.change(input, { target: { value: "/r" } });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(input).toHaveValue("/refactor ");
+
+    fireEvent.change(input, { target: { value: "/rev" } });
+    fireEvent.click(await screen.findByRole("option", { name: /review.*Review PR/i }));
+    expect(input).toHaveValue("/review ");
+
+    fireEvent.change(input, { target: { value: "/r" } });
+    fireEvent.keyDown(input, { key: "Escape" });
+    expect(screen.queryByRole("listbox", { name: "Runtime commands" })).not.toBeInTheDocument();
+  });
+
+  it("shows a clear empty state when the runtime has no commands", async () => {
+    renderPanel(view(targetSha));
+    fireEvent.change(await screen.findByLabelText("Message the agent"), { target: { value: "/" } });
+    expect(await screen.findByText("No runtime commands available.")).toBeInTheDocument();
   });
 });

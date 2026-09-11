@@ -6,6 +6,7 @@ const settingsTabs = [
   { to: "/settings/integrations", label: "Integrations", end: false },
   { to: "/settings/agent", label: "Agent", end: false },
   { to: "/settings/checkpoint", label: "Checkpoint", end: false },
+  { to: "/settings/code-backup", label: "Code backup", end: false },
   { to: "/settings/domains", label: "Domains", end: false },
   { to: "/settings/schedules", label: "Schedules", end: false },
   { to: "/settings/health", label: "Health", end: false },

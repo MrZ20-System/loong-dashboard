@@ -22,6 +22,9 @@ import {
   type IssueStatus,
   type IssueListOptions,
   type ListPage,
+  type PageList,
+  type MergedPullRequestListItem,
+  type MergedPullRequestListOptions,
   type PullRequestDetail,
   type PullRequestListItem,
   type PullRequestMetadata,
@@ -29,7 +32,7 @@ import {
   type PullRequestStatus,
 } from "./types.js";
 
-const DEFAULT_PAGE_SIZE = 50;
+const DEFAULT_PAGE_SIZE = 100;
 
 type ListDateRangeOptions = {
   from?: string | null;
@@ -299,10 +302,28 @@ function resolveTimeZone(options: { calendarTimeZone: string }): string {
 
 function pageSize(value: number | undefined): number {
   const size = value ?? DEFAULT_PAGE_SIZE;
-  if (!Number.isInteger(size) || size <= 0 || size > 1_000) {
-    throw new Error("List page size must be an integer between 1 and 1000");
+  if (!Number.isInteger(size) || size <= 0 || size > DEFAULT_PAGE_SIZE) {
+    throw new Error(`List page size must be an integer between 1 and ${DEFAULT_PAGE_SIZE}`);
   }
   return size;
+}
+
+function pageNumber(value: number | undefined): number {
+  const page = value ?? 1;
+  if (!Number.isSafeInteger(page) || page <= 0) {
+    throw new Error("List page number must be a positive safe integer");
+  }
+  return page;
+}
+
+function pageOffset(page: number, limit: number): number {
+  const zeroBasedPage = page - 1;
+  // SQLite receives JavaScript numbers here; clamp before multiplication so
+  // an accepted safe page can never create an unsafe integer offset.
+  if (zeroBasedPage > Math.floor(Number.MAX_SAFE_INTEGER / limit)) {
+    return Number.MAX_SAFE_INTEGER;
+  }
+  return zeroBasedPage * limit;
 }
 
 function cursorValues(value: string | null | undefined): ListCursorPayload | null {
@@ -312,6 +333,31 @@ function cursorValues(value: string | null | undefined): ListCursorPayload | nul
   } catch {
     throw new InvalidCursorError();
   }
+}
+
+function escapeLike(value: string): string {
+  return value.replaceAll("\\", "\\\\").replaceAll("%", "\\%").replaceAll("_", "\\_");
+}
+
+/** Add the shared full-dataset search predicate before any list pagination. */
+function searchPredicate(
+  clauses: string[],
+  parameters: unknown[],
+  value: string | null | undefined,
+  numberColumn: string,
+  titleColumn: string,
+  authorColumn: string,
+): void {
+  const needle = value?.trim().toLowerCase();
+  if (!needle) return;
+  const numberNeedle = needle.startsWith("#") ? needle.slice(1) : needle;
+  const pattern = `%${escapeLike(numberNeedle)}%`;
+  clauses.push(
+    `(CAST(${numberColumn} AS TEXT) LIKE ? ESCAPE '\\'
+      OR LOWER(${titleColumn}) LIKE ? ESCAPE '\\'
+      OR LOWER(${authorColumn}) LIKE ? ESCAPE '\\')`,
+  );
+  parameters.push(pattern, pattern, pattern);
 }
 
 function datePredicate(
@@ -334,12 +380,15 @@ function datePredicate(
   }
 }
 
-function cursorPredicate(
+function updatedCursorPredicate(
   clauses: string[],
   parameters: unknown[],
-  cursor: Pick<ListCursorPayload, "updatedAt" | "number"> | null,
+  cursor: ListCursorPayload | null,
 ): void {
   if (!cursor) return;
+  if (cursor.sort !== "updated" || cursor.updatedAt === undefined) {
+    throw new InvalidCursorError();
+  }
   clauses.push("(updated_at < ? OR (updated_at = ? AND number < ?))");
   parameters.push(cursor.updatedAt, cursor.updatedAt, cursor.number);
 }
@@ -399,11 +448,12 @@ export function listPullRequests(
   database: DatabaseClient,
   repositoryId: string,
   options: PullRequestListOptions & ListDateRangeOptions,
-): ListPage<PullRequestListItem> {
+): PageList<PullRequestListItem> {
   requireRepository(database, repositoryId);
   const calendarTimeZone = resolveTimeZone(options);
+  const page = pageNumber(options.page);
   const limit = pageSize(options.limit);
-  const cursor = cursorValues(options.cursor);
+  const sort = options.sort ?? "updated";
   const clauses = ["repository_id = ?"];
   const parameters: unknown[] = [repositoryId];
   datePredicate(
@@ -417,6 +467,14 @@ export function listPullRequests(
     clauses.push("status = ?");
     parameters.push(options.status);
   }
+  searchPredicate(
+    clauses,
+    parameters,
+    options.search,
+    "pull_requests.number",
+    "pull_requests.title",
+    "pull_requests.author_login",
+  );
   const domainIds = options.domainIds?.filter((id) => id.length > 0) ?? [];
   if (domainIds.length > 0) {
     // ANY-match semantics: the pull request carries at least one selected
@@ -432,8 +490,21 @@ export function listPullRequests(
     );
     parameters.push(...domainIds);
   }
-  cursorPredicate(clauses, parameters, cursor);
-  parameters.push(limit + 1);
+  const orderBy = sort === "number"
+    ? "number DESC"
+    : "updated_at DESC, number DESC";
+
+  const totalRow = database
+    .prepare(
+      `SELECT COUNT(*) AS total_count
+       FROM pull_requests
+       WHERE ${clauses.join(" AND ")}`,
+    )
+    .get(...parameters) as { total_count: number };
+  const totalCount = Number(totalRow.total_count);
+  const totalPages = Math.ceil(totalCount / limit);
+  const effectivePage = totalPages === 0 ? 1 : Math.min(page, totalPages);
+  const offset = pageOffset(effectivePage, limit);
 
   const rows = database
     .prepare(
@@ -441,12 +512,11 @@ export function listPullRequests(
               updated_at, changed_files_count, additions, deletions
        FROM pull_requests
        WHERE ${clauses.join(" AND ")}
-       ORDER BY updated_at DESC, number DESC
-       LIMIT ?`,
+       ORDER BY ${orderBy}
+       LIMIT ? OFFSET ?`,
     )
-    .all(...parameters) as Array<Record<string, unknown>>;
-  const hasMore = rows.length > limit;
-  const pageRows = rows.slice(0, limit);
+    .all(...parameters, limit, offset) as Array<Record<string, unknown>>;
+  const pageRows = rows;
   const domainTags = listDomainTagsForPullRequests(
     database,
     repositoryId,
@@ -456,13 +526,95 @@ export function listPullRequests(
     ...mapPullRequest(row),
     domains: domainTags.get(row.number as number) ?? [],
   }));
-  const last = items.at(-1);
   return {
     items,
-    nextCursor:
-      hasMore && last
-        ? encodeListCursor({ updatedAt: last.updatedAt, number: last.number })
-        : null,
+    page: effectivePage,
+    pageSize: limit,
+    totalCount,
+    totalPages,
+    calendarTimeZone,
+  };
+}
+
+function mapMergedPullRequest(
+  row: Record<string, unknown>,
+): MergedPullRequestListItem {
+  return {
+    ...mapPullRequest(row),
+    domains: [],
+    mergedAt: row.merged_at as string,
+  };
+}
+
+export function listMergedPullRequests(
+  database: DatabaseClient,
+  repositoryId: string,
+  options: MergedPullRequestListOptions,
+): PageList<MergedPullRequestListItem> {
+  requireRepository(database, repositoryId);
+  const calendarTimeZone = resolveTimeZone(options);
+  const page = pageNumber(options.page);
+  const limit = pageSize(options.limit);
+  const clauses = ["repository_id = ?", "merged_at IS NOT NULL"];
+  const parameters: unknown[] = [repositoryId];
+  searchPredicate(
+    clauses,
+    parameters,
+    options.search,
+    "pull_requests.number",
+    "pull_requests.title",
+    "pull_requests.author_login",
+  );
+  const domainIds = options.domainIds?.filter((id) => id.length > 0) ?? [];
+  if (domainIds.length > 0) {
+    const placeholders = domainIds.map(() => "?").join(", ");
+    clauses.push(
+      `EXISTS (
+        SELECT 1 FROM pull_request_domains pd
+        WHERE pd.repository_id = pull_requests.repository_id
+          AND pd.pr_number = pull_requests.number
+          AND pd.domain_rule_id IN (${placeholders})
+      )`,
+    );
+    parameters.push(...domainIds);
+  }
+  const totalRow = database
+    .prepare(
+      `SELECT COUNT(*) AS total_count
+       FROM pull_requests
+       WHERE ${clauses.join(" AND ")}`,
+    )
+    .get(...parameters) as { total_count: number };
+  const totalCount = Number(totalRow.total_count);
+  const totalPages = Math.ceil(totalCount / limit);
+  const effectivePage = totalPages === 0 ? 1 : Math.min(page, totalPages);
+  const offset = pageOffset(effectivePage, limit);
+  const rows = database
+    .prepare(
+      `SELECT repository_id, number, title, url, author_login, status,
+              updated_at, changed_files_count, additions, deletions, merged_at
+       FROM pull_requests
+       WHERE ${clauses.join(" AND ")}
+       ORDER BY merged_at DESC, number DESC
+       LIMIT ? OFFSET ?`,
+    )
+    .all(...parameters, limit, offset) as Array<Record<string, unknown>>;
+  const pageRows = rows;
+  const domainTags = listDomainTagsForPullRequests(
+    database,
+    repositoryId,
+    pageRows.map((row) => row.number as number),
+  );
+  const items = pageRows.map((row) => ({
+    ...mapMergedPullRequest(row),
+    domains: domainTags.get(row.number as number) ?? [],
+  }));
+  return {
+    items,
+    page: effectivePage,
+    pageSize: limit,
+    totalCount,
+    totalPages,
     calendarTimeZone,
   };
 }
@@ -520,7 +672,15 @@ export function listIssues(
     clauses.push("state = ?");
     parameters.push(options.status);
   }
-  cursorPredicate(clauses, parameters, cursor);
+  searchPredicate(
+    clauses,
+    parameters,
+    options.search,
+    "issues.number",
+    "issues.title",
+    "issues.author_login",
+  );
+  updatedCursorPredicate(clauses, parameters, cursor);
   parameters.push(limit + 1);
 
   const rows = database
@@ -540,7 +700,7 @@ export function listIssues(
     items,
     nextCursor:
       hasMore && last
-        ? encodeListCursor({ updatedAt: last.updatedAt, number: last.number })
+        ? encodeListCursor({ sort: "updated", updatedAt: last.updatedAt, number: last.number })
         : null,
     calendarTimeZone,
   };

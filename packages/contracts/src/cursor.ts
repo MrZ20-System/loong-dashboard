@@ -3,13 +3,32 @@ import { z } from "zod";
 import { utcDateTimeSchema } from "./validation.js";
 
 /** The only cursor payload version currently understood by LoongBoard. */
+export const listCursorSortSchema = z.enum(["updated", "number", "merged"]);
+
 export const listCursorPayloadSchema = z
   .object({
     version: z.literal(1),
-    updatedAt: utcDateTimeSchema,
+    /** The ordering mode is part of the cursor so sort changes cannot reuse it. */
+    sort: listCursorSortSchema.default("updated"),
+    updatedAt: utcDateTimeSchema.optional(),
+    mergedAt: utcDateTimeSchema.optional(),
     number: z.number().int().positive(),
   })
-  .strict();
+  .strict()
+  .superRefine((payload, context) => {
+    if (payload.sort === "updated" && payload.updatedAt === undefined) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "updated cursor requires updatedAt" });
+    }
+    if (payload.sort === "merged" && payload.mergedAt === undefined) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "merged cursor requires mergedAt" });
+    }
+    if (payload.sort !== "merged" && payload.mergedAt !== undefined) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "mergedAt is only valid for merged cursors" });
+    }
+    if (payload.sort !== "updated" && payload.updatedAt !== undefined) {
+      context.addIssue({ code: z.ZodIssueCode.custom, message: "updatedAt is only valid for updated cursors" });
+    }
+  });
 
 export type ListCursorPayload = z.infer<typeof listCursorPayloadSchema>;
 

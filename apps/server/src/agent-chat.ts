@@ -143,6 +143,23 @@ function interactionKey(sessionId: string, requestId: string): string {
   return `${sessionId}\u0000${requestId}`;
 }
 
+export const MAX_WORKTREE_SLOTS = 8;
+
+export type WorktreeSlotCapacityResolver = (
+  repositoryId: string,
+  configuredSlots: number,
+) => number | Promise<number>;
+
+function validateWorktreeSlotCapacity(repositoryId: string, value: number): number {
+  if (!Number.isInteger(value) || value < 1 || value > MAX_WORKTREE_SLOTS) {
+    throw new Error(
+      `Invalid worktree slot capacity for repository ${repositoryId}: ` +
+        `${String(value)} (expected an integer from 1 to ${MAX_WORKTREE_SLOTS})`,
+    );
+  }
+  return value;
+}
+
 export interface AgentChatDependencies {
   database: DatabaseClient;
   /** Shared in-process ownership guard for every agent workspace. */
@@ -157,6 +174,8 @@ export interface AgentChatDependencies {
   domainWorkspaceRoot?: string;
   /** Optional pool override (tests inject a gated/fake pool). */
   worktreePool?: WorktreePool;
+  /** Runtime Settings authority; the DB/system value is only the fallback. */
+  worktreeSlotCapacity?: WorktreeSlotCapacityResolver;
   defaults: {
     provider: string;
     model: string;
@@ -253,12 +272,14 @@ export class AgentChatController {
   }
 
   /**
-   * Resolve the durable conversation owned by one scheduled task. Scheduler
-   * input has already been read from the trusted local database, so this
-   * method intentionally does not accept a browser supplied workspace.
+   * Create the durable conversation for one scheduled occurrence. The run id
+   * is part of the scope so every occurrence gets an independent transcript;
+   * scheduler input is trusted local state and never accepts a browser
+   * supplied workspace.
    */
   async ensureScheduledSession(input: {
     taskId: string;
+    runId: string;
     workspacePath: string;
     provider: string;
     model: string;
@@ -267,24 +288,10 @@ export class AgentChatController {
   }): Promise<AgentSessionSummary> {
     const scope: AgentScope = {
       kind: "general",
-      route: `scheduled-task:${input.taskId}`,
+      route: `scheduled-task:${input.taskId}:run:${input.runId}`,
     };
     const existing = findAgentSession(this.dependencies.database, scope);
     if (existing !== null) {
-      if (existing.workspacePath !== input.workspacePath) {
-        // A schedule edit may move its durable conversation to a new trusted
-        // workspace. Restart the old process first because DSH pins cwd at
-        // start, then clear its opaque id for the new path.
-        if (this.runningTurns.has(existing.id)) {
-          throw new AgentTurnBusyError(existing.id);
-        }
-        await this.host.restart(existing.id);
-        return updateAgentSession(this.dependencies.database, existing.id, {
-          workspacePath: input.workspacePath,
-          dshSessionId: null,
-          status: "idle",
-        });
-      }
       return existing;
     }
     const id = `sess_${randomUUID().replace(/-/g, "").slice(0, 16)}`;
@@ -927,12 +934,20 @@ export class AgentChatController {
       if (prNumber === undefined) {
         throw new Error("PR agent scope is missing prNumber");
       }
+      const fallbackSlots = repository.worktreeSlots;
+      const configuredSlots = validateWorktreeSlotCapacity(
+        repository.id,
+        await (this.dependencies.worktreeSlotCapacity?.(
+          repository.id,
+          fallbackSlots,
+        ) ?? fallbackSlots),
+      );
       const busySlotPaths = listBusyWorkspacePaths(database, repository.id);
       const slotRows = listWorktreeSlots(database, repository.id);
       const slot: AllocatedSlot = await this.worktreePool.allocate({
         mainRepositoryPath: repository.localPath,
         poolRoot: join(this.dependencies.worktreesPath, repository.key),
-        slotCount: repository.worktreeSlots,
+        slotCount: configuredSlots,
         prNumber,
         targetSha,
         busySlotPaths,

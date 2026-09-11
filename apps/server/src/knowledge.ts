@@ -57,6 +57,7 @@ import {
 } from "@loongboard/knowledge";
 
 import {
+  pushBackupRef,
   runCheckpoint,
   type RunCheckpointResult,
 } from "@loongboard/git-workspace";
@@ -120,8 +121,12 @@ export interface KnowledgeCheckpointOptions {
   autoCommit?: boolean;
   autoPush?: boolean;
   remote?: string;
+  sourceRef?: string;
+  remoteBranch?: string;
   branch?: string;
   intervalMinutes?: number | null;
+  checkpointIntervalMinutes?: number | null;
+  pushIntervalMinutes?: number | null;
 }
 
 export interface KnowledgeControllerOptions {
@@ -151,8 +156,12 @@ export class KnowledgeController {
     autoCommit: boolean;
     autoPush: boolean;
     remote: string;
+    sourceRef: string;
+    remoteBranch: string;
     branch: string;
     intervalMinutes: number | null;
+    checkpointIntervalMinutes: number | null;
+    pushIntervalMinutes: number | null;
   };
   private watcher: ReturnType<typeof watch> | null = null;
   private rescanTimer: ReturnType<typeof setTimeout> | null = null;
@@ -170,8 +179,12 @@ export class KnowledgeController {
       autoCommit: options.checkpoint?.autoCommit ?? false,
       autoPush: options.checkpoint?.autoPush ?? false,
       remote: options.checkpoint?.remote ?? "origin",
+      sourceRef: options.checkpoint?.sourceRef ?? options.checkpoint?.branch ?? "main",
+      remoteBranch: options.checkpoint?.remoteBranch ?? "loongboard-knowledge-backup",
       branch: options.checkpoint?.branch ?? "main",
       intervalMinutes: options.checkpoint?.intervalMinutes ?? null,
+      checkpointIntervalMinutes: options.checkpoint?.checkpointIntervalMinutes ?? options.checkpoint?.intervalMinutes ?? null,
+      pushIntervalMinutes: options.checkpoint?.pushIntervalMinutes ?? null,
     };
   }
 
@@ -192,21 +205,42 @@ export class KnowledgeController {
     if (settings.autoCommit !== undefined) this.checkpoint.autoCommit = settings.autoCommit;
     if (settings.autoPush !== undefined) this.checkpoint.autoPush = settings.autoPush;
     if (settings.remote !== undefined) this.checkpoint.remote = settings.remote;
+    if (settings.sourceRef !== undefined) this.checkpoint.sourceRef = settings.sourceRef;
+    else if (settings.branch !== undefined) this.checkpoint.sourceRef = settings.branch;
+    if (settings.remoteBranch !== undefined) this.checkpoint.remoteBranch = settings.remoteBranch;
     if (settings.branch !== undefined) this.checkpoint.branch = settings.branch;
     if (settings.intervalMinutes !== undefined) {
       this.checkpoint.intervalMinutes = settings.intervalMinutes;
     }
+    if (settings.checkpointIntervalMinutes !== undefined) this.checkpoint.checkpointIntervalMinutes = settings.checkpointIntervalMinutes;
+    if (settings.pushIntervalMinutes !== undefined) this.checkpoint.pushIntervalMinutes = settings.pushIntervalMinutes;
   }
 
-  /** Run the existing Knowledge checkpoint immediately, including push. */
+  /** Run the existing Knowledge checkpoint immediately; push is opt-in. */
   async runCheckpointNow(options: { push?: boolean } = {}): Promise<RunCheckpointResult> {
     return runCheckpoint({
       repositoryPath: this.knowledgePath,
       message: `chore(knowledge): checkpoint ${new Date().toISOString()}`,
-      push: options.push ?? this.checkpoint.autoPush,
+      push: options.push ?? false,
       remote: this.checkpoint.remote,
-      branch: this.checkpoint.branch,
+      sourceRef: this.checkpoint.sourceRef,
+      remoteBranch: this.checkpoint.remoteBranch,
     });
+  }
+
+  /** Push the configured source ref without creating a checkpoint commit. */
+  async runPushNow(): Promise<RunCheckpointResult> {
+    const result = await pushBackupRef({
+      repositoryPath: this.knowledgePath,
+      remote: this.checkpoint.remote,
+      sourceRef: this.checkpoint.sourceRef,
+      remoteBranch: this.checkpoint.remoteBranch,
+    });
+    return {
+      committed: false,
+      pushed: result.pushed,
+      ...(result.error === undefined ? {} : { error: result.error }),
+    };
   }
   tree(): KnowledgeTreeItem[] {
     return this.currentFiles().map((file) => ({

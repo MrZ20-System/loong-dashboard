@@ -1,5 +1,7 @@
 import {
+  agentArchiveSettingsSchema,
   agentRuntimeSettingsSchema,
+  codeBackupSettingsSchema,
   githubIntegrationSchema,
   jsonSourceSchema,
   jsonSourceVersionsResponseSchema,
@@ -8,6 +10,10 @@ import {
   removedResponseSchema,
   type AgentRuntimeSettings,
   type AgentRuntimeSettingsUpdate,
+  type AgentArchiveSettings,
+  type AgentArchiveSettingsUpdate,
+  type CodeBackupSettings,
+  type CodeBackupSettingsUpdate,
   type GitHubIntegration,
   type JsonSource,
   type JsonSourceVersionsResponse,
@@ -19,7 +25,7 @@ import {
   type KnowledgeCheckpointSettingsUpdate,
 } from "@loongboard/contracts";
 
-export type { AgentRuntimeSettings, AgentRuntimeSettingsUpdate, GitHubIntegration, JsonSource, KnowledgeCheckpointSettings, KnowledgeCheckpointSettingsUpdate, RepositorySettings } from "@loongboard/contracts";
+export type { AgentArchiveSettings, AgentArchiveSettingsUpdate, AgentRuntimeSettings, AgentRuntimeSettingsUpdate, CodeBackupSettings, CodeBackupSettingsUpdate, GitHubIntegration, JsonSource, KnowledgeCheckpointSettings, KnowledgeCheckpointSettingsUpdate, RepositorySettings } from "@loongboard/contracts";
 
 async function json<T>(path: string, schema: { parse(value: unknown): T }, init: RequestInit = {}): Promise<T> {
   let response: Response;
@@ -47,6 +53,10 @@ export function fetchRepositorySettings(repositoryId: string): Promise<Repositor
 
 export function updateRepositorySettings(repositoryId: string, patch: RepositorySettingsUpdate): Promise<RepositorySettings> {
   return json(`/api/repositories/${encodeURIComponent(repositoryId)}/settings`, repositorySettingsSchema, { method: "PUT", body: JSON.stringify(patch) });
+}
+
+export function cleanupRepositoryWorktrees(repositoryId: string): Promise<RepositorySettings> {
+  return json(`/api/repositories/${encodeURIComponent(repositoryId)}/settings/worktrees/cleanup`, repositorySettingsSchema, { method: "POST" });
 }
 
 export function fetchGitHubIntegration(): Promise<GitHubIntegration> {
@@ -103,6 +113,38 @@ export function saveDomainPrompt(repositoryId: string, content: string): Promise
 
 export function fetchKnowledgeCheckpointSettings(): Promise<KnowledgeCheckpointSettings> {
   return json("/api/settings/knowledge-checkpoint", knowledgeCheckpointSettingsSchema);
+}
+
+export function fetchCodeBackupSettings(): Promise<CodeBackupSettings> {
+  return json("/api/settings/code-backup", codeBackupSettingsSchema);
+}
+
+export function updateCodeBackupSettings(patch: CodeBackupSettingsUpdate): Promise<CodeBackupSettings> {
+  return json("/api/settings/code-backup", codeBackupSettingsSchema, { method: "PUT", body: JSON.stringify(patch) });
+}
+
+export function runCodeBackupCheckpoint(): Promise<{ accepted: true }> {
+  return json("/api/settings/code-backup/checkpoint", savedResponseSchema, { method: "POST" }).then(() => ({ accepted: true as const }));
+}
+
+export function pushCodeBackup(): Promise<{ accepted: true }> {
+  return json("/api/settings/code-backup/push", savedResponseSchema, { method: "POST" }).then(() => ({ accepted: true as const }));
+}
+
+export function fetchAgentArchiveSettings(): Promise<AgentArchiveSettings> {
+  return json("/api/settings/agent-archive", agentArchiveSettingsSchema);
+}
+
+export function updateAgentArchiveSettings(patch: AgentArchiveSettingsUpdate): Promise<AgentArchiveSettings> {
+  return json("/api/settings/agent-archive", agentArchiveSettingsSchema, { method: "PUT", body: JSON.stringify(patch) });
+}
+
+export function runAgentArchiveExport(): Promise<{ accepted: true }> {
+  return json("/api/settings/agent-archive/export", savedResponseSchema, { method: "POST" }).then(() => ({ accepted: true as const }));
+}
+
+export function pushAgentArchive(): Promise<{ accepted: true }> {
+  return json("/api/settings/agent-archive/push", savedResponseSchema, { method: "POST" }).then(() => ({ accepted: true as const }));
 }
 
 export function updateKnowledgeCheckpointSettings(patch: KnowledgeCheckpointSettingsUpdate): Promise<KnowledgeCheckpointSettings> {

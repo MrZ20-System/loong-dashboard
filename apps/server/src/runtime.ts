@@ -1,5 +1,6 @@
-import { mkdirSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { existsSync, mkdirSync, realpathSync, statSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import {
   openDatabase,
@@ -8,7 +9,6 @@ import {
   createScheduledTask,
   getScheduledTask,
   getRepository,
-  getRepositorySyncStatus,
   listScheduledTaskRuns,
   recoverInterruptedSyncStates,
   updateScheduledTask,
@@ -47,11 +47,21 @@ import { WorkspaceRunCoordinator } from "./workspace-run-coordinator.js";
 import { DomainFileService } from "./domain-file.js";
 import {
   SettingsController,
+  type AgentArchiveBridge,
   type AgentRuntimeSettingsBridge,
+  type CodeBackupBridge,
   type KnowledgeCheckpointBridge,
   type RepositorySettingsBridge,
+  type RepositoryWorktreeBridge,
 } from "./settings.js";
 import type { SchedulerExecutor } from "./scheduler.js";
+import { pushBackupRef, runCheckpoint } from "@loongboard/git-workspace";
+import type { CodeBackupSettings } from "@loongboard/contracts";
+import type { AgentArchiveSettings } from "@loongboard/contracts";
+import type { RepositoryWorktreeSettings } from "@loongboard/contracts";
+import { AgentArchiveExporter } from "./agent-archive.js";
+import { GitRepositoryLock } from "./git-repository-lock.js";
+import { WorktreeMaintenanceService } from "./worktree-maintenance.js";
 
 export interface CreateServerRuntimeOptions {
   /** Use a prevalidated config in tests or an embedding process. */
@@ -141,6 +151,7 @@ export function createServerRuntime(
     const coordinator = new RepositorySyncCoordinator({
       database,
       provider,
+      calendarTimeZone: config.timezone,
       now: options.now,
       logger: options.coordinatorLogger,
       enricher,
@@ -149,6 +160,21 @@ export function createServerRuntime(
     });
     const reclassification = new DomainReclassificationService({ database });
     const workspaceRuns = new WorkspaceRunCoordinator();
+    const worktreePolicyResolver = (repositoryId: string, fallbackSlots: number) => {
+      const settings = settingsController?.repositorySettingsSync(repositoryId);
+      return {
+        configuredSlots: settings?.worktrees.configuredSlots ?? Math.min(8, Math.max(1, fallbackSlots)),
+        idleCleanupTtlMs: (settings?.worktrees.idleCleanupTtlHours ?? 24) * 60 * 60 * 1_000,
+      };
+    };
+    const worktreeSlotCapacityResolver = (repositoryId: string, fallbackSlots: number) =>
+      worktreePolicyResolver(repositoryId, fallbackSlots).configuredSlots;
+    const worktreeMaintenance = new WorktreeMaintenanceService({
+      database,
+      worktreesPath: config.runtime.worktreesPath,
+      policyResolver: worktreePolicyResolver,
+      liveBusyWorkspacePaths: () => workspaceRuns.busyPaths(),
+    });
     const agentChat = new AgentChatController({
       database,
       workspaceRuns,
@@ -156,6 +182,7 @@ export function createServerRuntime(
       worktreesPath: config.runtime.worktreesPath,
       knowledgePath: config.knowledge.path,
       domainWorkspaceRoot: systemRoot,
+      worktreeSlotCapacity: worktreeSlotCapacityResolver,
       defaults: {
         provider: config.agent.defaultProvider,
         model: config.agent.defaultModel,
@@ -176,18 +203,63 @@ export function createServerRuntime(
     });
     const checkpointTaskId = "system_knowledge_checkpoint";
     const knowledgePushTaskId = "system_knowledge_push";
+    const codeCheckpointTaskId = "system_code_checkpoint";
+    const codePushTaskId = "system_code_push";
+    const archiveCheckpointTaskId = "system_agent_archive_checkpoint";
+    const archivePushTaskId = "system_agent_archive_push";
+    const worktreeCleanupTaskId = (repositoryId: string) =>
+      `system_repository_worktrees_cleanup_${encodeURIComponent(repositoryId)}`;
     const repositoryTaskId = (repositoryId: string) =>
       `system_repository_sync_${encodeURIComponent(repositoryId)}`;
     let checkpointState = {
       autoCommit: config.knowledge.checkpoint?.autoCommit ?? false,
       autoPush: config.knowledge.checkpoint?.autoPush ?? false,
       remote: config.knowledge.checkpoint?.remote ?? "origin",
-      branch: config.knowledge.checkpoint?.branch ?? "main",
+      branch: config.knowledge.checkpoint?.sourceRef ?? config.knowledge.checkpoint?.branch ?? "main",
       intervalMinutes: null as number | null,
       nextRunAt: null as string | null,
       lastSuccessAt: null as string | null,
       lastError: null as string | null,
+      sourceRef: config.knowledge.checkpoint?.sourceRef ?? config.knowledge.checkpoint?.branch ?? "main",
+      remoteBranch: config.knowledge.checkpoint?.remoteBranch ?? "loongboard-knowledge-backup",
+      checkpointIntervalMinutes: null as number | null,
+      pushIntervalMinutes: null as number | null,
     };
+    // The code backup target is the installed LoongBoard repository itself,
+    // independent of the shell cwd used to launch the server.
+    const codeRepositoryPath = resolve(dirname(fileURLToPath(import.meta.url)), "../../..");
+    const defaultArchivePath = resolve(codeRepositoryPath, "..", "agent-archive");
+    let codeBackupState: CodeBackupSettings = {
+      repositoryPath: codeRepositoryPath,
+      automaticCheckpoint: false,
+      checkpointIntervalMinutes: null,
+      automaticPush: false,
+      pushIntervalMinutes: null,
+      sourceRef: "main",
+      remote: "origin",
+      remoteBranch: "loongboard-backup",
+      lastCheckpointAt: null,
+      nextCheckpointAt: null,
+      lastPushAt: null,
+      nextPushAt: null,
+      lastError: null,
+    };
+    let agentArchiveState: AgentArchiveSettings = {
+      archiveRepositoryPath: defaultArchivePath,
+      enabled: false,
+      exportIntervalMinutes: null,
+      automaticPush: false,
+      pushIntervalMinutes: null,
+      sourceRef: "main",
+      remote: "origin",
+      remoteBranch: "agent-history-backup",
+      lastExportAt: null,
+      nextExportAt: null,
+      lastPushAt: null,
+      nextPushAt: null,
+      lastError: null,
+    };
+    const gitRepositoryLock = new GitRepositoryLock();
 
     const executor: SchedulerExecutor = {
       executeSystem: async ({ task }) => {
@@ -195,23 +267,31 @@ export function createServerRuntime(
           if (task.repositoryId === null) {
             throw new Error("Repository sync task is missing repositoryId");
           }
-          coordinator.start(task.repositoryId);
-          await coordinator.waitForIdle();
-          const sync = getRepositorySyncStatus(database, task.repositoryId);
-          const failed = [sync.pullRequests, sync.issues].find(
-            (state) => state.status === "failed",
-          );
-          if (failed !== undefined) {
-            throw new Error(
-              failed.lastError ??
-                `Repository sync failed for ${task.repositoryId}/${failed.entityKind}`,
-            );
+          const run = coordinator.start(task.repositoryId, "system");
+          const completed = await coordinator.waitForRun(run.syncRunId);
+          if (completed.status === "failed" || completed.status === "partial") {
+            throw new Error(completed.error ?? `Repository sync failed for ${task.repositoryId}`);
           }
           return;
         }
+        if (task.action === "repository.worktrees.cleanup") {
+          if (task.repositoryId === null) {
+            throw new Error("Worktree cleanup task is missing repositoryId");
+          }
+          const repository = getRepository(database, task.repositoryId);
+          if (repository === null) throw new Error(`Repository is missing or disabled: ${task.repositoryId}`);
+          await worktreeMaintenance.reconcile({
+            repositoryId: repository.id,
+            repositoryKey: repository.key,
+            mainRepositoryPath: repository.localPath,
+            fallbackSlots: repository.worktreeSlots,
+          });
+          return;
+        }
         if (task.action === "knowledge.checkpoint") {
-          // Let Knowledge apply its configured autoPush behavior.
-          const result = await knowledge.runCheckpointNow();
+          const result = await gitRepositoryLock.run(config.knowledge.path, () =>
+            knowledge.runCheckpointNow({ push: false }),
+          );
           if (result.error !== undefined) throw new Error(result.error);
           checkpointState = {
             ...checkpointState,
@@ -220,12 +300,102 @@ export function createServerRuntime(
           };
           return;
         }
+        if (task.action === "git.checkpoint") {
+          const result = await gitRepositoryLock.run(codeBackupState.repositoryPath, () =>
+            runCheckpoint({
+              repositoryPath: codeBackupState.repositoryPath,
+              message: `chore: automatic checkpoint ${new Date().toISOString()}`,
+              sourceRef: codeBackupState.sourceRef,
+            }),
+          );
+          if (result.error !== undefined) throw new Error(result.error);
+          codeBackupState = { ...codeBackupState, lastCheckpointAt: new Date().toISOString(), lastError: null };
+          return;
+        }
+        if (task.action === "git.push") {
+          const result = await gitRepositoryLock.run(codeBackupState.repositoryPath, () =>
+            pushBackupRef({
+              repositoryPath: codeBackupState.repositoryPath,
+              remote: codeBackupState.remote,
+              sourceRef: codeBackupState.sourceRef,
+              remoteBranch: codeBackupState.remoteBranch,
+            }),
+          );
+          if (!result.pushed) throw new Error(result.error ?? "Code backup push failed");
+          codeBackupState = { ...codeBackupState, lastPushAt: new Date().toISOString(), lastError: null };
+          return;
+        }
         if (task.action === "knowledge.push") {
-          const result = await knowledge.runCheckpointNow({ push: true });
+          const result = await gitRepositoryLock.run(config.knowledge.path, () =>
+            knowledge.runPushNow(),
+          );
           if (result.error !== undefined) throw new Error(result.error);
           checkpointState = {
             ...checkpointState,
             lastSuccessAt: new Date().toISOString(),
+            lastError: null,
+          };
+          return;
+        }
+        if (task.action === "agent.archive.checkpoint") {
+          const result = await gitRepositoryLock.run(
+            agentArchiveState.archiveRepositoryPath,
+            async () => {
+              validateAgentArchivePath({
+                archivePath: agentArchiveState.archiveRepositoryPath,
+                statePath: config.runtime.statePath,
+                worktreesPath: config.runtime.worktreesPath,
+                knowledgePath: config.knowledge.path,
+                codeRepositoryPath,
+                create: false,
+              });
+              new AgentArchiveExporter({
+                database,
+                archiveRoot: agentArchiveState.archiveRepositoryPath,
+              }).export();
+              return runCheckpoint({
+                repositoryPath: agentArchiveState.archiveRepositoryPath,
+                message: `chore(agent-archive): export ${new Date().toISOString()}`,
+                sourceRef: agentArchiveState.sourceRef,
+              });
+            },
+          );
+          if (result.error !== undefined) {
+            throw new Error(`Agent archive checkpoint failed: ${result.error}`);
+          }
+          agentArchiveState = {
+            ...agentArchiveState,
+            lastExportAt: new Date().toISOString(),
+            lastError: null,
+          };
+          return;
+        }
+        if (task.action === "agent.archive.push") {
+          const result = await gitRepositoryLock.run(
+            agentArchiveState.archiveRepositoryPath,
+            async () => {
+              validateAgentArchivePath({
+                archivePath: agentArchiveState.archiveRepositoryPath,
+                statePath: config.runtime.statePath,
+                worktreesPath: config.runtime.worktreesPath,
+                knowledgePath: config.knowledge.path,
+                codeRepositoryPath,
+                create: false,
+              });
+              return pushBackupRef({
+                repositoryPath: agentArchiveState.archiveRepositoryPath,
+                remote: agentArchiveState.remote,
+                sourceRef: agentArchiveState.sourceRef,
+                remoteBranch: agentArchiveState.remoteBranch,
+              });
+            },
+          );
+          if (!result.pushed) {
+            throw new Error(`Agent archive push failed: ${result.error ?? "unknown Git error"}`);
+          }
+          agentArchiveState = {
+            ...agentArchiveState,
+            lastPushAt: new Date().toISOString(),
             lastError: null,
           };
           return;
@@ -299,10 +469,11 @@ export function createServerRuntime(
     const checkpointBridge: KnowledgeCheckpointBridge = {
       get: () => {
         const task = getScheduledTask(database, checkpointTaskId);
+        const pushTask = getScheduledTask(database, knowledgePushTaskId);
         if (task === null) {
-          return checkpointState.intervalMinutes === null
+          return checkpointState.intervalMinutes === null && checkpointState.pushIntervalMinutes === null
             ? checkpointState
-            : { ...checkpointState, autoCommit: false, intervalMinutes: null, nextRunAt: null };
+            : { ...checkpointState, autoCommit: false, autoPush: false, intervalMinutes: null, checkpointIntervalMinutes: null, pushIntervalMinutes: null, nextRunAt: null };
         }
         const runs = [
           ...listScheduledTaskRuns(database, checkpointTaskId),
@@ -317,12 +488,19 @@ export function createServerRuntime(
         return {
           ...checkpointState,
           autoCommit: task.enabled,
+          autoPush: pushTask?.enabled ?? false,
           // A disabled stable task still has a placeholder cron so Run now
           // can use the same scheduler path. Preserve the user's nullable
           // interval while it is disabled.
           intervalMinutes: task.enabled
             ? intervalFromCron(task.cronExpression)
             : checkpointState.intervalMinutes,
+          checkpointIntervalMinutes: task.enabled
+            ? intervalFromCron(task.cronExpression)
+            : checkpointState.checkpointIntervalMinutes,
+          pushIntervalMinutes: pushTask?.enabled
+            ? intervalFromCron(pushTask.cronExpression)
+            : checkpointState.pushIntervalMinutes,
           nextRunAt: task.nextRunAt,
           lastSuccessAt: completed?.finishedAt ?? checkpointState.lastSuccessAt,
           // A later successful run clears an older failure; only the latest
@@ -350,6 +528,14 @@ export function createServerRuntime(
           config,
           workspacePath: config.knowledge.path,
         });
+        syncKnowledgePushTask({
+          database,
+          scheduler,
+          taskId: knowledgePushTaskId,
+          settings: checkpointState,
+          config,
+          workspacePath: config.knowledge.path,
+        });
         checkpointState.nextRunAt = task.nextRunAt;
         return checkpointState;
       },
@@ -358,6 +544,105 @@ export function createServerRuntime(
       },
       push: async () => {
         await scheduler.runNow(knowledgePushTaskId);
+      },
+    };
+
+    const codeBackupBridge: CodeBackupBridge = {
+      get: () => codeBackupStatus(database, codeBackupState),
+      update: (patch) => {
+        codeBackupState = { ...codeBackupState, ...patch };
+        syncCodeBackupTasks({ database, scheduler, codeBackupState, config });
+        return codeBackupState;
+      },
+      runCheckpoint: async () => {
+        await scheduler.runNow(codeCheckpointTaskId);
+      },
+      runPush: async () => {
+        await scheduler.runNow(codePushTaskId);
+      },
+    };
+
+    const agentArchiveBridge: AgentArchiveBridge = {
+      get: () => agentArchiveStatus(database, agentArchiveState),
+      update: (patch) => {
+        const next = { ...agentArchiveState, ...patch };
+        const archiveRepositoryPath = validateAgentArchivePath({
+          archivePath: next.archiveRepositoryPath,
+          statePath: config.runtime.statePath,
+          worktreesPath: config.runtime.worktreesPath,
+          knowledgePath: config.knowledge.path,
+          codeRepositoryPath,
+          create: true,
+        });
+        agentArchiveState = { ...next, archiveRepositoryPath };
+        syncAgentArchiveTasks({
+          database,
+          scheduler,
+          state: agentArchiveState,
+          config,
+        });
+        return agentArchiveState;
+      },
+      runExport: async () => {
+        await scheduler.runNow(archiveCheckpointTaskId);
+      },
+      runPush: async () => {
+        await scheduler.runNow(archivePushTaskId);
+      },
+    };
+
+    const worktreeRef = (repositoryId: string) => {
+      const repository = getRepository(database, repositoryId);
+      if (repository === null) throw new Error(`Repository is missing or disabled: ${repositoryId}`);
+      return {
+        repositoryId,
+        repositoryKey: repository.key,
+        mainRepositoryPath: repository.localPath,
+        fallbackSlots: repository.worktreeSlots,
+      };
+    };
+    const projectWorktreeResult = (
+      repositoryId: string,
+      result: {
+        configuredSlots: number;
+        physicalSlots: number;
+        active: number;
+        idle: number;
+        dirty: number;
+        pendingRetirement: number;
+        pendingRetirementPaths: readonly string[];
+        dirtyPaths: readonly string[];
+        busyPaths: readonly string[];
+        errors: readonly { slotPath: string; message: string }[];
+      },
+    ): Partial<RepositoryWorktreeSettings> => {
+      const policy = worktreePolicyResolver(repositoryId, worktreeRef(repositoryId).fallbackSlots);
+      return {
+        configuredSlots: policy.configuredSlots,
+        idleCleanupTtlHours: policy.idleCleanupTtlMs / (60 * 60 * 1_000),
+        physicalSlots: result.physicalSlots,
+        active: result.active,
+        idle: result.idle,
+        dirty: result.dirty,
+        pendingRetirement: result.pendingRetirement,
+        pendingRetirementPaths: [...result.pendingRetirementPaths],
+        dirtyPaths: [...result.dirtyPaths],
+        busyPaths: [...result.busyPaths],
+        errors: result.errors.map((error) => ({ slotPath: error.slotPath, message: error.message })),
+      };
+    };
+    const worktreeBridge: RepositoryWorktreeBridge = {
+      inspect: async (repositoryId) => {
+        const result = await worktreeMaintenance.inspect(worktreeRef(repositoryId));
+        return projectWorktreeResult(repositoryId, result);
+      },
+      reconcile: async (repositoryId) => {
+        const result = await worktreeMaintenance.reconcile(worktreeRef(repositoryId));
+        return projectWorktreeResult(repositoryId, result);
+      },
+      cleanupUnused: async (repositoryId) => {
+        const result = await worktreeMaintenance.cleanupUnused(worktreeRef(repositoryId));
+        return projectWorktreeResult(repositoryId, result);
       },
     };
 
@@ -392,7 +677,10 @@ export function createServerRuntime(
       credential,
       agent: agentBridge,
       repositorySchedules,
+      worktrees: worktreeBridge,
       checkpoint: checkpointBridge,
+      codeBackup: codeBackupBridge,
+      agentArchive: agentArchiveBridge,
       defaults: {
         defaultProvider: config.agent.defaultProvider,
         defaultModel: config.agent.defaultModel,
@@ -402,11 +690,19 @@ export function createServerRuntime(
       },
     });
     settingsController = settings;
+    // system.yaml constructed AgentChatController with installation defaults;
+    // apply user operational overrides before any scheduler run can create a
+    // new session. Scheduled task settings remain their own authority.
+    settings.hydrateAgentRuntime();
 
     const persistedCheckpoint = settings.checkpointSettingsSync();
     checkpointState = {
       ...checkpointState,
       ...persistedCheckpoint,
+      sourceRef: persistedCheckpoint.sourceRef ?? persistedCheckpoint.branch,
+      remoteBranch: persistedCheckpoint.remoteBranch ?? config.knowledge.checkpoint?.remoteBranch ?? "loongboard-knowledge-backup",
+      checkpointIntervalMinutes: persistedCheckpoint.checkpointIntervalMinutes ?? persistedCheckpoint.intervalMinutes ?? null,
+      pushIntervalMinutes: persistedCheckpoint.pushIntervalMinutes ?? null,
     };
     // Keep one stable checkpoint task even when automatic scheduling is off;
     // Settings Run now/Push now then use the same workspace lock and run
@@ -421,14 +717,19 @@ export function createServerRuntime(
         autoPush: persistedCheckpoint.autoPush,
         remote: persistedCheckpoint.remote,
         branch: persistedCheckpoint.branch,
-        intervalMinutes: persistedCheckpoint.intervalMinutes ?? null,
+        intervalMinutes: persistedCheckpoint.checkpointIntervalMinutes ?? persistedCheckpoint.intervalMinutes ?? null,
       },
       config,
       workspacePath: config.knowledge.path,
     });
     ensureKnowledgePushTask({
       database,
+      scheduler,
       taskId: knowledgePushTaskId,
+      settings: {
+        autoPush: persistedCheckpoint.autoPush,
+        pushIntervalMinutes: persistedCheckpoint.pushIntervalMinutes ?? null,
+      },
       config,
       workspacePath: config.knowledge.path,
     });
@@ -440,6 +741,30 @@ export function createServerRuntime(
         : persistedCheckpoint.intervalMinutes ?? null,
       nextRunAt: checkpointTask.nextRunAt,
     };
+    const persistedCode = settings.codeBackupSettingsSync();
+    codeBackupState = { ...codeBackupState, ...persistedCode };
+    ensureCodeBackupTasks({ database, scheduler, codeBackupState, config });
+    const persistedArchive = settings.agentArchiveSettingsSync();
+    agentArchiveState = { ...agentArchiveState, ...persistedArchive };
+    const archiveRepositoryPath = validateAgentArchivePath({
+      archivePath: agentArchiveState.archiveRepositoryPath,
+      statePath: config.runtime.statePath,
+      worktreesPath: config.runtime.worktreesPath,
+      knowledgePath: config.knowledge.path,
+      codeRepositoryPath,
+      create: true,
+    });
+    agentArchiveState = { ...agentArchiveState, archiveRepositoryPath };
+    ensureAgentArchiveTasks({ database, scheduler, state: agentArchiveState, config });
+    for (const repository of config.repositories) {
+      ensureWorktreeCleanupTask({
+        database,
+        scheduler,
+        taskId: worktreeCleanupTaskId(repository.key),
+        repository,
+        config,
+      });
+    }
     knowledge.updateCheckpoint(checkpointState);
     for (const repository of config.repositories) {
       const repositorySettings = settings.repositorySettingsSync(repository.key);
@@ -449,6 +774,10 @@ export function createServerRuntime(
     }
     knowledge.start();
     scheduler.start();
+    // Resume enabled cursors left by an interrupted run or by an older
+    // release that stopped after one bounded partial batch. Always admit a
+    // fresh run; prior durable run records remain immutable.
+    coordinator.resumeEnabledHistories();
     const domainFiles = new DomainFileService({
       database,
       systemRoot,
@@ -566,6 +895,57 @@ function cronForInterval(minutes: number): string {
   throw new Error("Sync frequency must be a whole number of hours or days");
 }
 
+function ensureWorktreeCleanupTask(input: {
+  database: DatabaseClient;
+  scheduler: SchedulerEngine;
+  taskId: string;
+  repository: SystemConfig["repositories"][number];
+  config: SystemConfig;
+}): ScheduledTaskRow {
+  const existing = getScheduledTask(input.database, input.taskId);
+  if (
+    existing !== null &&
+    (existing.kind !== "system" || existing.action !== "repository.worktrees.cleanup")
+  ) {
+    throw new Error(`System task id is already used: ${input.taskId}`);
+  }
+  const task = existing === null
+    ? createScheduledTask(input.database, {
+        id: input.taskId,
+        name: `Clean worktrees ${input.repository.name}`,
+        cronExpression: "0 */6 * * *",
+        timezone: input.config.timezone,
+        prompt: `Reconcile idle worktrees for repository ${input.repository.key}.`,
+        workspacePath: input.repository.path,
+        provider: input.config.agent.defaultProvider,
+        model: input.config.agent.defaultModel,
+        reasoningEffort: input.config.agent.defaultReasoningEffort,
+        kind: "system",
+        action: "repository.worktrees.cleanup",
+        repositoryId: input.repository.key,
+        enabled: true,
+      })
+    : updateScheduledTask(input.database, existing.id, {
+        // `scheduled_tasks` is the runtime cadence authority. Preserve a
+        // user's cron/enabled/next state across restart; only refresh the
+        // immutable system action and repository binding.
+        name: existing.name,
+        cronExpression: existing.cronExpression,
+        timezone: existing.timezone,
+        prompt: existing.prompt,
+        workspacePath: input.repository.path,
+        provider: existing.provider,
+        model: existing.model,
+        reasoningEffort: existing.reasoningEffort,
+        kind: "system",
+        action: "repository.worktrees.cleanup",
+        repositoryId: input.repository.key,
+        enabled: existing.enabled,
+      });
+  input.scheduler.refresh(task.id);
+  return getScheduledTask(input.database, task.id) ?? task;
+}
+
 function intervalFromCron(cron: string): number | null {
   const minute = cron.match(/^\*\/(\d+) \* \* \* \*$/);
   if (minute !== null) return Number(minute[1]);
@@ -585,6 +965,7 @@ function syncKnowledgeCheckpointTask(input: {
     remote: string;
     branch: string;
     intervalMinutes: number | null;
+    checkpointIntervalMinutes?: number | null;
   };
   config: SystemConfig;
   workspacePath: string;
@@ -596,13 +977,14 @@ function syncKnowledgeCheckpointTask(input: {
   ) {
     throw new Error(`System task id is already used: ${input.taskId}`);
   }
-  const shouldSchedule = input.settings.autoCommit && input.settings.intervalMinutes !== null;
+  const checkpointInterval = input.settings.checkpointIntervalMinutes ?? input.settings.intervalMinutes;
+  const shouldSchedule = input.settings.autoCommit && checkpointInterval !== null;
   const task =
     existing === null
       ? createScheduledTask(input.database, {
           id: input.taskId,
           name: "Knowledge checkpoint",
-          cronExpression: cronForInterval(input.settings.intervalMinutes ?? 1_440),
+          cronExpression: cronForInterval(checkpointInterval ?? 1_440),
           timezone: input.config.timezone,
           prompt: "Run the Knowledge repository checkpoint.",
           workspacePath: input.workspacePath,
@@ -614,9 +996,9 @@ function syncKnowledgeCheckpointTask(input: {
           enabled: shouldSchedule,
         })
       : updateScheduledTask(input.database, existing.id, {
-          ...(input.settings.intervalMinutes === null
+          ...(checkpointInterval === null
             ? {}
-            : { cronExpression: cronForInterval(input.settings.intervalMinutes) }),
+            : { cronExpression: cronForInterval(checkpointInterval) }),
           enabled: shouldSchedule,
           workspacePath: input.workspacePath,
           timezone: input.config.timezone,
@@ -640,7 +1022,9 @@ function ensureKnowledgeCheckpointTask(input: Parameters<typeof syncKnowledgeChe
 
 function ensureKnowledgePushTask(input: {
   database: DatabaseClient;
+  scheduler: SchedulerEngine;
   taskId: string;
+  settings: { autoPush: boolean; pushIntervalMinutes: number | null };
   config: SystemConfig;
   workspacePath: string;
 }): ScheduledTaskRow {
@@ -651,10 +1035,10 @@ function ensureKnowledgePushTask(input: {
     }
     return existing;
   }
-  return createScheduledTask(input.database, {
+  const task = createScheduledTask(input.database, {
     id: input.taskId,
     name: "Knowledge push",
-    cronExpression: "0 0 * * *",
+    cronExpression: cronForInterval(input.settings.pushIntervalMinutes ?? 1_440),
     timezone: input.config.timezone,
     prompt: "Push the Knowledge repository checkpoint.",
     workspacePath: input.workspacePath,
@@ -663,6 +1047,350 @@ function ensureKnowledgePushTask(input: {
     reasoningEffort: input.config.agent.defaultReasoningEffort,
     kind: "system",
     action: "knowledge.push",
-    enabled: false,
+    enabled: input.settings.autoPush && input.settings.pushIntervalMinutes !== null,
   });
+  input.scheduler.refresh(task.id);
+  return getScheduledTask(input.database, task.id)!;
+}
+
+function syncKnowledgePushTask(input: {
+  database: DatabaseClient;
+  scheduler: SchedulerEngine;
+  taskId: string;
+  settings: { autoPush: boolean; pushIntervalMinutes: number | null };
+  config: SystemConfig;
+  workspacePath: string;
+}): ScheduledTaskRow {
+  const existing = getScheduledTask(input.database, input.taskId);
+  if (existing === null) {
+    return ensureKnowledgePushTask(input);
+  }
+  if (existing.kind !== "system" || existing.action !== "knowledge.push") {
+    throw new Error(`System task id is already used: ${input.taskId}`);
+  }
+  const task = updateScheduledTask(input.database, existing.id, {
+    ...(input.settings.pushIntervalMinutes === null ? {} : { cronExpression: cronForInterval(input.settings.pushIntervalMinutes) }),
+    enabled: input.settings.autoPush && input.settings.pushIntervalMinutes !== null,
+    workspacePath: input.workspacePath,
+    timezone: input.config.timezone,
+  });
+  input.scheduler.refresh(task.id);
+  return getScheduledTask(input.database, task.id)!;
+}
+
+function syncCodeBackupTasks(input: {
+  database: DatabaseClient;
+  scheduler: SchedulerEngine;
+  codeBackupState: CodeBackupSettings;
+  config: SystemConfig;
+}): void {
+  const createOrUpdate = (taskId: string, name: string, action: "git.checkpoint" | "git.push", enabled: boolean, interval: number | null) => {
+    const existing = getScheduledTask(input.database, taskId);
+    if (existing !== null && (existing.kind !== "system" || existing.action !== action)) {
+      throw new Error(`System task id is already used: ${taskId}`);
+    }
+    const task = existing === null
+      ? createScheduledTask(input.database, {
+          id: taskId,
+          name,
+          cronExpression: cronForInterval(interval ?? 1_440),
+          timezone: input.config.timezone,
+          prompt: name,
+          workspacePath: input.codeBackupState.repositoryPath,
+          provider: input.config.agent.defaultProvider,
+          model: input.config.agent.defaultModel,
+          reasoningEffort: input.config.agent.defaultReasoningEffort,
+          kind: "system",
+          action,
+          enabled: enabled && interval !== null,
+        })
+      : updateScheduledTask(input.database, taskId, {
+          ...(interval === null ? {} : { cronExpression: cronForInterval(interval) }),
+          workspacePath: input.codeBackupState.repositoryPath,
+          timezone: input.config.timezone,
+          enabled: enabled && interval !== null,
+        });
+    input.scheduler.refresh(task.id);
+  };
+  createOrUpdate("system_code_checkpoint", "Code checkpoint", "git.checkpoint", input.codeBackupState.automaticCheckpoint, input.codeBackupState.checkpointIntervalMinutes ?? null);
+  createOrUpdate("system_code_push", "Code push", "git.push", input.codeBackupState.automaticPush, input.codeBackupState.pushIntervalMinutes ?? null);
+}
+
+function ensureCodeBackupTasks(input: {
+  database: DatabaseClient;
+  scheduler: SchedulerEngine;
+  codeBackupState: CodeBackupSettings;
+  config: SystemConfig;
+}): void {
+  const ensure = (taskId: string, name: string, action: "git.checkpoint" | "git.push", enabled: boolean, interval: number | null) => {
+    const existing = getScheduledTask(input.database, taskId);
+    if (existing !== null) {
+      if (existing.kind !== "system" || existing.action !== action) throw new Error(`System task id is already used: ${taskId}`);
+      // The repository path is installation topology, not scheduler policy.
+      // Repair an old cwd-derived projection while preserving task enabled,
+      // cron, and nextRunAt authority.
+      if (existing.workspacePath !== input.codeBackupState.repositoryPath) {
+        updateScheduledTask(input.database, taskId, {
+          workspacePath: input.codeBackupState.repositoryPath,
+        });
+      }
+      return;
+    }
+    const task = createScheduledTask(input.database, {
+      id: taskId,
+      name,
+      cronExpression: cronForInterval(interval ?? 1_440),
+      timezone: input.config.timezone,
+      prompt: name,
+      workspacePath: input.codeBackupState.repositoryPath,
+      provider: input.config.agent.defaultProvider,
+      model: input.config.agent.defaultModel,
+      reasoningEffort: input.config.agent.defaultReasoningEffort,
+      kind: "system",
+      action,
+      enabled: enabled && interval !== null,
+    });
+    input.scheduler.refresh(task.id);
+  };
+  ensure("system_code_checkpoint", "Code checkpoint", "git.checkpoint", input.codeBackupState.automaticCheckpoint, input.codeBackupState.checkpointIntervalMinutes ?? null);
+  ensure("system_code_push", "Code push", "git.push", input.codeBackupState.automaticPush, input.codeBackupState.pushIntervalMinutes ?? null);
+}
+
+function codeBackupStatus(database: DatabaseClient, state: CodeBackupSettings): CodeBackupSettings {
+  const checkpointTask = getScheduledTask(database, "system_code_checkpoint");
+  const pushTask = getScheduledTask(database, "system_code_push");
+  const runs = [
+    ...(checkpointTask === null ? [] : listScheduledTaskRuns(database, checkpointTask.id)),
+    ...(pushTask === null ? [] : listScheduledTaskRuns(database, pushTask.id)),
+  ].sort((left, right) => Date.parse(right.scheduledFor) - Date.parse(left.scheduledFor));
+  const checkpointRun = checkpointTask === null ? undefined : listScheduledTaskRuns(database, checkpointTask.id).find((run) => run.status === "completed");
+  const pushRun = pushTask === null ? undefined : listScheduledTaskRuns(database, pushTask.id).find((run) => run.status === "completed");
+  const latestFailure = runs.find((run) => run.status === "failed");
+  return {
+    ...state,
+    automaticCheckpoint: checkpointTask?.enabled ?? state.automaticCheckpoint,
+    checkpointIntervalMinutes: checkpointTask?.enabled ? intervalFromCron(checkpointTask.cronExpression) : state.checkpointIntervalMinutes,
+    nextCheckpointAt: checkpointTask?.nextRunAt ?? null,
+    automaticPush: pushTask?.enabled ?? state.automaticPush,
+    pushIntervalMinutes: pushTask?.enabled ? intervalFromCron(pushTask.cronExpression) : state.pushIntervalMinutes,
+    nextPushAt: pushTask?.nextRunAt ?? null,
+    lastCheckpointAt: checkpointRun?.finishedAt ?? state.lastCheckpointAt,
+    lastPushAt: pushRun?.finishedAt ?? state.lastPushAt,
+    lastError: latestFailure?.error ?? null,
+  };
+}
+
+interface AgentArchiveTaskInput {
+  database: DatabaseClient;
+  scheduler: SchedulerEngine;
+  state: AgentArchiveSettings;
+  config: SystemConfig;
+}
+
+function pathContains(root: string, target: string): boolean {
+  const relativePath = relative(resolve(root), resolve(target));
+  return relativePath === "" || (!relativePath.startsWith("..") && !isAbsolute(relativePath));
+}
+
+/** Resolve symlinks through the nearest existing ancestor of a future path. */
+function canonicalPath(path: string): string {
+  let existing = resolve(path);
+  const suffix: string[] = [];
+  while (!existsSync(existing)) {
+    const parent = dirname(existing);
+    if (parent === existing) break;
+    suffix.unshift(existing.slice(parent.length + (parent.endsWith("/") ? 0 : 1)));
+    existing = parent;
+  }
+  const canonicalExisting = existsSync(existing) ? realpathSync(existing) : existing;
+  return resolve(canonicalExisting, ...suffix);
+}
+
+/** Validate and, when requested, create the explicit archive target. */
+export function validateAgentArchivePath(input: {
+  archivePath: string;
+  statePath: string;
+  worktreesPath: string;
+  knowledgePath: string;
+  codeRepositoryPath: string;
+  create: boolean;
+}): string {
+  const archivePath = resolve(input.archivePath);
+  const canonicalArchivePath = canonicalPath(archivePath);
+  const forbiddenRoots = [
+    input.statePath,
+    join(input.statePath, "agent-sessions"),
+    join(input.statePath, "provider-secrets"),
+    input.worktreesPath,
+    input.knowledgePath,
+    input.codeRepositoryPath,
+  ];
+  if (forbiddenRoots.some((root) => {
+    const canonicalRoot = canonicalPath(root);
+    return (
+      pathContains(root, archivePath) ||
+      pathContains(archivePath, root) ||
+      pathContains(canonicalRoot, canonicalArchivePath) ||
+      pathContains(canonicalArchivePath, canonicalRoot)
+    );
+  })) {
+    throw new Error(
+      `Agent archive path is unsafe or overlaps a runtime/source directory: ${archivePath}`,
+    );
+  }
+  if (existsSync(archivePath)) {
+    if (!statSync(archivePath).isDirectory()) {
+      throw new Error(`Agent archive path is not a directory: ${archivePath}`);
+    }
+    return archivePath;
+  }
+  if (!input.create) {
+    throw new Error(`Agent archive path does not exist: ${archivePath}`);
+  }
+  try {
+    mkdirSync(archivePath, { recursive: true });
+  } catch (error) {
+    throw new Error(
+      `Agent archive path cannot be created: ${archivePath}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  return archivePath;
+}
+
+function syncAgentArchiveTasks(input: AgentArchiveTaskInput): void {
+  const createOrUpdate = (
+    taskId: string,
+    name: string,
+    action: "agent.archive.checkpoint" | "agent.archive.push",
+    enabled: boolean,
+    interval: number | null,
+  ) => {
+    const existing = getScheduledTask(input.database, taskId);
+    if (existing !== null && (existing.kind !== "system" || existing.action !== action)) {
+      throw new Error(`System task id is already used: ${taskId}`);
+    }
+    const task = existing === null
+      ? createScheduledTask(input.database, {
+          id: taskId,
+          name,
+          cronExpression: cronForInterval(interval ?? 1_440),
+          timezone: input.config.timezone,
+          prompt: name,
+          workspacePath: input.state.archiveRepositoryPath,
+          provider: input.config.agent.defaultProvider,
+          model: input.config.agent.defaultModel,
+          reasoningEffort: input.config.agent.defaultReasoningEffort,
+          kind: "system",
+          action,
+          enabled: enabled && interval !== null,
+        })
+      : updateScheduledTask(input.database, taskId, {
+          ...(interval === null ? {} : { cronExpression: cronForInterval(interval) }),
+          workspacePath: input.state.archiveRepositoryPath,
+          timezone: input.config.timezone,
+          enabled: enabled && interval !== null,
+        });
+    input.scheduler.refresh(task.id);
+  };
+  createOrUpdate(
+    "system_agent_archive_checkpoint",
+    "Agent archive export",
+    "agent.archive.checkpoint",
+    input.state.enabled,
+    input.state.exportIntervalMinutes ?? null,
+  );
+  createOrUpdate(
+    "system_agent_archive_push",
+    "Agent archive push",
+    "agent.archive.push",
+    input.state.automaticPush,
+    input.state.pushIntervalMinutes ?? null,
+  );
+}
+
+function ensureAgentArchiveTasks(input: AgentArchiveTaskInput): void {
+  const ensure = (
+    taskId: string,
+    name: string,
+    action: "agent.archive.checkpoint" | "agent.archive.push",
+    enabled: boolean,
+    interval: number | null,
+  ) => {
+    const existing = getScheduledTask(input.database, taskId);
+    if (existing !== null) {
+      if (existing.kind !== "system" || existing.action !== action) {
+        throw new Error(`System task id is already used: ${taskId}`);
+      }
+      if (existing.workspacePath !== input.state.archiveRepositoryPath) {
+        updateScheduledTask(input.database, taskId, {
+          workspacePath: input.state.archiveRepositoryPath,
+        });
+      }
+      return;
+    }
+    const task = createScheduledTask(input.database, {
+      id: taskId,
+      name,
+      cronExpression: cronForInterval(interval ?? 1_440),
+      timezone: input.config.timezone,
+      prompt: name,
+      workspacePath: input.state.archiveRepositoryPath,
+      provider: input.config.agent.defaultProvider,
+      model: input.config.agent.defaultModel,
+      reasoningEffort: input.config.agent.defaultReasoningEffort,
+      kind: "system",
+      action,
+      enabled: enabled && interval !== null,
+    });
+    input.scheduler.refresh(task.id);
+  };
+  ensure(
+    "system_agent_archive_checkpoint",
+    "Agent archive export",
+    "agent.archive.checkpoint",
+    input.state.enabled,
+    input.state.exportIntervalMinutes ?? null,
+  );
+  ensure(
+    "system_agent_archive_push",
+    "Agent archive push",
+    "agent.archive.push",
+    input.state.automaticPush,
+    input.state.pushIntervalMinutes ?? null,
+  );
+}
+
+function agentArchiveStatus(
+  database: DatabaseClient,
+  state: AgentArchiveSettings,
+): AgentArchiveSettings {
+  const exportTask = getScheduledTask(database, "system_agent_archive_checkpoint");
+  const pushTask = getScheduledTask(database, "system_agent_archive_push");
+  const runs = [
+    ...(exportTask === null ? [] : listScheduledTaskRuns(database, exportTask.id)),
+    ...(pushTask === null ? [] : listScheduledTaskRuns(database, pushTask.id)),
+  ].sort((left, right) => Date.parse(right.scheduledFor) - Date.parse(left.scheduledFor));
+  const exportRun = exportTask === null
+    ? undefined
+    : listScheduledTaskRuns(database, exportTask.id).find((run) => run.status === "completed");
+  const pushRun = pushTask === null
+    ? undefined
+    : listScheduledTaskRuns(database, pushTask.id).find((run) => run.status === "completed");
+  const latestFailure = runs.find((run) => run.status === "failed");
+  return {
+    ...state,
+    enabled: exportTask?.enabled ?? state.enabled,
+    exportIntervalMinutes: exportTask?.enabled
+      ? intervalFromCron(exportTask.cronExpression)
+      : state.exportIntervalMinutes,
+    nextExportAt: exportTask?.nextRunAt ?? null,
+    automaticPush: pushTask?.enabled ?? state.automaticPush,
+    pushIntervalMinutes: pushTask?.enabled
+      ? intervalFromCron(pushTask.cronExpression)
+      : state.pushIntervalMinutes,
+    nextPushAt: pushTask?.nextRunAt ?? null,
+    lastExportAt: exportRun?.finishedAt ?? state.lastExportAt,
+    lastPushAt: pushRun?.finishedAt ?? state.lastPushAt,
+    lastError: latestFailure?.error ?? null,
+  };
 }

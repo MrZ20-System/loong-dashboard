@@ -3,6 +3,40 @@ import { z } from "zod";
 import { repositoryIdSchema, utcDateTimeSchema } from "./validation.js";
 import { agentRuntimeCapabilitiesSchema } from "./agent.js";
 
+export const worktreeMaintenanceErrorSchema = z
+  .object({
+    slotPath: z.string().trim().min(1),
+    message: z.string().trim().min(1),
+  })
+  .strict();
+
+/** Repository-local worktree capacity policy and maintenance projection. */
+export const repositoryWorktreeSettingsSchema = z
+  .object({
+    configuredSlots: z.number().int().min(1).max(8),
+    idleCleanupTtlHours: z.number().int().positive(),
+    physicalSlots: z.number().int().nonnegative(),
+    active: z.number().int().nonnegative(),
+    idle: z.number().int().nonnegative(),
+    dirty: z.number().int().nonnegative(),
+    pendingRetirement: z.number().int().nonnegative(),
+    pendingRetirementPaths: z.array(z.string().trim().min(1)).optional(),
+    dirtyPaths: z.array(z.string().trim().min(1)).optional(),
+    busyPaths: z.array(z.string().trim().min(1)).optional(),
+    errors: z.array(worktreeMaintenanceErrorSchema).optional(),
+  })
+  .strict();
+
+export const repositoryWorktreeSettingsUpdateSchema = z
+  .object({
+    configuredSlots: z.number().int().min(1).max(8).optional(),
+    idleCleanupTtlHours: z.number().int().positive().max(24 * 365).optional(),
+  })
+  .strict()
+  .refine((value) => Object.values(value).some((field) => field !== undefined), {
+    message: "At least one worktree setting must be provided",
+  });
+
 /** Settings are persisted by the local server and never by the browser. */
 export const repositorySettingsSchema = z
   .object({
@@ -14,6 +48,15 @@ export const repositorySettingsSchema = z
     nextSyncAt: utcDateTimeSchema.nullable().optional(),
     lastSyncAt: utcDateTimeSchema.nullable().optional(),
     lastError: z.string().nullable().optional(),
+    worktrees: repositoryWorktreeSettingsSchema.default({
+      configuredSlots: 1,
+      idleCleanupTtlHours: 24,
+      physicalSlots: 0,
+      active: 0,
+      idle: 0,
+      dirty: 0,
+      pendingRetirement: 0,
+    }),
   })
   .strict();
 
@@ -22,6 +65,7 @@ export const repositorySettingsUpdateSchema = z
     automaticSync: z.boolean().optional(),
     syncFrequencyMinutes: z.number().int().positive().optional(),
     syncLookbackDays: z.union([z.literal(7), z.literal(30)]).optional(),
+    worktrees: repositoryWorktreeSettingsUpdateSchema.optional(),
   })
   .strict()
   .refine((value) => Object.values(value).some((field) => field !== undefined), {
@@ -149,12 +193,17 @@ export const jsonSourceVersionParamsSchema = z
   .object({ id: repositoryIdSchema, versionId: z.string().trim().min(1) })
   .strict();
 
-/** Knowledge is the only repository currently allowed to auto checkpoint. */
+/** Knowledge repository backup policy and scheduler projection. */
 export const knowledgeCheckpointSettingsSchema = z
   .object({
     autoCommit: z.boolean(),
     autoPush: z.boolean(),
     remote: z.string().trim().min(1),
+    sourceRef: z.string().trim().min(1).optional(),
+    remoteBranch: z.string().trim().min(1).optional(),
+    checkpointIntervalMinutes: z.number().int().positive().nullable().optional(),
+    pushIntervalMinutes: z.number().int().positive().nullable().optional(),
+    /** Legacy alias retained for settings.json/config compatibility. */
     branch: z.string().trim().min(1),
     intervalMinutes: z.number().int().positive().nullable().optional(),
     nextRunAt: utcDateTimeSchema.nullable().optional(),
@@ -168,8 +217,80 @@ export const knowledgeCheckpointSettingsUpdateSchema = z
     autoCommit: z.boolean().optional(),
     autoPush: z.boolean().optional(),
     remote: z.string().trim().min(1).optional(),
+    sourceRef: z.string().trim().min(1).optional(),
+    remoteBranch: z.string().trim().min(1).optional(),
+    checkpointIntervalMinutes: z.number().int().positive().nullable().optional(),
+    pushIntervalMinutes: z.number().int().positive().nullable().optional(),
     branch: z.string().trim().min(1).optional(),
     intervalMinutes: z.number().int().positive().nullable().optional(),
+  })
+  .strict()
+  .refine((value) => Object.values(value).some((field) => field !== undefined), {
+    message: "At least one setting must be provided",
+  });
+
+export const codeBackupSettingsSchema = z
+  .object({
+    repositoryPath: z.string().trim().min(1),
+    automaticCheckpoint: z.boolean(),
+    checkpointIntervalMinutes: z.number().int().positive().nullable().optional(),
+    automaticPush: z.boolean(),
+    pushIntervalMinutes: z.number().int().positive().nullable().optional(),
+    sourceRef: z.string().trim().min(1),
+    remote: z.string().trim().min(1),
+    remoteBranch: z.string().trim().min(1),
+    lastCheckpointAt: utcDateTimeSchema.nullable().optional(),
+    nextCheckpointAt: utcDateTimeSchema.nullable().optional(),
+    lastPushAt: utcDateTimeSchema.nullable().optional(),
+    nextPushAt: utcDateTimeSchema.nullable().optional(),
+    lastError: z.string().nullable().optional(),
+  })
+  .strict();
+
+export const codeBackupSettingsUpdateSchema = z
+  .object({
+    automaticCheckpoint: z.boolean().optional(),
+    checkpointIntervalMinutes: z.number().int().positive().nullable().optional(),
+    automaticPush: z.boolean().optional(),
+    pushIntervalMinutes: z.number().int().positive().nullable().optional(),
+    sourceRef: z.string().trim().min(1).optional(),
+    remote: z.string().trim().min(1).optional(),
+    remoteBranch: z.string().trim().min(1).optional(),
+  })
+  .strict()
+  .refine((value) => Object.values(value).some((field) => field !== undefined), {
+    message: "At least one setting must be provided",
+  });
+
+/** Agent conversation archive policy and scheduler projection. */
+export const agentArchiveSettingsSchema = z
+  .object({
+    archiveRepositoryPath: z.string().trim().min(1),
+    enabled: z.boolean(),
+    exportIntervalMinutes: z.number().int().positive().nullable().optional(),
+    automaticPush: z.boolean(),
+    pushIntervalMinutes: z.number().int().positive().nullable().optional(),
+    sourceRef: z.string().trim().min(1),
+    remote: z.string().trim().min(1),
+    remoteBranch: z.string().trim().min(1),
+    lastExportAt: utcDateTimeSchema.nullable().optional(),
+    nextExportAt: utcDateTimeSchema.nullable().optional(),
+    lastPushAt: utcDateTimeSchema.nullable().optional(),
+    nextPushAt: utcDateTimeSchema.nullable().optional(),
+    lastError: z.string().nullable().optional(),
+  })
+  .strict();
+
+export const agentArchiveSettingsUpdateSchema = z
+  .object({
+    archiveRepositoryPath: z.string().trim().min(1).optional(),
+    enabled: z.boolean().optional(),
+    exportIntervalMinutes: z.number().int().positive().nullable().optional(),
+    automaticPush: z.boolean().optional(),
+    pushIntervalMinutes: z.number().int().positive().nullable().optional(),
+    sourceRef: z.string().trim().min(1).optional(),
+    remote: z.string().trim().min(1).optional(),
+    remoteBranch: z.string().trim().min(1).optional(),
   })
   .strict()
   .refine((value) => Object.values(value).some((field) => field !== undefined), {
@@ -214,7 +335,15 @@ export type KnowledgeCheckpointSettings = z.infer<
 export type KnowledgeCheckpointSettingsUpdate = z.infer<
   typeof knowledgeCheckpointSettingsUpdateSchema
 >;
+export type CodeBackupSettings = z.infer<typeof codeBackupSettingsSchema>;
+export type CodeBackupSettingsUpdate = z.infer<typeof codeBackupSettingsUpdateSchema>;
+export type AgentArchiveSettings = z.infer<typeof agentArchiveSettingsSchema>;
+export type AgentArchiveSettingsUpdate = z.infer<typeof agentArchiveSettingsUpdateSchema>;
 export type RepositorySettings = z.infer<typeof repositorySettingsSchema>;
+export type RepositoryWorktreeSettings = z.infer<typeof repositoryWorktreeSettingsSchema>;
+export type RepositoryWorktreeSettingsUpdate = z.infer<
+  typeof repositoryWorktreeSettingsUpdateSchema
+>;
 export type RepositorySettingsUpdate = z.infer<
   typeof repositorySettingsUpdateSchema
 >;

@@ -31,8 +31,13 @@ export type {
 export { MAX_DIFF_FILE_BYTES } from "./diff-types.js";
 export { GitCommandError, runGitBuffer, runGitOptionalText, runGitText, type RunGitOptions } from "./git-command.js";
 export { GitObjectMissingError, GitPathUnsafeError, LocalGitWorkspace, type LocalGitWorkspaceOptions } from "./local-git-workspace.js";
-export { runCheckpoint } from "./checkpoint.js";
-export type { RunCheckpointInput, RunCheckpointResult } from "./checkpoint.js";
+export { pushBackupRef, runCheckpoint } from "./checkpoint.js";
+export type {
+  PushBackupRefInput,
+  PushBackupRefResult,
+  RunCheckpointInput,
+  RunCheckpointResult,
+} from "./checkpoint.js";
 export {
   WorktreePool,
   WorktreePoolError,
@@ -41,6 +46,14 @@ export {
   type WorktreeSlotMetadata,
   type WorktreeSlotUsage,
 } from "./worktree-pool.js";
+export {
+  WorktreeJanitor,
+  WorktreeReconciler,
+  type WorktreeCleanupOptions,
+  type WorktreeMaintenanceInput,
+  type WorktreeMaintenanceResult,
+  type WorktreeMaintenanceSlot,
+} from "./worktree-maintenance.js";
 
 /**
  * Public service shape used by the server routes. Keeping the interface in

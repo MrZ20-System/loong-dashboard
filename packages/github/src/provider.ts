@@ -30,7 +30,7 @@ export interface RepositoryRef {
   readonly name: string;
 }
 
-export type SyncMode = "bootstrap" | "incremental";
+export type SyncMode = "bootstrap" | "incremental" | "history";
 
 export interface PullRequestSyncInput {
   readonly repository: RepositoryRef;
@@ -41,6 +41,7 @@ export interface PullRequestSyncInput {
   readonly syncStartedAt?: Date | string;
   /** Initial/bootstrap sync window measured by updatedAt. Defaults to 30 days. */
   readonly lookbackDays?: number;
+  readonly cursor?: string | null;
 }
 
 export interface IssueSyncInput {
@@ -52,6 +53,21 @@ export interface IssueSyncInput {
   readonly syncStartedAt?: Date | string;
   /** Initial/bootstrap sync window measured by updatedAt. Defaults to 30 days. */
   readonly lookbackDays?: number;
+  readonly cursor?: string | null;
+}
+
+export interface HistorySyncInput {
+  readonly repository: RepositoryRef;
+  /** Cursor from the last successfully consumed descending page, if any. */
+  readonly cursor?: string | null;
+  /** Safe timestamp anchor used when a remote cursor is no longer usable. */
+  readonly recoveryAnchorUpdatedAt?: Date | string | null;
+  readonly syncStartedAt?: Date | string;
+}
+
+export interface PullRequestFetchInput {
+  readonly repository: RepositoryRef;
+  readonly number: number;
 }
 
 export type PullRequestStatus = "draft" | "open" | "closed" | "merged";
@@ -106,6 +122,7 @@ export interface PullRequestMetadata {
   readonly additions: number;
   readonly deletions: number;
   readonly changedFilesCount: number;
+  readonly detailBody?: string | null;
 }
 
 export interface IssueMetadata {
@@ -168,6 +185,11 @@ export interface GitHubMetadataProvider {
     input: PullRequestSyncInput,
   ): AsyncIterable<PullRequestPage>;
   fetchIssueUpdates(input: IssueSyncInput): AsyncIterable<IssuePage>;
+  /** Descending history stream; implementations should resume from cursor. */
+  fetchPullRequestHistory?(input: HistorySyncInput): AsyncIterable<PullRequestPage>;
+  fetchIssueHistory?(input: HistorySyncInput): AsyncIterable<IssuePage>;
+  /** Fetch one PR by number without touching either sync watermark. */
+  fetchPullRequest?(input: PullRequestFetchInput): Promise<PullRequestMetadata>;
   fetchPullRequestFiles(
     input: PullRequestFilesInput,
   ): Promise<PullRequestFilesResult[]>;
@@ -261,21 +283,24 @@ export class GitHubGraphQLError extends Error {
   readonly repository: string;
   readonly operation: GitHubOperation;
   readonly messages: readonly string[];
+  readonly types: readonly string[];
 
   constructor(
     repository: string,
     operation: GitHubOperation,
     messages: readonly string[],
+    types: readonly string[] = [],
   ) {
     super(
       `GitHub ${operation} GraphQL errors for ${repository}: ${messages
-        .map(truncate)
+        .map((message) => truncate(message))
         .join("; ")}`,
     );
     this.name = "GitHubGraphQLError";
     this.repository = repository;
     this.operation = operation;
-    this.messages = messages.map(truncate);
+    this.messages = messages.map((message) => truncate(message));
+    this.types = types.map((type) => truncate(type));
   }
 }
 
@@ -509,6 +534,25 @@ const restIssueSchema = z.object({
   closed_at: nullableDateTimeSchema,
 });
 
+const restPullRequestSchema = z.object({
+  number: z.number().int().positive(),
+  title: z.string(),
+  html_url: z.string().url(),
+  state: z.enum(["open", "closed"]),
+  draft: z.boolean().nullable().optional(),
+  user: restUserSchema,
+  body: z.string().nullable(),
+  created_at: dateTimeSchema,
+  updated_at: dateTimeSchema,
+  closed_at: nullableDateTimeSchema,
+  merged_at: nullableDateTimeSchema,
+  additions: z.number().int().nonnegative(),
+  deletions: z.number().int().nonnegative(),
+  changed_files: z.number().int().nonnegative(),
+  base: z.object({ ref: z.string() }).strict(),
+  head: z.object({ ref: z.string(), sha: z.string().min(1) }).strict(),
+});
+
 const restIssueCommentSchema = z.object({
   id: z.number().int().positive(),
   user: restUserSchema,
@@ -639,6 +683,13 @@ interface NormalizedSyncInput {
   readonly watermarkUpdatedAt: string | null;
   readonly syncStartedAt: string;
   readonly lookbackDays: number;
+  readonly cursor: string | null;
+  /**
+   * A durable history boundary.  When a GitHub cursor expires, history can
+   * restart at the newest page and stop after a small overlap around this
+   * timestamp instead of scanning the whole repository again.
+   */
+  readonly recoveryAnchorUpdatedAt: string | null;
 }
 
 type GraphQLVariables = Readonly<Record<string, unknown>>;
@@ -719,6 +770,78 @@ export class GhGitHubMetadataProvider implements GitHubMetadataProvider {
     const cutoff = cutoffFor(normalized);
 
     yield* this.iterateIssues(normalized, ["OPEN", "CLOSED"], cutoff);
+  }
+
+  async *fetchPullRequestHistory(
+    input: HistorySyncInput,
+  ): AsyncIterable<PullRequestPage> {
+    const normalized = normalizeHistoryInput(input);
+    yield* this.iteratePullRequests(
+      normalized,
+      ["OPEN", "CLOSED", "MERGED"],
+      cutoffFor(normalized),
+    );
+  }
+
+  async *fetchIssueHistory(input: HistorySyncInput): AsyncIterable<IssuePage> {
+    const normalized = normalizeHistoryInput(input);
+    yield* this.iterateIssues(normalized, ["OPEN", "CLOSED"], cutoffFor(normalized));
+  }
+
+  async fetchPullRequest(input: PullRequestFetchInput): Promise<PullRequestMetadata> {
+    const repository = input.repository;
+    if (
+      repository === null ||
+      typeof repository !== "object" ||
+      typeof repository.owner !== "string" ||
+      repository.owner.length === 0 ||
+      typeof repository.name !== "string" ||
+      repository.name.length === 0
+    ) {
+      throw new Error("GitHub pull request input repository must include owner and name");
+    }
+    if (!Number.isInteger(input.number) || input.number <= 0) {
+      throw new Error("GitHub pull request number must be a positive integer");
+    }
+    const decoded = await this.runRest(
+      repository,
+      `repos/${repository.owner}/${repository.name}/pulls/${input.number}`,
+      "PullRequests",
+    );
+    const parsed = restPullRequestSchema.safeParse(decoded);
+    if (!parsed.success) {
+      throw new GitHubResponseError(
+        formatRepository(repository),
+        "PullRequests",
+        formatSchemaIssues(parsed.error),
+      );
+    }
+    const pull = parsed.data;
+    const stateRaw = pull.merged_at === null
+      ? pull.state.toUpperCase() as "OPEN" | "CLOSED"
+      : "MERGED";
+    const isDraft = pull.draft ?? false;
+    return {
+      nodeId: `rest:${repository.owner}/${repository.name}#${pull.number}`,
+      number: pull.number,
+      title: pull.title,
+      url: pull.html_url,
+      stateRaw,
+      status: derivePullRequestStatus({ state: stateRaw, isDraft, mergedAt: pull.merged_at }),
+      isDraft,
+      authorLogin: pull.user?.login ?? null,
+      createdAt: canonicalUtc(pull.created_at),
+      updatedAt: canonicalUtc(pull.updated_at),
+      closedAt: pull.closed_at === null ? null : canonicalUtc(pull.closed_at),
+      mergedAt: pull.merged_at === null ? null : canonicalUtc(pull.merged_at),
+      baseRefName: pull.base.ref,
+      headRefName: pull.head.ref,
+      headSha: pull.head.sha,
+      additions: pull.additions,
+      deletions: pull.deletions,
+      changedFilesCount: pull.changed_files,
+      detailBody: pull.body,
+    };
   }
 
   /**
@@ -1211,17 +1334,37 @@ export class GhGitHubMetadataProvider implements GitHubMetadataProvider {
     states: readonly string[],
     cutoff: Date | null,
   ): AsyncIterable<PullRequestPage> {
-    let cursor: string | null = null;
+    let cursor: string | null = input.cursor;
+    let recoveredFromExpiredCursor = false;
     const seenCursors = new Set<string>();
 
     while (true) {
-      const response = await this.runGraphQL<PullRequestResponse>(
-        input.repository,
-        "PullRequests",
-        PULL_REQUEST_QUERY,
-        { ...input.repository, cursor, states },
-        pullRequestResponseSchema,
-      );
+      let response: PullRequestResponse;
+      try {
+        response = await this.runGraphQL<PullRequestResponse>(
+          input.repository,
+          "PullRequests",
+          PULL_REQUEST_QUERY,
+          { ...input.repository, cursor, states },
+          pullRequestResponseSchema,
+        );
+      } catch (error: unknown) {
+        if (
+          input.mode === "history" &&
+          cursor !== null &&
+          !recoveredFromExpiredCursor &&
+          input.recoveryAnchorUpdatedAt !== null &&
+          isExpiredCursorError(error)
+        ) {
+          // GitHub cursors are opaque and can expire after a long pause.  A
+          // timestamp anchor is the safe fallback: duplicate the small
+          // overlap and let the caller's idempotent upserts absorb it.
+          cursor = null;
+          recoveredFromExpiredCursor = true;
+          continue;
+        }
+        throw error;
+      }
       const connection = response.data?.repository.pullRequests;
       if (connection === undefined) {
         throw responseError(
@@ -1272,17 +1415,34 @@ export class GhGitHubMetadataProvider implements GitHubMetadataProvider {
     states: readonly string[],
     cutoff: Date | null,
   ): AsyncIterable<IssuePage> {
-    let cursor: string | null = null;
+    let cursor: string | null = input.cursor;
+    let recoveredFromExpiredCursor = false;
     const seenCursors = new Set<string>();
 
     while (true) {
-      const response = await this.runGraphQL<IssueResponse>(
-        input.repository,
-        "Issues",
-        ISSUE_QUERY,
-        { ...input.repository, cursor, states },
-        issueResponseSchema,
-      );
+      let response: IssueResponse;
+      try {
+        response = await this.runGraphQL<IssueResponse>(
+          input.repository,
+          "Issues",
+          ISSUE_QUERY,
+          { ...input.repository, cursor, states },
+          issueResponseSchema,
+        );
+      } catch (error: unknown) {
+        if (
+          input.mode === "history" &&
+          cursor !== null &&
+          !recoveredFromExpiredCursor &&
+          input.recoveryAnchorUpdatedAt !== null &&
+          isExpiredCursorError(error)
+        ) {
+          cursor = null;
+          recoveredFromExpiredCursor = true;
+          continue;
+        }
+        throw error;
+      }
       const connection = response.data?.repository.issues;
       if (connection === undefined) {
         throw responseError(
@@ -1358,6 +1518,9 @@ export class GhGitHubMetadataProvider implements GitHubMetadataProvider {
         repositoryLabel,
         operation,
         parsed.data.errors.map((error) => error.message),
+        parsed.data.errors
+          .map((error) => error.type)
+          .filter((type): type is string => type !== undefined),
       );
     }
 
@@ -1473,7 +1636,9 @@ function normalizeSyncInput(
     throw new Error("GitHub sync input repository must include owner and name");
   }
   if (input.mode !== "bootstrap" && input.mode !== "incremental") {
-    throw new Error("GitHub sync input mode must be bootstrap or incremental");
+    if (input.mode !== "history") {
+      throw new Error("GitHub sync input mode must be bootstrap, incremental, or history");
+    }
   }
 
   const lookbackDays = input.lookbackDays ?? defaultLookbackDays;
@@ -1506,10 +1671,52 @@ function normalizeSyncInput(
     watermarkUpdatedAt,
     syncStartedAt,
     lookbackDays,
+    cursor: input.cursor ?? null,
+    recoveryAnchorUpdatedAt: null,
+  };
+}
+
+function normalizeHistoryInput(input: HistorySyncInput): NormalizedSyncInput {
+  if (input === null || typeof input !== "object") {
+    throw new Error("GitHub history input must be an object");
+  }
+  const repository = input.repository;
+  if (
+    repository === null ||
+    typeof repository !== "object" ||
+    typeof repository.owner !== "string" ||
+    repository.owner.length === 0 ||
+    typeof repository.name !== "string" ||
+    repository.name.length === 0
+  ) {
+    throw new Error("GitHub history input repository must include owner and name");
+  }
+  return {
+    repository: { owner: repository.owner, name: repository.name },
+    mode: "history",
+    watermarkUpdatedAt: null,
+    syncStartedAt: canonicalUtc(input.syncStartedAt ?? new Date().toISOString()),
+    lookbackDays: DEFAULT_LOOKBACK_DAYS,
+    cursor: input.cursor ?? null,
+    recoveryAnchorUpdatedAt:
+      input.recoveryAnchorUpdatedAt === undefined || input.recoveryAnchorUpdatedAt === null
+        ? null
+        : canonicalUtc(input.recoveryAnchorUpdatedAt),
   };
 }
 
 function cutoffFor(input: NormalizedSyncInput): Date | null {
+  if (input.mode === "history") {
+    // A durable cursor is the primary continuation point.  Applying the
+    // anchor cutoff while using that cursor would stop at the first item on
+    // the resumed page (which is expected to be older than the anchor).  The
+    // anchor is only a recovery boundary after an invalid cursor forced a
+    // restart from the newest page.
+    if (input.cursor !== null || input.recoveryAnchorUpdatedAt === null) return null;
+    return new Date(
+      Date.parse(input.recoveryAnchorUpdatedAt) - WATERMARK_OVERLAP_MS,
+    );
+  }
   if (input.mode === "incremental") {
     return new Date(Date.parse(input.watermarkUpdatedAt!) - WATERMARK_OVERLAP_MS);
   }
@@ -1517,6 +1724,19 @@ function cutoffFor(input: NormalizedSyncInput): Date | null {
   return new Date(
     Date.parse(input.syncStartedAt) - input.lookbackDays * 24 * 60 * 60 * 1000,
   );
+}
+
+function isExpiredCursorError(error: unknown): boolean {
+  // Only an explicit invalid/expired cursor error may reset pagination.  A
+  // generic GraphQL error must preserve the durable cursor and fail so the
+  // caller can retry without silently skipping history.
+  if (!(error instanceof GitHubGraphQLError)) return false;
+  if (error.types.some((type) => /invalid[_ ]cursor|expired[_ ]cursor/i.test(type))) {
+    return true;
+  }
+  const message = error.messages.join(" ").toLowerCase();
+  return message.includes("cursor") &&
+    /invalid|expired|unknown|not found/.test(message);
 }
 
 function requireNextCursor(

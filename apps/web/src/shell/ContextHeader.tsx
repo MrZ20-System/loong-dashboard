@@ -8,7 +8,7 @@ interface HeaderContext {
   repositoryId: string | null;
 }
 
-const repositoryPath = /^\/repositories\/([^/]+)(?:\/(pulls|issues)(?:\/(\d+))?)?/;
+const repositoryPath = /^\/repositories\/([^/]+)(?:\/(pulls|merged|issues)(?:\/(\d+))?)?/;
 
 function repositorySection(
   match: RegExpMatchArray | null,
@@ -19,6 +19,7 @@ function repositorySection(
   const number = match[3] ?? null;
   let title = "Activity";
   if (kind === "pulls") title = number ? `Pull request #${number}` : "Pull requests";
+  if (kind === "merged") title = "Merged";
   if (kind === "issues") title = number ? `Issue #${number}` : "Issues";
   return { eyebrow: "Repository", title, repositoryId };
 }

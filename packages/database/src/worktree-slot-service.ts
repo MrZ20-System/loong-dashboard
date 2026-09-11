@@ -119,3 +119,24 @@ export function recordWorktreeSlotUse(
     );
   return getWorktreeSlot(database, existing.id);
 }
+
+/**
+ * Remove affinity metadata after the owning physical worktree was removed.
+ * Live busy ownership is supplied by agent sessions/coordinator at the
+ * maintenance boundary; this function intentionally does not consult the
+ * legacy busy_session_id column as a second authority.
+ */
+export function deleteWorktreeSlot(
+  database: DatabaseClient,
+  repositoryId: string,
+  slotName: string,
+  path: string,
+): boolean {
+  const result = database
+    .prepare(
+      `DELETE FROM worktree_slots
+       WHERE repository_id = ? AND slot_name = ? AND path = ?`,
+    )
+    .run(repositoryId, slotName, path);
+  return result.changes > 0;
+}

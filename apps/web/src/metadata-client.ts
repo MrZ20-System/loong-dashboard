@@ -9,12 +9,15 @@ import {
   pullRequestsQuerySchema,
   repositoriesResponseSchema,
   pullRequestsResponseSchema,
+  mergedPullRequestsQuerySchema,
+  mergedPullRequestsResponseSchema,
   syncAcceptedResponseSchema,
   syncStatusResponseSchema,
   type IssuesResponse,
   type IssueListItem,
   type PullRequestsResponse,
   type PullRequestListItem,
+  type MergedPullRequestsResponse,
   type RepositorySummary,
   type RepositoriesResponse,
   type SyncAcceptedResponse,
@@ -32,6 +35,7 @@ export type MetadataFilters = {
   from: string | null;
   to: string | null;
   status: string | null;
+  search: string;
   /** Repeated `?domain=` values; pull request lists only. */
   domains: string[];
 };
@@ -80,6 +84,7 @@ export function readMetadataFilters(
   const toValue = params.get("to");
   const dateValue = params.get("date");
   const statusValue = params.get("status");
+  const searchValue = params.get("search") ?? "";
   const rawDomainValues = kind === "pulls" ? params.getAll("domain") : [];
   const querySchema = kind === "pulls" ? pullRequestsQuerySchema : issuesQuerySchema;
   const candidate: Record<string, unknown> = {};
@@ -95,6 +100,7 @@ export function readMetadataFilters(
       from: data.from ?? null,
       to: data.to ?? null,
       status: data.status ?? null,
+      search: searchValue,
       domains: kind === "pulls" ? (data.domain ?? []) : [],
     };
   }
@@ -107,6 +113,7 @@ export function readMetadataFilters(
     from: validOrder ? from : null,
     to: validOrder ? to : null,
     status: statusSchema.safeParse(statusValue).success ? statusValue : null,
+    search: searchValue,
     domains: rawDomainValues
       .filter((value) => domainRuleIdSchema.safeParse(value).success)
       .slice(0, 20),
@@ -122,6 +129,10 @@ export function buildListUrl(
     /** Accepted for callers that still pass the pre-range shape. */
     date?: string | null;
     status?: string | null;
+    search?: string | null;
+    sort?: "updated" | "number" | null;
+    limit?: number | null;
+    page?: number | null;
     cursor?: string | null;
     domains?: string[] | null;
   },
@@ -132,6 +143,10 @@ export function buildListUrl(
   if (from) query.set("from", from);
   if (to) query.set("to", to);
   if (filters.status) query.set("status", filters.status);
+  if (filters.search) query.set("search", filters.search);
+  if (filters.sort) query.set("sort", filters.sort);
+  if (filters.limit) query.set("limit", String(filters.limit));
+  if (kind === "pulls" && filters.page) query.set("page", String(filters.page));
   for (const domain of filters.domains ?? []) query.append("domain", domain);
   if (filters.cursor) query.set("cursor", filters.cursor);
   const search = query.toString();
@@ -202,6 +217,10 @@ export function fetchList(
     to?: string | null;
     date?: string | null;
     status?: string | null;
+    search?: string | null;
+    sort?: "updated" | "number" | null;
+    limit?: number | null;
+    page?: number | null;
     cursor?: string | null;
     domains?: string[] | null;
   },
@@ -233,5 +252,36 @@ export function startSync(
     `/api/repositories/${encodeURIComponent(repositoryId)}/sync`,
     syncAcceptedResponseSchema,
     { method: "POST", signal },
+  );
+}
+
+export function fetchMergedPullRequests(
+  repositoryId: string,
+  range: {
+    search?: string | null;
+    domains?: string[] | null;
+    page?: number | null;
+    limit?: number | null;
+  } = {},
+  signal?: AbortSignal,
+  fetchImpl: typeof fetch = globalThis.fetch,
+): Promise<MergedPullRequestsResponse> {
+  const query = mergedPullRequestsQuerySchema.parse({
+    ...(range.search ? { search: range.search } : {}),
+    ...(range.page ? { page: range.page } : {}),
+    ...(range.limit ? { limit: range.limit } : {}),
+    ...(range.domains?.length ? { domain: range.domains } : {}),
+  });
+  const params = new URLSearchParams();
+  if (query.search) params.set("search", query.search);
+  for (const domain of query.domain ?? []) params.append("domain", domain);
+  if (query.page) params.set("page", String(query.page));
+  if (query.limit) params.set("limit", String(query.limit));
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  return request(
+    `/api/repositories/${encodeURIComponent(repositoryId)}/merged${suffix}`,
+    mergedPullRequestsResponseSchema,
+    { signal },
+    fetchImpl,
   );
 }

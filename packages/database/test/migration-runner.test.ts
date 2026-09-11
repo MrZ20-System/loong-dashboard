@@ -27,6 +27,10 @@ const CORE_TABLES = [
   "pull_request_files",
   "pull_requests",
   "repositories",
+  "repository_history_state",
+  "repository_sync_run_streams",
+  "repository_sync_run_targets",
+  "repository_sync_runs",
   "repository_sync_state",
   "scheduled_task_runs",
   "scheduled_tasks",
@@ -91,6 +95,10 @@ describe("database migrations", () => {
         { id: "004_domain_classification" },
         { id: "005_issue_detail_cache" },
         { id: "006_agent_runtime_scheduler" },
+        { id: "007_repository_sync_history" },
+        { id: "008_pull_request_lifecycle" },
+        { id: "009_list_query_modes" },
+        { id: "010_remove_daily_projections" },
       ]);
     } finally {
       database.close();
@@ -118,6 +126,10 @@ describe("database migrations", () => {
         expect.objectContaining({ id: "004_domain_classification" }),
         expect.objectContaining({ id: "005_issue_detail_cache" }),
         expect.objectContaining({ id: "006_agent_runtime_scheduler" }),
+        expect.objectContaining({ id: "007_repository_sync_history" }),
+        expect.objectContaining({ id: "008_pull_request_lifecycle" }),
+        expect.objectContaining({ id: "009_list_query_modes" }),
+        expect.objectContaining({ id: "010_remove_daily_projections" }),
       ]);
     } finally {
       database.close();
@@ -168,6 +180,24 @@ describe("database migrations", () => {
         { name: "repository_id", descending: 0 },
         { name: "state", descending: 0 },
         { name: "updated_at", descending: 1 },
+        { name: "number", descending: 1 },
+      ]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("creates stable number-first and merged timeline ordering indexes", () => {
+    const database = openDatabase(createDatabasePath());
+
+    try {
+      expect(readIndexColumns(database, "pull_requests_repository_number_idx")).toEqual([
+        { name: "repository_id", descending: 0 },
+        { name: "number", descending: 1 },
+      ]);
+      expect(readIndexColumns(database, "pull_requests_repository_merged_at_number_idx")).toEqual([
+        { name: "repository_id", descending: 0 },
+        { name: "merged_at", descending: 1 },
         { name: "number", descending: 1 },
       ]);
     } finally {

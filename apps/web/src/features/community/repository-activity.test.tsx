@@ -14,6 +14,7 @@ const repository = {
   defaultBranch: "main",
   worktreeSlots: 1,
   enabled: true,
+  mergedPullRequestCount: 0,
 };
 
 function json(value: unknown) {

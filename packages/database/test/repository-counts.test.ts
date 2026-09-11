@@ -74,16 +74,21 @@ describe("repository navigation aggregates", () => {
     const database = openDatabase(":memory:");
     databases.push(database);
     reconcileRepositories(database, [repository()]);
-    upsertPullRequestPage(database, "alpha", [pullRequest(1), pullRequest(2)]);
+    upsertPullRequestPage(database, "alpha", [
+      pullRequest(1),
+      { ...pullRequest(2), mergedAt: "2026-09-03T00:00:00.000Z" },
+    ]);
     upsertIssuePage(database, "alpha", [issue(1), issue(2), issue(3)]);
 
     expect(listRepositories(database)[0]).toMatchObject({
       id: "alpha",
       pullRequestCount: 2,
+      mergedPullRequestCount: 1,
       issueCount: 3,
     });
     expect(getRepository(database, "alpha")).toMatchObject({
       pullRequestCount: 2,
+      mergedPullRequestCount: 1,
       issueCount: 3,
     });
   });

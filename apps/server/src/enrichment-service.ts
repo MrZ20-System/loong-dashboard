@@ -4,6 +4,7 @@ import {
   replacePullRequestDomains,
   replacePullRequestFiles,
   type DatabaseClient,
+  type PullRequestEnrichmentTarget,
   type RepositoryRecord,
 } from "@loongboard/database";
 import type {
@@ -30,6 +31,7 @@ export interface PullRequestFileEnricher {
   enrich(
     repository: RepositoryRecord,
     rateLimit: GitHubRateLimit | undefined,
+    targets?: readonly PullRequestEnrichmentTarget[],
   ): Promise<void>;
 }
 
@@ -72,6 +74,7 @@ export class PullRequestEnrichmentService implements PullRequestFileEnricher {
   async enrich(
     repository: RepositoryRecord,
     rateLimit: GitHubRateLimit | undefined,
+    runTargets?: readonly PullRequestEnrichmentTarget[],
   ): Promise<void> {
     if (rateLimit !== undefined && rateLimit.remaining < this.rateLimitFloor) {
       this.logger.info?.(
@@ -80,10 +83,9 @@ export class PullRequestEnrichmentService implements PullRequestFileEnricher {
       return;
     }
 
-    const targets = listPullRequestsNeedingFileEnrichment(
-      this.database,
-      repository.id,
-    );
+    const targets = runTargets === undefined
+      ? listPullRequestsNeedingFileEnrichment(this.database, repository.id)
+      : [...runTargets];
     if (targets.length === 0) {
       return;
     }

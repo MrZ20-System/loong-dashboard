@@ -80,6 +80,47 @@ export interface PullRequestEnrichmentTarget {
   headSha: string;
 }
 
+export interface PullRequestEnrichmentState {
+  number: number;
+  headSha: string;
+  enriched: boolean;
+}
+
+/**
+ * Read the stored current head and whether its file set is already present.
+ * This is the typed boundary for coordinators deciding between new,
+ * head-changed, retry, and already-enriched observations.
+ */
+export function listCurrentPullRequestEnrichmentStates(
+  database: DatabaseClient,
+  repositoryId: string,
+  prNumbers: readonly number[],
+): PullRequestEnrichmentState[] {
+  if (prNumbers.length === 0) return [];
+  const placeholders = prNumbers.map(() => "?").join(", ");
+  return database
+    .prepare(
+      `SELECT pr.number AS number, pr.head_sha AS headSha,
+         EXISTS (
+           SELECT 1 FROM pull_request_files f
+           WHERE f.repository_id = pr.repository_id
+             AND f.pr_number = pr.number AND f.head_sha = pr.head_sha
+         ) AS enriched
+       FROM pull_requests pr
+       WHERE pr.repository_id = ? AND pr.number IN (${placeholders})
+       ORDER BY pr.number ASC`,
+    )
+    .all(repositoryId, ...prNumbers)
+    .map((row) => {
+      const value = row as { number: number; headSha: string; enriched: number };
+      return {
+        number: value.number,
+        headSha: value.headSha,
+        enriched: value.enriched === 1,
+      };
+    });
+}
+
 /**
  * A PR needs enrichment while no file rows exist for its current head SHA
  * (new PRs, head changes, and previously failed enrichments — plan 9.6).
@@ -87,12 +128,18 @@ export interface PullRequestEnrichmentTarget {
 export function listPullRequestsNeedingFileEnrichment(
   database: DatabaseClient,
   repositoryId: string,
+  prNumbers?: readonly number[],
 ): PullRequestEnrichmentTarget[] {
+  if (prNumbers !== undefined && prNumbers.length === 0) return [];
+  const numberClause =
+    prNumbers === undefined
+      ? ""
+      : ` AND pr.number IN (${prNumbers.map(() => "?").join(", ")})`;
   return database
     .prepare(
       `SELECT pr.number, pr.node_id AS nodeId, pr.head_sha AS headSha
        FROM pull_requests pr
-       WHERE pr.repository_id = ?
+       WHERE pr.repository_id = ?${numberClause}
          AND NOT EXISTS (
            SELECT 1 FROM pull_request_files f
            WHERE f.repository_id = pr.repository_id
@@ -101,7 +148,7 @@ export function listPullRequestsNeedingFileEnrichment(
          )
        ORDER BY pr.updated_at DESC, pr.number DESC`,
     )
-    .all(repositoryId) as PullRequestEnrichmentTarget[];
+    .all(repositoryId, ...(prNumbers ?? [])) as PullRequestEnrichmentTarget[];
 }
 
 /** Read the stored current-head files for the PR detail files endpoint. */

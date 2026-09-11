@@ -22,6 +22,22 @@ export type {
   KnowledgeCheckpointOptions,
   KnowledgeControllerOptions,
 } from "./knowledge.js";
+export { AgentArchiveExporter } from "./agent-archive.js";
+export type {
+  AgentArchiveExporterOptions,
+  AgentArchiveExportResult,
+} from "./agent-archive.js";
+export {
+  WorktreeMaintenanceService,
+  MAX_WORKTREE_SLOTS,
+} from "./worktree-maintenance.js";
+export type {
+  WorktreeMaintenanceServiceOptions,
+  WorktreeMaintenanceServiceResult,
+  WorktreeOperationalPolicy,
+  WorktreePolicyResolver,
+  WorktreeRepositoryRef,
+} from "./worktree-maintenance.js";
 export {
   createShutdownHandler,
   installSignalHandlers,

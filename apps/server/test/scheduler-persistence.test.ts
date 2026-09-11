@@ -15,13 +15,14 @@ import {
   listScheduledTaskRuns,
   openDatabase,
   requireAgentSession,
+  updateScheduledTask,
   updateAgentSession,
   type DatabaseClient,
   type ScheduledTaskRow,
 } from "@loongboard/database";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { SchedulerEngine } from "../src/scheduler.js";
+import { MAX_SCHEDULER_TIMER_DELAY_MS, SchedulerEngine } from "../src/scheduler.js";
 import { WorkspaceRunCoordinator } from "../src/workspace-run-coordinator.js";
 
 const resources: Array<{ database: DatabaseClient; directory: string }> = [];
@@ -50,7 +51,10 @@ async function waitForTerminalRun(
 function fakeChats(database: DatabaseClient): AgentChatController {
   return {
     ensureScheduledSession: async (input: ScheduledSessionInput) => {
-      const scope = { kind: "general" as const, route: `scheduled-task:${input.taskId}` };
+      const scope = {
+        kind: "general" as const,
+        route: `scheduled-task:${input.taskId}:run:${input.runId}`,
+      };
       const existing = findAgentSession(database, scope);
       if (existing !== null) return existing;
       return createAgentSession(database, {
@@ -98,7 +102,7 @@ function createFixture(): {
 }
 
 describe("SchedulerEngine conversation lifecycle", () => {
-  it("reuses and recreates the task conversation after deletion", async () => {
+  it("creates a new conversation for every run and keeps run history addressable", async () => {
     const { database, directory, task } = createFixture();
     const engine = new SchedulerEngine({
       database,
@@ -112,22 +116,60 @@ describe("SchedulerEngine conversation lifecycle", () => {
     const firstTask = getScheduledTask(database, task.id);
     expect(firstTask?.conversationId).toBeTruthy();
     const firstConversation = firstTask?.conversationId as string;
+    const firstRun = listScheduledTaskRuns(database, task.id)[0];
     expect(listAgentMessages(database, firstConversation)).toHaveLength(1);
 
     await engine.runNow(task.id);
     expect((await waitForTerminalRun(database, task.id)).status).toBe("completed");
-    expect(getScheduledTask(database, task.id)?.conversationId).toBe(firstConversation);
-    expect(listAgentMessages(database, firstConversation)).toHaveLength(2);
+    const runs = listScheduledTaskRuns(database, task.id);
+    const secondRun = runs.find((run) => run.id !== firstRun?.id);
+    const secondConversation = secondRun?.conversationId;
+    expect(secondConversation).toBeTruthy();
+    expect(secondConversation).not.toBe(firstConversation);
+    expect(listAgentMessages(database, firstConversation)).toHaveLength(1);
+    expect(listAgentMessages(database, secondConversation as string)).toHaveLength(1);
+    expect(getScheduledTask(database, task.id)?.conversationId).toBe(secondConversation);
 
     deleteAgentSession(database, firstConversation);
     await engine.runNow(task.id);
     expect((await waitForTerminalRun(database, task.id)).status).toBe("completed");
-    const recoveredConversation = getScheduledTask(database, task.id)?.conversationId;
-    expect(recoveredConversation).toBeTruthy();
-    expect(recoveredConversation).not.toBe(firstConversation);
-    expect(listAgentMessages(database, recoveredConversation as string)).toHaveLength(1);
+    const thirdRun = listScheduledTaskRuns(database, task.id).find(
+      (run) => run.id !== firstRun?.id && run.id !== secondRun?.id,
+    );
+    expect(thirdRun?.conversationId).toBeTruthy();
+    expect(thirdRun?.conversationId).not.toBe(firstConversation);
+    expect(thirdRun?.conversationId).not.toBe(secondConversation);
+    expect(listAgentMessages(database, thirdRun?.conversationId as string)).toHaveLength(1);
     expect(listScheduledTaskRuns(database, task.id)).toHaveLength(3);
 
+    await engine.close();
+  });
+
+  it("isolates manual session model changes from future scheduled task runs", async () => {
+    const { database, directory, task } = createFixture();
+    const engine = new SchedulerEngine({
+      database,
+      chats: fakeChats(database),
+      workspaceRuns: new WorkspaceRunCoordinator(),
+      agentSessionsPath: join(directory, "agent-sessions"),
+    });
+
+    await engine.runNow(task.id);
+    await waitForTerminalRun(database, task.id);
+    const firstRun = listScheduledTaskRuns(database, task.id)[0];
+    const firstConversation = firstRun?.conversationId as string;
+    updateAgentSession(database, firstConversation, { model: "manually-selected" });
+    updateScheduledTask(database, task.id, { model: "future-scheduled-model" });
+
+    await engine.runNow(task.id);
+    await waitForTerminalRun(database, task.id);
+    const runs = listScheduledTaskRuns(database, task.id);
+    const secondRun = runs.find((run) => run.conversationId !== firstConversation);
+    expect(secondRun?.conversationId).not.toBe(firstConversation);
+    expect(requireAgentSession(database, firstConversation).model).toBe("manually-selected");
+    expect(requireAgentSession(database, secondRun?.conversationId as string).model).toBe(
+      "future-scheduled-model",
+    );
     await engine.close();
   });
 
@@ -147,10 +189,11 @@ describe("SchedulerEngine conversation lifecycle", () => {
       enabled: false,
     });
     let calls = 0;
+    const workspaceRuns = new WorkspaceRunCoordinator();
     const engine = new SchedulerEngine({
       database,
       chats: fakeChats(database),
-      workspaceRuns: new WorkspaceRunCoordinator(),
+      workspaceRuns,
       agentSessionsPath: join(directory, "agent-sessions"),
       executor: {
         async executeSystem(context) {
@@ -161,10 +204,47 @@ describe("SchedulerEngine conversation lifecycle", () => {
       },
     });
 
+    const release = workspaceRuns.acquire(task.workspacePath);
     await engine.runNow(task.id);
     expect((await waitForTerminalRun(database, task.id)).status).toBe("completed");
     expect(calls).toBe(1);
     expect(getScheduledTask(database, task.id)?.conversationId).toBeNull();
+    release?.();
     await engine.close();
+  });
+
+  it("re-arms long-dated timers without overflowing Node's timeout", async () => {
+    vi.useFakeTimers({ now: new Date("2026-01-01T00:00:00.000Z") });
+    const { database, directory } = createFixture();
+    const task = createScheduledTask(database, {
+      name: "Far future task",
+      cronExpression: "0 3 * * *",
+      timezone: "UTC",
+      prompt: "wait",
+      workspacePath: join(directory, "workspace"),
+      provider: "deepseek-official",
+      model: "deepseek-v4-flash",
+      reasoningEffort: "high",
+      enabled: true,
+      nextRunAt: "2099-01-01T00:00:00.000Z",
+    });
+    const engine = new SchedulerEngine({
+      database,
+      chats: fakeChats(database),
+      workspaceRuns: new WorkspaceRunCoordinator(),
+      agentSessionsPath: join(directory, "agent-sessions"),
+      now: () => new Date("2026-01-01T00:00:00.000Z"),
+    });
+
+    try {
+      engine.start();
+      expect(vi.getTimerCount()).toBe(1);
+      await vi.advanceTimersByTimeAsync(MAX_SCHEDULER_TIMER_DELAY_MS);
+      expect(listScheduledTaskRuns(database, task.id)).toHaveLength(0);
+      expect(vi.getTimerCount()).toBe(1);
+    } finally {
+      await engine.close();
+      vi.useRealTimers();
+    }
   });
 });

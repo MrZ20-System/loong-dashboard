@@ -175,6 +175,93 @@ describe("GhGitHubMetadataProvider", () => {
     expect(http.calls).toHaveLength(1);
   });
 
+  it("resumes history from a timestamp anchor with the two-minute overlap", async () => {
+    const http = createFakeHttp([
+      httpJson(pullRequestResponse(
+        [
+          pullRequestNode({ number: 2, updatedAt: "2024-06-10T00:01:00Z" }),
+          pullRequestNode({ number: 1, updatedAt: "2024-06-09T23:59:59Z" }),
+        ],
+        { hasNextPage: true, endCursor: "history-next" },
+      )),
+    ]);
+    const provider = createProvider(http);
+
+    const pages = await collect(provider.fetchPullRequestHistory({
+      repository,
+      recoveryAnchorUpdatedAt: "2024-06-10T00:02:00Z",
+    }));
+
+    expect(pages).toHaveLength(1);
+    expect(pages[0]?.items.map((item) => item.number)).toEqual([2]);
+    expect(requestBody(http, 0).variables).toMatchObject({ cursor: null });
+    expect(http.calls).toHaveLength(1);
+  });
+
+  it("continues a non-empty history cursor without applying the recovery cutoff", async () => {
+    const http = createFakeHttp([
+      httpJson(pullRequestResponse(
+        [pullRequestNode({ number: 2, updatedAt: "2024-06-09T23:59:00Z" })],
+        { hasNextPage: true, endCursor: "history-next" },
+      )),
+      httpJson(pullRequestResponse(
+        [pullRequestNode({ number: 1, updatedAt: "2024-06-08T23:59:00Z" })],
+        { hasNextPage: false, endCursor: null },
+      )),
+    ]);
+    const provider = createProvider(http);
+
+    const pages = await collect(provider.fetchPullRequestHistory({
+      repository,
+      cursor: "durable-cursor",
+      recoveryAnchorUpdatedAt: "2024-06-10T00:02:00Z",
+    }));
+
+    expect(pages).toHaveLength(2);
+    expect(pages.flatMap((page) => page.items.map((item) => item.number))).toEqual([2, 1]);
+    expect(requestBody(http, 0).variables).toMatchObject({ cursor: "durable-cursor" });
+    expect(requestBody(http, 1).variables).toMatchObject({ cursor: "history-next" });
+  });
+
+  it("falls back from an expired history cursor to the durable timestamp anchor", async () => {
+    const http = createFakeHttp([
+      httpJson({ data: null, errors: [{ message: "cursor is invalid" }] }),
+      httpJson(pullRequestResponse(
+        [pullRequestNode({ number: 2, updatedAt: "2024-06-10T00:01:00Z" })],
+        { hasNextPage: false, endCursor: null },
+      )),
+    ]);
+    const provider = createProvider(http);
+
+    const pages = await collect(provider.fetchPullRequestHistory({
+      repository,
+      cursor: "expired-cursor",
+      recoveryAnchorUpdatedAt: "2024-06-10T00:02:00Z",
+    }));
+
+    expect(pages[0]?.items[0]?.number).toBe(2);
+    expect(requestBody(http, 0).variables).toMatchObject({ cursor: "expired-cursor" });
+    expect(requestBody(http, 1).variables).toMatchObject({ cursor: null });
+    expect(http.calls).toHaveLength(2);
+  });
+
+  it("does not reset a history cursor for an unrelated GraphQL error", async () => {
+    const http = createFakeHttp([
+      httpJson({ data: null, errors: [{ message: "repository access denied" }] }),
+    ]);
+    const provider = createProvider(http);
+
+    await expect(
+      collect(provider.fetchPullRequestHistory({
+        repository,
+        cursor: "durable-cursor",
+        recoveryAnchorUpdatedAt: "2024-06-10T00:02:00Z",
+      })),
+    ).rejects.toBeInstanceOf(GitHubGraphQLError);
+    expect(http.calls).toHaveLength(1);
+    expect(requestBody(http, 0).variables).toMatchObject({ cursor: "durable-cursor" });
+  });
+
   it("includes cutoff equality and normalizes all PR timestamps to UTC", async () => {
     const http = createFakeHttp([
       httpJson(pullRequestResponse([

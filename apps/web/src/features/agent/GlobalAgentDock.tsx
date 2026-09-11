@@ -23,5 +23,11 @@ export function GlobalAgentDock() {
   const scopeKey = JSON.stringify(scope);
   const { sessionId: existingSessionId } = useAgentSessionSelection(scopeKey);
   if (location.pathname.startsWith("/agent") || location.pathname.match(/\/pulls\/\d+$/) !== null) return null;
-  return <div className={`global-agent-dock${open ? " global-agent-dock--open" : ""}`}><button type="button" className="global-agent-launcher" onClick={() => setOpen((value) => !value)} aria-label={open ? "Close Agent dock" : "Open Agent dock"} aria-expanded={open}><span aria-hidden="true">✦</span><span>Agent</span></button>{open && <div className="global-agent-dock__panel"><button type="button" className="global-agent-dock__close" onClick={() => setOpen(false)} aria-label="Close Agent dock">×</button><AgentChatPanel scope={scope} initialSessionId={existingSessionId} heading="Agent" panelId="global-agent-dock" /></div>}</div>;
+  return <div className={`global-agent-dock${open ? " global-agent-dock--open" : ""}`}>
+    {!open && <button type="button" className="global-agent-launcher" onClick={() => setOpen(true)} aria-label="Open Agent dock" aria-expanded={false}><span aria-hidden="true">✦</span><span>Agent</span></button>}
+    {open && <div className="global-agent-dock__panel">
+      <button type="button" className="global-agent-dock__close" onClick={() => setOpen(false)} aria-label="Close Agent dock">×</button>
+      <AgentChatPanel scope={scope} initialSessionId={existingSessionId} heading="Agent" panelId="global-agent-dock" showCollapseControl={false} />
+    </div>}
+  </div>;
 }

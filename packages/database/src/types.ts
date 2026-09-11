@@ -7,9 +7,11 @@ import type {
   IssueComment,
   IssueListItem,
   IssueStatus,
+  MergedPullRequestListItem,
   PullRequestDetail,
   PullRequestFileItem,
   PullRequestListItem,
+  PullRequestListSort,
   PullRequestStatus,
   SyncStatus,
 } from "@loongboard/contracts";
@@ -23,9 +25,11 @@ export type {
   IssueDetail,
   IssueListItem,
   IssueStatus,
+  MergedPullRequestListItem,
   PullRequestDetail,
   PullRequestFileItem,
   PullRequestListItem,
+  PullRequestListSort,
   PullRequestStatus,
   SyncStatus,
 } from "@loongboard/contracts";
@@ -54,6 +58,7 @@ export interface RepositoryRecord {
   enabled: boolean;
   /** Current locally indexed totals used by navigation/settings projections. */
   pullRequestCount?: number;
+  mergedPullRequestCount?: number;
   issueCount?: number;
   createdAt: string;
   updatedAt: string;
@@ -82,6 +87,67 @@ export interface SyncRun {
   repositoryId: string;
   syncRunId: string;
   startedAt: string;
+  /** Run metadata is optional on the legacy low-level start return. */
+  kind?: SyncRunKind;
+  trigger?: SyncRunTrigger;
+  completion?: Promise<SyncRunRecord>;
+}
+
+export type SyncRunKind = "forward" | "history" | "fetch_pr";
+export type SyncRunTrigger = "automatic" | "manual" | "api" | "system";
+export type SyncRunStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "partial"
+  | "failed"
+  | "interrupted";
+
+export interface SyncRunStreamRecord {
+  runId: string;
+  entityKind: EntityKind;
+  status: SyncRunStatus;
+  pagesFetched: number;
+  itemsSeen: number;
+  itemsWritten: number;
+  watermarkBefore: string | null;
+  watermarkAfter: string | null;
+  rateLimitRemaining: number | null;
+  startedAt: string | null;
+  finishedAt: string | null;
+  error: string | null;
+}
+
+export interface SyncRunRecord {
+  syncRunId: string;
+  repositoryId: string;
+  kind: SyncRunKind;
+  trigger: SyncRunTrigger;
+  status: SyncRunStatus;
+  requestedAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  selector: Record<string, unknown>;
+  itemsSeen: number;
+  itemsWritten: number;
+  error: string | null;
+  streams: readonly SyncRunStreamRecord[];
+}
+
+export type HistoryStatus = "idle" | "running" | "paused" | "failed" | "completed";
+
+export interface RepositoryHistoryState {
+  repositoryId: string;
+  entityKind: EntityKind;
+  enabled: boolean;
+  status: HistoryStatus;
+  targetDate: string | null;
+  oldestCoveredDay: string | null;
+  cursor: string | null;
+  recoveryAnchorUpdatedAt: string | null;
+  lastRunId: string | null;
+  lastError: string | null;
+  updatedAt: string;
 }
 
 export interface SyncStreamUpdate {
@@ -160,12 +226,15 @@ export interface ListQueryOptions {
   /** IANA zone used for date filtering and returned by HTTP. */
   calendarTimeZone: string;
   date?: string | null;
-  cursor?: string | null;
   limit?: number;
 }
 
 export interface PullRequestListOptions extends ListQueryOptions {
+  page?: number;
   status?: PullRequestStatus | null;
+  sort?: PullRequestListSort | null;
+  /** Case-insensitive contiguous title/author or PR-number search. */
+  search?: string | null;
   /** Match pull requests carrying ANY of these domain rules (plan 10.3). */
   domainIds?: readonly string[] | null;
 }
@@ -184,12 +253,32 @@ export interface PullRequestFileSet {
 }
 
 export interface IssueListOptions extends ListQueryOptions {
+  cursor?: string | null;
   status?: IssueStatus | null;
+  /** Case-insensitive contiguous title/author or issue-number search. */
+  search?: string | null;
+}
+
+export interface MergedPullRequestListOptions {
+  calendarTimeZone: string;
+  page?: number;
+  limit?: number;
+  search?: string | null;
+  domainIds?: readonly string[] | null;
 }
 
 export interface ListPage<T> {
   items: readonly T[];
   nextCursor: string | null;
+  calendarTimeZone: string;
+}
+
+export interface PageList<T> {
+  items: readonly T[];
+  page: number;
+  pageSize: number;
+  totalCount: number;
+  totalPages: number;
   calendarTimeZone: string;
 }
 

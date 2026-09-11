@@ -6,8 +6,12 @@
 | --- | --- | --- |
 | `/health` | GET，精确返回 `{ "status": "ok" }` | [health](../packages/contracts/src/health.ts) / [app](../apps/server/src/app.ts) |
 | `/repositories` | GET 配置仓库投影 | [repositories](../packages/contracts/src/repositories.ts) / app |
-| `/repositories/:id/sync`、`/sync-status` | POST 接受同步，GET 状态 | repositories / app |
-| `/repositories/:id/pulls`、`/issues` 及各自 `/activity-days` | GET 列表和日期活动 | [metadata](../packages/contracts/src/metadata.ts) / app |
+| `/repositories/:id/sync`、`/sync-status` | POST 接受 forward/history/fetch_pr 同步并返回 `syncRunId`，GET 当前状态；HTTP trigger 固定为 `api` | [sync](../packages/contracts/src/sync.ts) / app |
+| `/repositories/:id/sync-runs`、`/sync-runs/:runId` | GET 最近 run 或具体 run（含 PR/Issue stream、计数、水位、错误） | sync / app |
+| `/repositories/:id/sync-history` | GET metadata history target、cursor/anchor 与最老覆盖边界；PUT 设置目标日期或 enable；POST `/pause`、`/continue` 控制 batch admission | sync / app |
+| `/repositories/:repositoryId/pulls/:number/fetch` | POST 定向拉取单 PR，返回独立 `fetch_pr` run，不改变 forward watermark/cursor | sync / app |
+| `/repositories/:id/pulls`、`/issues` 及各自 `/activity-days` | GET 列表和日期活动；PR 支持 `updated` / `number` sort，使用 `page` + `limit` 页码分页；Issue 继续使用 cursor | [metadata](../packages/contracts/src/metadata.ts) / app |
+| `/repositories/:id/merged` | GET `pull_requests` 的 merged projection，使用 `page` + `limit` 页码分页并返回过滤后的总数；没有独立同步 | metadata / app |
 | `/repositories/:repositoryId/issues/:number` | GET 懒加载详情 | metadata / app |
 | `/repositories/:id/domains` 及 `/:domainId` | GET/POST 集合，PUT/DELETE 单项 | [domains](../packages/contracts/src/domains.ts) / [domains route](../apps/server/src/domains.ts) |
 | `/repositories/:id/pulls/:number/files` | GET 已同步变更路径 | domains / domains route |
@@ -23,7 +27,8 @@
 
 | 路径组 | 操作 |
 | --- | --- |
-| `/repositories/:id/settings` | GET/PUT 仓库同步配置；`syncLookbackDays` 为首次同步按 `updated_at` 取数的 7/30 天范围，默认 30，后续同步从既有水位减 2 分钟继续增量 |
+| `/repositories/:id/settings` | GET/PUT 仓库同步与 Worktrees operational policy；`configuredSlots` 为 1-8，`idleCleanupTtlHours` 为正数，响应包含 configured/physical/active/idle/dirty/pending retirement |
+| `/repositories/:id/settings/worktrees/cleanup` | POST 显式清理 unused Worktrees；busy、dirty 和 Git status 失败的 slot fail closed |
 | `/settings/integrations/github`、`/verify` | GET 摘要、PUT/DELETE token、POST 验证；不回传 secret |
 | `/settings/agent`、`/providers` | GET runtime 能力与默认值、PUT 默认值/私有 provider secret |
 | `/settings/knowledge-checkpoint`、`/run`、`/push` | GET/PUT 配置，POST checkpoint/push |
@@ -32,6 +37,9 @@
 | `/agent-sessions/:id/interactions/:requestId` | POST 答复当前 runtime 交互 |
 
 表内简写子路径均拼接到同一行的父资源。Knowledge 集合 GET/PUT 支持按 path 读取/保存；按 id 的资源用于稳定身份操作。
+
+PR 与 Merged 列表的 `page` 默认为 1，`limit` 默认为 100 且最大为 100；响应统一包含 `page`、`pageSize`、`totalCount`、`totalPages` 和 `calendarTimeZone`。这些总数对应当前日期、状态、搜索和 Domain 过滤后的完整结果集（Merged 使用其支持的搜索和 Domain 过滤）。Issue 列表仍返回 `nextCursor` 并接受 cursor。
+请求页超过 `totalPages` 时，服务返回最后一页的有效 `page`；过滤结果为空时返回 `page=1`、`totalPages=0` 和空 `items`。
 
 Domain source 的 GET/PUT 读写仓库中的 JSON 文件，versions 提供历史列表、版本内容和 restore；prompt 使用同一文件读写边界。页面通过普通 Agent session 发送更新请求，成功后重新读取 source 与 rendered projection。GitHub token、provider secret 和其他凭据只接受写入或返回摘要，任何响应都不包含 secret。
 

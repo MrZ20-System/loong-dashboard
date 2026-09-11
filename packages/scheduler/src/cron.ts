@@ -63,8 +63,10 @@ export interface CronSchedule {
   minutes: number[];
   hours: number[];
   daysOfMonth: number[];
+  dayOfMonthWildcard: boolean;
   months: number[];
   daysOfWeek: number[];
+  dayOfWeekWildcard: boolean;
 }
 
 export function parseCron(expression: string): CronSchedule {
@@ -80,8 +82,10 @@ export function parseCron(expression: string): CronSchedule {
     minutes: parseField(minute ?? "", 0, 59),
     hours: parseField(hour ?? "", 0, 23),
     daysOfMonth: parseField(dom ?? "", 1, 31),
+    dayOfMonthWildcard: dom === "*" || dom === "*/1",
     months: parseField(month ?? "", 1, 12),
     daysOfWeek: normalizeDow(parseField(dow ?? "", 0, 7)),
+    dayOfWeekWildcard: dow === "*" || dow === "*/1",
   };
 }
 
@@ -122,10 +126,22 @@ function zoneParts(date: Date, timeZone: string): ZoneParts {
   };
 }
 
+function matchesDay(schedule: CronSchedule, parts: ZoneParts): boolean {
+  const dayOfMonthMatches = schedule.daysOfMonth.includes(parts.day);
+  const dayOfWeekMatches = schedule.daysOfWeek.includes(parts.weekday);
+  // POSIX/Vixie cron treats the two day fields specially: when both are
+  // restricted, either may match. A wildcard field leaves the other field as
+  // the sole day selector.
+  return schedule.dayOfMonthWildcard
+    ? dayOfWeekMatches
+    : schedule.dayOfWeekWildcard
+      ? dayOfMonthMatches
+      : dayOfMonthMatches || dayOfWeekMatches;
+}
+
 function matchesZone(schedule: CronSchedule, parts: ZoneParts): boolean {
   if (!schedule.months.includes(parts.month)) return false;
-  if (!schedule.daysOfWeek.includes(parts.weekday)) return false;
-  if (!schedule.daysOfMonth.includes(parts.day)) return false;
+  if (!matchesDay(schedule, parts)) return false;
   if (!schedule.hours.includes(parts.hour)) return false;
   if (!schedule.minutes.includes(parts.minute)) return false;
   return true;
@@ -133,7 +149,10 @@ function matchesZone(schedule: CronSchedule, parts: ZoneParts): boolean {
 
 /**
  * Next occurrence strictly after `from` matching `expression` in `timeZone`.
- * Steps minute by minute until a match or the search horizon (2 years).
+ * Scans exact instants until a match. Months outside the expression can be
+ * skipped by whole UTC days; inside a candidate month we retain minute scans
+ * so DST gaps, repeats, and non-hour offsets keep their real timeline meaning.
+ * The eight-year horizon covers every Gregorian leap-day interval.
  */
 export function nextOccurrence(
   expression: string,
@@ -142,17 +161,37 @@ export function nextOccurrence(
 ): Date {
   const schedule = parseCron(expression);
   const start = new Date(from.getTime() + 60_000);
-  const horizon = start.getTime() + 2 * 366 * 24 * 60 * 60_000;
+  const horizon = start.getTime() + 8 * 366 * 24 * 60 * 60_000;
   const timeZoneKey = timeZone;
 
   // Step through local calendar minutes deterministically by scanning the
   // instant timeline; Intl resolves DST for us.
   let cursor = new Date(start.getTime() - (start.getTime() % 60_000));
   while (cursor.getTime() <= horizon) {
-    if (matchesZone(schedule, zoneParts(cursor, timeZoneKey))) {
+    const parts = zoneParts(cursor, timeZoneKey);
+    if (matchesZone(schedule, parts)) {
       return cursor;
     }
-    cursor = new Date(cursor.getTime() + 60_000);
+    const monthMatches = schedule.months.includes(parts.month);
+    const minuteAligned = schedule.minutes.includes(parts.minute);
+    // Outside a selected month, a whole UTC day cannot skip the next selected
+    // month. Within it, align to one selected minute and then skip non-matching
+    // calendar days/hours an hour at a time. A DST offset change may break the
+    // minute alignment; the next iteration resumes exact minute scanning.
+    const nextDayParts = !monthMatches
+      ? zoneParts(new Date(cursor.getTime() + 24 * 60 * 60_000), timeZoneKey)
+      : null;
+    const step = !monthMatches
+      // A 24-hour jump is safe only while the local month remains unchanged.
+      // Near a month boundary, scan minutes so e.g. Jan 31 23:31 does not
+      // jump over Feb 1 00:00.
+      ? nextDayParts?.month === parts.month
+        ? 24 * 60 * 60_000
+        : 60_000
+      : minuteAligned && (!matchesDay(schedule, parts) || !schedule.hours.includes(parts.hour))
+        ? 60 * 60_000
+        : 60_000;
+    cursor = new Date(cursor.getTime() + step);
   }
   throw new Error(`No cron occurrence found within the search horizon: ${expression}`);
 }

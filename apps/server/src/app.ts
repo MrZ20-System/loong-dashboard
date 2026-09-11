@@ -1,11 +1,17 @@
 import {
   getIssueActivityDays,
   getPullRequestActivityDays,
+  getRepositoryHistoryState,
   getRepositorySyncStatus,
+  getSyncRun,
+  listSyncRuns,
   listIssues,
+  listMergedPullRequests,
   listPullRequests,
   listRepositories,
   type DatabaseClient,
+  type SyncRun,
+  SyncRunNotFoundError,
 } from "@loongboard/database";
 import {
   activityDaysQuerySchema,
@@ -17,9 +23,22 @@ import {
   issuesQuerySchema,
   issuesResponseSchema,
   pullRequestsQuerySchema,
+  mergedPullRequestsQuerySchema,
+  mergedPullRequestsResponseSchema,
   pullRequestsResponseSchema,
   repositoriesResponseSchema,
   repositoryParamsSchema,
+  fetchPullRequestParamsSchema,
+  historyResponseSchema,
+  historySettingsUpdateSchema,
+  syncRequestSchema,
+  syncRunSchema,
+  syncRunParamsSchema,
+  syncRunsQuerySchema,
+  syncRunsResponseSchema,
+  syncRunAcceptedSchema,
+  type SyncRequest,
+  type HistorySettingsUpdate,
   syncAcceptedResponseSchema,
   syncStatusResponseSchema,
   type ApiErrorCode,
@@ -197,6 +216,7 @@ function registerStageOneRoutes(
       worktreeSlots: repository.worktreeSlots,
       enabled: repository.enabled,
       pullRequestCount: repository.pullRequestCount ?? 0,
+      mergedPullRequestCount: repository.mergedPullRequestCount ?? 0,
       issueCount: repository.issueCount ?? 0,
     }));
     return sendParsed(reply, 200, repositoriesResponseSchema, {
@@ -205,10 +225,115 @@ function registerStageOneRoutes(
   });
 
   app.post("/api/repositories/:id/sync", async (request, reply) => {
+    const { id } = parseRequest(repositoryParamsSchema, request.params);
+    const body = request.body === undefined
+      ? {}
+      : parseRequest(syncRequestSchema, request.body);
+    const run = startRequestedSync(syncCoordinator, id, body);
+    return sendParsed(reply, 202, syncAcceptedResponseSchema, {
+      repositoryId: run.repositoryId,
+      syncRunId: run.syncRunId,
+      status: "accepted",
+    });
+  });
+
+  app.get("/api/repositories/:id/sync-runs", async (request, reply) => {
+    const { id } = parseRequest(repositoryParamsSchema, request.params);
+    const query = parseRequest(syncRunsQuerySchema, request.query);
+    return sendParsed(reply, 200, syncRunsResponseSchema, {
+      items: listSyncRuns(database, id, query.limit),
+    });
+  });
+
+  app.get("/api/repositories/:repositoryId/sync-runs/:runId", async (request, reply) => {
+    const params = parseRequest(syncRunParamsSchema, request.params);
+    const run = getSyncRun(database, params.runId);
+    if (run.repositoryId !== params.repositoryId) {
+      throw new SyncRunNotFoundError(params.runId);
+    }
+    return sendParsed(reply, 200, syncRunSchema, run);
+  });
+
+  app.get("/api/repositories/:id/sync-history", async (request, reply) => {
+    const { id } = parseRequest(repositoryParamsSchema, request.params);
+    const settings = [
+      getRepositoryHistoryState(database, id, "pull_request"),
+      getRepositoryHistoryState(database, id, "issue"),
+    ].map((state) => ({
+      repositoryId: state.repositoryId,
+      entityKind: state.entityKind,
+      targetDate: state.targetDate,
+      oldestCoveredDay: state.oldestCoveredDay,
+      cursor: state.cursor,
+      enabled: state.enabled,
+      status: state.status,
+      lastRunId: state.lastRunId,
+      lastError: state.lastError,
+      updatedAt: state.updatedAt,
+    }));
+    return sendParsed(reply, 200, historyResponseSchema, {
+      settings,
+    });
+  });
+
+  app.put("/api/repositories/:id/sync-history", async (request, reply) => {
+    const { id } = parseRequest(repositoryParamsSchema, request.params);
+    const update = parseRequest(historySettingsUpdateSchema, request.body) as HistorySettingsUpdate;
+    if (syncCoordinator.configureHistory === undefined) {
+      throw new Error("History settings are not available");
+    }
+    syncCoordinator.configureHistory(id, update);
+    return sendParsed(reply, 200, historyResponseSchema, {
+      settings: [
+        getRepositoryHistoryState(database, id, "pull_request"),
+        getRepositoryHistoryState(database, id, "issue"),
+      ].map((state) => ({
+        repositoryId: state.repositoryId,
+        entityKind: state.entityKind,
+        targetDate: state.targetDate,
+        oldestCoveredDay: state.oldestCoveredDay,
+        cursor: state.cursor,
+        enabled: state.enabled,
+        status: state.status,
+        lastRunId: state.lastRunId,
+        lastError: state.lastError,
+        updatedAt: state.updatedAt,
+      })),
+    });
+  });
+
+  app.post("/api/repositories/:id/sync-history/pause", async (request, reply) => {
     assertEmptyRequestBody(request.body);
     const { id } = parseRequest(repositoryParamsSchema, request.params);
-    const run = syncCoordinator.start(id);
-    return sendParsed(reply, 202, syncAcceptedResponseSchema, {
+    if (syncCoordinator.pauseHistory === undefined) {
+      throw new Error("History pause is not available");
+    }
+    syncCoordinator.pauseHistory(id);
+    return reply.code(204).send();
+  });
+
+  app.post("/api/repositories/:id/sync-history/continue", async (request, reply) => {
+    assertEmptyRequestBody(request.body);
+    const { id } = parseRequest(repositoryParamsSchema, request.params);
+    if (syncCoordinator.resumeHistory === undefined) {
+      throw new Error("History continuation is not available");
+    }
+    const run = syncCoordinator.resumeHistory(id);
+    return sendParsed(reply, 202, syncRunAcceptedSchema, {
+      repositoryId: run.repositoryId,
+      syncRunId: run.syncRunId,
+      status: "accepted",
+    });
+  });
+
+  app.post("/api/repositories/:repositoryId/pulls/:number/fetch", async (request, reply) => {
+    assertEmptyRequestBody(request.body);
+    const { repositoryId, number } = parseRequest(fetchPullRequestParamsSchema, request.params);
+    if (syncCoordinator.startFetchPullRequest === undefined) {
+      throw new Error("Single pull request fetch is not available");
+    }
+    const run = syncCoordinator.startFetchPullRequest(repositoryId, number, { trigger: "api" });
+    return sendParsed(reply, 202, syncRunAcceptedSchema, {
       repositoryId: run.repositoryId,
       syncRunId: run.syncRunId,
       status: "accepted",
@@ -254,10 +379,26 @@ function registerStageOneRoutes(
       from: query.from,
       to: query.to,
       status: query.status,
-      cursor: query.cursor,
+      sort: query.sort,
+      search: query.search,
+      page: query.page,
+      limit: query.limit,
       domainIds: query.domain,
     });
     return sendParsed(reply, 200, pullRequestsResponseSchema, page);
+  });
+
+  app.get("/api/repositories/:id/merged", async (request, reply) => {
+    const { id } = parseRequest(repositoryParamsSchema, request.params);
+    const query = parseRequest(mergedPullRequestsQuerySchema, request.query);
+    const page = listMergedPullRequests(database, id, {
+      calendarTimeZone,
+      page: query.page,
+      search: query.search,
+      domainIds: query.domain,
+      limit: query.limit,
+    });
+    return sendParsed(reply, 200, mergedPullRequestsResponseSchema, page);
   });
 
   app.get(
@@ -285,6 +426,8 @@ function registerStageOneRoutes(
       from: query.from,
       to: query.to,
       status: query.status,
+      search: query.search,
+      limit: query.limit,
       cursor: query.cursor,
     });
     return sendParsed(reply, 200, issuesResponseSchema, page);
@@ -336,6 +479,32 @@ function toSyncStreamResponse(state: {
   };
 }
 
+function startRequestedSync(
+  coordinator: SyncCoordinator,
+  repositoryId: string,
+  request: SyncRequest,
+): SyncRun {
+  const kind = request.kind ?? "forward";
+  if (kind === "forward") return coordinator.start(repositoryId, "api");
+  if (kind === "history") {
+    if (coordinator.startHistory === undefined) {
+      throw new Error("History sync is not available");
+    }
+    return coordinator.startHistory(repositoryId, {
+      targetDate: request.targetDate,
+      // HTTP callers cannot impersonate scheduler/system triggers.
+      trigger: "api",
+    });
+  }
+  if (request.number === undefined) {
+    throw new InvalidRequestError("Fetch PR sync requires a positive number");
+  }
+  if (coordinator.startFetchPullRequest === undefined) {
+    throw new Error("Single pull request fetch is not available");
+  }
+  return coordinator.startFetchPullRequest(repositoryId, request.number, { trigger: "api" });
+}
+
 function errorResponse(error: unknown): {
   statusCode: number;
   body: unknown;
@@ -355,9 +524,11 @@ function errorResponse(error: unknown): {
             code === "KNOWLEDGE_DOCUMENT_NOT_FOUND" ||
             code === "KNOWLEDGE_VERSION_NOT_FOUND" ||
             code === "SCHEDULED_TASK_NOT_FOUND" ||
-            code === "AGENT_SESSION_NOT_FOUND"
+            code === "AGENT_SESSION_NOT_FOUND" ||
+            code === "SYNC_RUN_NOT_FOUND"
           ? 404
           : code === "SYNC_ALREADY_RUNNING" ||
+              code === "HISTORY_PAUSED" ||
               code === "DOMAIN_NAME_CONFLICT" ||
               code === "AGENT_TURN_BUSY" ||
               code === "AGENT_INTERACTION_UNAVAILABLE" ||
@@ -407,6 +578,10 @@ function errorCode(error: unknown): ApiErrorCode {
   }
   if (hasCode(error, "WORKTREE_POOL_EXHAUSTED")) return "WORKTREE_POOL_EXHAUSTED";
   if (hasCode(error, "SYNC_ALREADY_RUNNING")) return "SYNC_ALREADY_RUNNING";
+  if (hasCode(error, "HISTORY_PAUSED")) return "HISTORY_PAUSED";
+  if (error instanceof SyncRunNotFoundError || hasCode(error, "SYNC_RUN_NOT_FOUND")) {
+    return "SYNC_RUN_NOT_FOUND";
+  }
   return "INTERNAL_ERROR";
 }
 

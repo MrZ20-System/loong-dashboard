@@ -19,6 +19,7 @@ import {
 import { AgentChatPanel } from "../../agent-chat";
 import { ensureAgentSession, sendAgentMessage } from "../../agent-chat-client";
 import { useAgentSessionSelection } from "../agent/agent-session-context";
+import { SettingsSwitch } from "./SettingsSwitch";
 
 const defaultDomainColor = "#5b8def";
 
@@ -299,17 +300,12 @@ export function DomainsSettingsPage() {
               onChange={(event) => setForm({ ...form, exclude: event.target.value })}
             />
           </label>
-          <label className="checkbox">
-            <input
-              aria-label="Rule enabled"
-              type="checkbox"
-              checked={form.enabled}
-              onChange={(event) =>
-                setForm({ ...form, enabled: event.target.checked })
-              }
-            />
-            Enabled
-          </label>
+          <SettingsSwitch
+            label="Rule enabled"
+            description="Include this rule in the rendered domain projection."
+            checked={form.enabled}
+            onChange={(enabled) => setForm({ ...form, enabled })}
+          />
           <div className="domain-form-actions">
             <button type="submit" disabled={submit.isPending}>
               {editingId === null ? "Create rule" : "Save changes"}

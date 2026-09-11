@@ -3,10 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
-
 import {
   completeSyncStream,
+  createDomainRule,
+  createSyncRun,
   failSyncStream,
+  getSyncRun,
   getIssueActivityDays,
   getIssueDetail,
   getIssueDetailSyncedUpdatedAt,
@@ -15,9 +17,13 @@ import {
   getRepositorySyncState,
   InvalidCursorError,
   listIssues,
+  listCurrentPullRequestEnrichmentStates,
+  listMergedPullRequests,
   listPullRequests,
+  markSyncRunStarted,
   openDatabase,
   reconcileRepositories,
+  replacePullRequestFiles,
   replaceIssueDetailCache,
   startRepositorySync,
   upsertIssuePage,
@@ -275,6 +281,36 @@ describe("sync state persistence", () => {
       );
     });
   });
+
+  it("recovers durable queued/running runs as interrupted without deleting progress", () => {
+    const path = databasePath();
+    const first = openDatabase(path);
+    reconcileRepositories(first, [repository("alpha")], "2026-09-03T00:00:00.000Z");
+    const run = createSyncRun(first, {
+      repositoryId: "alpha",
+      kind: "history",
+      trigger: "manual",
+      entityKinds: ["pull_request", "issue"],
+    });
+    markSyncRunStarted(first, run.syncRunId, "2026-09-03T01:00:00.000Z");
+    first
+      .prepare("UPDATE repository_sync_run_streams SET items_seen = 3 WHERE run_id = ? AND entity_kind = 'pull_request'")
+      .run(run.syncRunId);
+    first.close();
+
+    const reopened = openDatabase(path);
+    try {
+      expect(getSyncRun(reopened, run.syncRunId)).toMatchObject({
+        status: "interrupted",
+        streams: expect.arrayContaining([
+          expect.objectContaining({ entityKind: "pull_request", status: "interrupted", itemsSeen: 3 }),
+          expect.objectContaining({ entityKind: "issue", status: "interrupted" }),
+        ]),
+      });
+    } finally {
+      reopened.close();
+    }
+  });
 });
 
 describe("Issue detail cache", () => {
@@ -455,7 +491,37 @@ describe("metadata upserts and queries", () => {
     });
   });
 
-  it("orders tied timestamps by number and paginates without duplicates", () => {
+  it("reports current PR head enrichment through the typed database API", () => {
+    withDatabase((database) => {
+      reconcileRepositories(database, [repository("repo")]);
+      const first = pullRequest(1, "2026-09-03T00:00:00.000Z", {
+        headSha: "a".repeat(40),
+      });
+      const second = pullRequest(2, "2026-09-03T00:00:00.000Z", {
+        headSha: "b".repeat(40),
+      });
+      upsertPullRequestPage(database, "repo", [first, second]);
+
+      expect(listCurrentPullRequestEnrichmentStates(database, "repo", [1, 2, 999])).toEqual([
+        { number: 1, headSha: first.headSha, enriched: false },
+        { number: 2, headSha: second.headSha, enriched: false },
+      ]);
+      replacePullRequestFiles(database, "repo", 1, first.headSha, [{
+        path: "README.md",
+        previousPath: null,
+        changeType: "modified",
+        additions: 1,
+        deletions: 0,
+      }], false);
+
+      expect(listCurrentPullRequestEnrichmentStates(database, "repo", [1, 2])).toEqual([
+        { number: 1, headSha: first.headSha, enriched: true },
+        { number: 2, headSha: second.headSha, enriched: false },
+      ]);
+    });
+  });
+
+  it("returns stable PR pages and filtered totals for tied timestamps", () => {
     withDatabase((database) => {
       reconcileRepositories(database, [repository("repo")]);
       upsertPullRequestPage(database, "repo", [
@@ -467,16 +533,204 @@ describe("metadata upserts and queries", () => {
       const first = listPullRequests(database, "repo", {
         calendarTimeZone: "UTC",
         limit: 2,
+        page: 1,
       });
       expect(first.items.map((item) => item.number)).toEqual([3, 2]);
-      expect(first.nextCursor).not.toBeNull();
+      expect(first).toMatchObject({ page: 1, pageSize: 2, totalCount: 4, totalPages: 2 });
       const second = listPullRequests(database, "repo", {
         calendarTimeZone: "UTC",
         limit: 2,
-        cursor: first.nextCursor,
+        page: 2,
       });
       expect(second.items.map((item) => item.number)).toEqual([1, 4]);
-      expect(second.nextCursor).toBeNull();
+      expect(second).toMatchObject({ page: 2, pageSize: 2, totalCount: 4, totalPages: 2 });
+      expect(listPullRequests(database, "repo", {
+        calendarTimeZone: "UTC",
+        limit: 2,
+        page: 3,
+      })).toMatchObject({
+        items: [expect.objectContaining({ number: 1 }), expect.objectContaining({ number: 4 })],
+        page: 2,
+        pageSize: 2,
+        totalCount: 4,
+        totalPages: 2,
+      });
+      expect(listPullRequests(database, "repo", {
+        calendarTimeZone: "UTC",
+        search: "does-not-exist",
+        limit: 2,
+        page: 99,
+      })).toMatchObject({ items: [], page: 1, pageSize: 2, totalCount: 0, totalPages: 0 });
+    });
+  });
+
+  it("supports number ordering and applies filters to PR pages and totals", () => {
+    withDatabase((database) => {
+      reconcileRepositories(database, [repository("repo")]);
+      upsertPullRequestPage(database, "repo", [
+        pullRequest(53906, "2026-09-01T00:00:00.000Z", {
+          title: "A middle matching feature",
+          authorLogin: "AliceExample",
+        }),
+        pullRequest(53960, "2026-09-03T00:00:00.000Z", {
+          title: "Unrelated 2026 title",
+          authorLogin: "other",
+        }),
+        pullRequest(100, "2026-09-02T00:00:00.000Z", {
+          title: "Another issue",
+          authorLogin: "feature-owner",
+        }),
+      ]);
+
+      const first = listPullRequests(database, "repo", {
+        calendarTimeZone: "UTC",
+        sort: "number",
+        limit: 2,
+        page: 1,
+      });
+      expect(first.items.map((item) => item.number)).toEqual([53960, 53906]);
+      expect(first).toMatchObject({ page: 1, pageSize: 2, totalCount: 3, totalPages: 2 });
+      const second = listPullRequests(database, "repo", {
+        calendarTimeZone: "UTC",
+        sort: "number",
+        limit: 2,
+        page: 2,
+      });
+      expect(second.items.map((item) => item.number)).toEqual([100]);
+      expect(second).toMatchObject({ page: 2, pageSize: 2, totalCount: 3, totalPages: 2 });
+
+      expect(
+        listPullRequests(database, "repo", {
+          calendarTimeZone: "UTC",
+          search: "#3906",
+          page: 1,
+          limit: 10,
+        }),
+      ).toMatchObject({ items: [expect.objectContaining({ number: 53906 })], totalCount: 1, totalPages: 1 });
+      expect(
+        listPullRequests(database, "repo", {
+          calendarTimeZone: "UTC",
+          search: "matching feat",
+          page: 1,
+          limit: 10,
+        }),
+      ).toMatchObject({ items: [expect.objectContaining({ number: 53906 })], totalCount: 1, totalPages: 1 });
+      expect(
+        listPullRequests(database, "repo", {
+          calendarTimeZone: "UTC",
+          search: "OWNER",
+          page: 1,
+          limit: 10,
+        }),
+      ).toMatchObject({ items: [expect.objectContaining({ number: 100 })], totalCount: 1, totalPages: 1 });
+      expect(listPullRequests(database, "repo", {
+        calendarTimeZone: "UTC",
+        search: "2026",
+        page: 1,
+        limit: 10,
+      })).toMatchObject({ items: [expect.objectContaining({ number: 53960 })], totalCount: 1, totalPages: 1 });
+    });
+  });
+
+  it("projects merged PRs by merge time with stable pages, filtered totals, and partial index", () => {
+    withDatabase((database) => {
+      reconcileRepositories(database, [repository("repo")]);
+      upsertPullRequestPage(database, "repo", [
+        pullRequest(12, "2026-09-10T00:00:00.000Z", {
+          mergedAt: "2026-09-02T00:00:00.000Z",
+        }),
+        pullRequest(11, "2026-09-01T00:00:00.000Z", {
+          title: "Pull request merged in 2026",
+          mergedAt: "2026-09-03T00:00:00.000Z",
+        }),
+        pullRequest(10, "2026-09-11T00:00:00.000Z", {
+          mergedAt: "2026-09-03T00:00:00.000Z",
+        }),
+        pullRequest(9, "2026-09-12T00:00:00.000Z", { mergedAt: null }),
+        pullRequest(8, "2026-09-13T00:00:00.000Z", {
+          stateRaw: "CLOSED",
+          status: "closed",
+          closedAt: "2026-09-13T00:00:00.000Z",
+          mergedAt: null,
+        }),
+      ]);
+      const domain = createDomainRule(database, "repo", {
+        name: "Merged",
+        includePatterns: ["**"],
+      });
+      database
+        .prepare(
+          `INSERT INTO pull_request_domains
+             (repository_id, pr_number, domain_rule_id, classification_key)
+           VALUES (?, ?, ?, ?)`,
+        )
+        .run("repo", 11, domain.id, "merged-test");
+
+      const first = listMergedPullRequests(database, "repo", {
+        calendarTimeZone: "UTC",
+        limit: 2,
+        page: 1,
+      });
+      expect(first.items.map((item) => item.number)).toEqual([11, 10]);
+      expect(first.items.every((item) => item.mergedAt !== undefined)).toBe(true);
+      expect(first).toMatchObject({ page: 1, pageSize: 2, totalCount: 3, totalPages: 2 });
+
+      const second = listMergedPullRequests(database, "repo", {
+        calendarTimeZone: "UTC",
+        limit: 2,
+        page: 2,
+      });
+      expect(second.items.map((item) => item.number)).toEqual([12]);
+      expect(second).toMatchObject({ page: 2, pageSize: 2, totalCount: 3, totalPages: 2 });
+      expect(listMergedPullRequests(database, "repo", {
+        calendarTimeZone: "UTC",
+        limit: 2,
+        page: 3,
+      })).toMatchObject({
+        items: [expect.objectContaining({ number: 12 })],
+        page: 2,
+        pageSize: 2,
+        totalCount: 3,
+        totalPages: 2,
+      });
+      expect(listMergedPullRequests(database, "repo", {
+        calendarTimeZone: "UTC",
+        search: "does-not-exist",
+        limit: 2,
+        page: 99,
+      })).toMatchObject({ items: [], page: 1, pageSize: 2, totalCount: 0, totalPages: 0 });
+      expect([...first.items, ...second.items].map((item) => item.number)).not.toContain(8);
+
+      expect(listMergedPullRequests(database, "repo", {
+        calendarTimeZone: "UTC",
+        search: "#11",
+        limit: 10,
+        page: 1,
+      })).toMatchObject({ items: [expect.objectContaining({ number: 11 })], totalCount: 1, totalPages: 1 });
+      expect(listMergedPullRequests(database, "repo", {
+        calendarTimeZone: "UTC",
+        search: "2026",
+        limit: 10,
+        page: 1,
+      })).toMatchObject({ items: [expect.objectContaining({ number: 11 })], totalCount: 1, totalPages: 1 });
+      expect(listMergedPullRequests(database, "repo", {
+        calendarTimeZone: "UTC",
+        domainIds: [domain.id],
+        limit: 10,
+        page: 1,
+      })).toMatchObject({ items: [expect.objectContaining({ number: 11 })], totalCount: 1, totalPages: 1 });
+
+      const plan = database
+        .prepare(
+          `EXPLAIN QUERY PLAN
+           SELECT repository_id, number
+           FROM pull_requests
+           WHERE repository_id = ? AND merged_at IS NOT NULL
+           ORDER BY merged_at DESC, number DESC
+           LIMIT ?`,
+        )
+        .all("repo", 100) as Array<{ detail: string }>;
+      expect(plan.some((row) => row.detail.includes("pull_requests_repository_merged_at_number_idx"))).toBe(true);
     });
   });
 
@@ -484,7 +738,7 @@ describe("metadata upserts and queries", () => {
     withDatabase((database) => {
       reconcileRepositories(database, [repository("repo")]);
       upsertIssuePage(database, "repo", [
-        issue(5, "2026-09-03T00:00:00.000Z", { status: "open" }),
+        issue(5, "2026-09-03T00:00:00.000Z", { status: "open", title: "Issue 2026 regression" }),
         issue(4, "2026-09-03T00:00:00.000Z", { status: "closed" }),
         issue(3, "2026-09-03T00:00:00.000Z", { status: "open" }),
         issue(2, "2026-09-03T00:00:00.000Z", { status: "open" }),
@@ -506,6 +760,11 @@ describe("metadata upserts and queries", () => {
       });
       expect(second.items.map((item) => item.number)).toEqual([2]);
       expect(second.nextCursor).toBeNull();
+      expect(listIssues(database, "repo", {
+        calendarTimeZone: "UTC",
+        search: "2026",
+        limit: 10,
+      })).toMatchObject({ items: [expect.objectContaining({ number: 5 })] });
     });
   });
 
@@ -541,27 +800,49 @@ describe("metadata upserts and queries", () => {
         listPullRequests(database, "repo", {
           calendarTimeZone: "America/New_York",
           date: "2026-03-08",
-        }).items.map((item) => item.number),
-      ).toEqual([2]);
+        }),
+      ).toMatchObject({ items: [expect.objectContaining({ number: 2 })], totalCount: 1, totalPages: 1 });
       expect(
         listPullRequests(database, "repo", {
           calendarTimeZone: "America/New_York",
           status: "merged",
-        }).items.map((item) => item.number),
-      ).toEqual([2]);
+        }),
+      ).toMatchObject({ items: [expect.objectContaining({ number: 2 })], totalCount: 1, totalPages: 1 });
       expect(
         listPullRequests(database, "repo", {
           calendarTimeZone: "America/New_York",
           date: "2026-03-09",
-        }).items.map((item) => item.number),
-      ).toEqual([3]);
+        }),
+      ).toMatchObject({ items: [expect.objectContaining({ number: 3 })], totalCount: 1, totalPages: 1 });
       expect(
         listPullRequests(database, "repo", {
           calendarTimeZone: "America/New_York",
           from: "2026-03-08",
           to: "2026-03-09",
-        }).items.map((item) => item.number),
-      ).toEqual([3, 2]);
+        }),
+      ).toMatchObject({
+        items: [expect.objectContaining({ number: 3 }), expect.objectContaining({ number: 2 })],
+        totalCount: 2,
+        totalPages: 1,
+      });
+
+      const domain = createDomainRule(database, "repo", {
+        name: "Merged PRs",
+        includePatterns: ["**"],
+      });
+      database
+        .prepare(
+          `INSERT INTO pull_request_domains
+             (repository_id, pr_number, domain_rule_id, classification_key)
+           VALUES (?, ?, ?, ?)`,
+        )
+        .run("repo", 2, domain.id, "test");
+      expect(listPullRequests(database, "repo", {
+        calendarTimeZone: "America/New_York",
+        domainIds: [domain.id],
+        page: 1,
+        limit: 10,
+      })).toMatchObject({ items: [expect.objectContaining({ number: 2 })], totalCount: 1, totalPages: 1 });
     });
   });
 

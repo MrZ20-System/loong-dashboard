@@ -16,6 +16,7 @@ const repositories = [
     defaultBranch: "main",
     worktreeSlots: 1,
     enabled: true,
+    mergedPullRequestCount: 0,
   },
   {
     id: "vllm-ascend",
@@ -28,6 +29,7 @@ const repositories = [
     defaultBranch: "main",
     worktreeSlots: 2,
     enabled: true,
+    mergedPullRequestCount: 0,
   },
 ] as const;
 

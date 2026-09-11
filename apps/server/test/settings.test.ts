@@ -123,6 +123,57 @@ describe("SettingsController", () => {
     });
   });
 
+  it("hydrates persisted Agent overrides over system defaults after restart", () => {
+    const { root, statePath, database } = fixture();
+    writeFileSync(
+      join(root, "settings.json"),
+      JSON.stringify({
+        version: 1,
+        agent: {
+          defaultProvider: "persisted-provider",
+          defaultModel: "persisted-model",
+          defaultReasoning: "max",
+          retentionMinutes: 7,
+        },
+      }),
+      "utf8",
+    );
+    const updates: Array<Record<string, unknown>> = [];
+    const controller = new SettingsController({
+      database,
+      systemRoot: root,
+      statePath,
+      environment: {},
+      credential: new GitHubCredentialService({
+        filePath: join(statePath, "github-credential.json"),
+        environment: {},
+        ghExecutable: "false",
+      }),
+      agent: {
+        update: (patch) => {
+          updates.push(patch);
+        },
+      },
+      defaults: {
+        defaultProvider: "yaml-provider",
+        defaultModel: "yaml-model",
+        defaultReasoning: "high",
+        retentionMinutes: 120,
+      },
+    });
+
+    controller.hydrateAgentRuntime();
+
+    expect(updates).toEqual([
+      {
+        defaultProvider: "persisted-provider",
+        defaultModel: "persisted-model",
+        defaultReasoning: "max",
+        retentionMinutes: 7,
+      },
+    ]);
+  });
+
   it("persists the initial sync window without changing an existing watermark", async () => {
     const { root, statePath, database } = fixture();
     const startedAt = "2026-09-09T10:00:00.000Z";
@@ -210,5 +261,37 @@ describe("SettingsController", () => {
       "provider-secret",
     );
     chmodSync(providerPath, 0o600);
+  });
+
+  it("persists worktree policy overrides and reconciles immediately", async () => {
+    const { root, statePath, database } = fixture();
+    const reconciled: string[] = [];
+    const controller = new SettingsController({
+      database,
+      systemRoot: root,
+      statePath,
+      environment: {},
+      worktrees: {
+        inspect: () => ({ physicalSlots: 1, active: 0, idle: 1, dirty: 0, pendingRetirement: 0 }),
+        reconcile: (repositoryId) => {
+          reconciled.push(repositoryId);
+          return { physicalSlots: 1, active: 0, idle: 1, dirty: 0, pendingRetirement: 0 };
+        },
+      },
+    });
+
+    const updated = await controller.updateRepository("vllm", {
+      worktrees: { configuredSlots: 2, idleCleanupTtlHours: 72 },
+    });
+    expect(updated.worktrees).toMatchObject({
+      configuredSlots: 2,
+      idleCleanupTtlHours: 72,
+      physicalSlots: 1,
+      idle: 1,
+    });
+    expect(reconciled).toEqual(["vllm"]);
+    expect(JSON.parse(readFileSync(join(root, "settings.json"), "utf8"))).toMatchObject({
+      repositories: { vllm: { worktrees: { configuredSlots: 2, idleCleanupTtlHours: 72 } } },
+    });
   });
 });

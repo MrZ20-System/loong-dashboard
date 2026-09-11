@@ -22,6 +22,14 @@ Git revision/cleanliness 在一次选择过程中缓存，数据库记录 affini
 
 PR 会话在每个 turn 前核对 workspace revision；显式 Sync workspace 先停止该会话 DSH，再切换 worktree。聊天与调度共享 workspace 互斥，见 [Agent](dsh-integration.md)。
 
+## Worktree 维护与容量
+
+`WorktreeJanitor` 是低频、显式调用的维护入口，不属于分配器热路径；Server 的 [WorktreeMaintenanceService](../apps/server/src/worktree-maintenance.ts) 负责提供 DB projection 和删除后的 affinity 清理，但不自己读取 Settings 或创建 timer。Server 为每个 repository 传入已经解析的 `configuredSlots` 和 `idleCleanupTtlMs`：Settings 中的 operational override 是运行时 authority，`system.yaml` 的 `worktreeSlots` 只提供安装 fallback。维护结果可以直接投影为 `configuredSlots`、`physicalSlots`、`active`、`idle`、`dirty` 和 `pendingRetirement`，并可用于手动 `Clean unused worktrees now`。
+
+缩容会扫描整个 pool，而不是只扫描低编号 slot。超出 configured slots 的 clean、非 busy slot 会通过非强制 `git worktree remove` 删除；busy slot 进入 pending retirement，等 live Agent session 结束后再处理；dirty slot 和 Git status 失败的 slot 保留并报告。TTL 自动清理只删除 clean、非 busy 且 `last_used_at` 已超过 TTL 的 slot；手动清理忽略 TTL，但仍保护 busy、dirty 和无法确认状态的 slot。
+
+busy 的唯一 live authority 是运行中的 Agent session 与 `WorkspaceRunCoordinator` 提供的路径集合。`worktree_slots` 只保存 PR affinity、目标 SHA 和 LRU 元数据；其中历史 `busy_session_id` 不参与 janitor 的 ownership 判定。成功删除物理 worktree 后，Server 应以 repository、slot name 和精确 path 删除对应的 affinity 行。
+
 ## 维护入口
 
 Git 命令执行与错误类型在 [git-command.ts](../packages/git-workspace/src/git-command.ts)；slot 持久化由 Server 调用 database 包完成，Git 包不写 SQL。Knowledge 的 Git 提交另走 [checkpoint.ts](../packages/git-workspace/src/checkpoint.ts)。改变回收逻辑时重点覆盖 dirty、busy、Git 检查失败及同 PR revision 切换，不将缓存目录名作为可任意清空的授权。

@@ -12,10 +12,11 @@ import { IssueDetailPage } from "../issue-detail";
 import { PullRequestDetailPage } from "../pull-request-detail";
 import { BoardPage } from "../features/board/BoardPage";
 import { MetadataPage } from "../features/community/MetadataPage";
+import { MergedPage } from "../features/community/MergedPage";
 import { RepositoryActivityPage } from "../features/community/RepositoryActivityPage";
 import { DomainsSettingsPage } from "../features/settings/DomainsSettingsPage";
 import { SettingsShell } from "../features/settings/SettingsShell";
-import { AgentSettings, IntegrationsSettings, RepositoriesSettings, SettingsControlCenter, KnowledgeCheckpointSettingsPage } from "../features/settings/SettingsControlCenter";
+import { AgentSettings, IntegrationsSettings, RepositoriesSettings, SettingsControlCenter, KnowledgeCheckpointSettingsPage, CodeBackupSettingsPage } from "../features/settings/SettingsControlCenter";
 import { HealthPage } from "../features/system/HealthPage";
 import { AppSidebar } from "./AppSidebar";
 import { ContextHeader } from "./ContextHeader";
@@ -81,6 +82,7 @@ export function AppShell() {
               <Route path="/settings/integrations" element={<SettingsShell><IntegrationsSettings /></SettingsShell>} />
               <Route path="/settings/agent" element={<SettingsShell><AgentSettings /></SettingsShell>} />
               <Route path="/settings/checkpoint" element={<SettingsShell><KnowledgeCheckpointSettingsPage /></SettingsShell>} />
+              <Route path="/settings/code-backup" element={<SettingsShell><CodeBackupSettingsPage /></SettingsShell>} />
               <Route
                 path="/settings/domains"
                 element={
@@ -118,6 +120,10 @@ export function AppShell() {
               <Route
                 path="/repositories/:repositoryId/pulls"
                 element={<MetadataPage kind="pulls" />}
+              />
+              <Route
+                path="/repositories/:repositoryId/merged"
+                element={<MergedPage />}
               />
               <Route
                 path="/repositories/:repositoryId"

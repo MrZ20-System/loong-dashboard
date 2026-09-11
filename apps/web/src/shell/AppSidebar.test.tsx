@@ -20,6 +20,7 @@ const repository: RepositorySummary = {
   defaultBranch: "main",
   worktreeSlots: 1,
   enabled: true,
+  mergedPullRequestCount: 4,
 };
 
 function NavigationControls() {
@@ -126,5 +127,11 @@ describe("AppSidebar", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Expand sidebar" }));
     expect(onToggleCompact).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the merged pull request count beside navigation", () => {
+    renderSidebar("/repositories/repo/merged");
+    const sidebar = within(screen.getByRole("complementary", { name: "Primary" }));
+    expect(sidebar.getByRole("link", { name: /Merged 4/ })).toBeInTheDocument();
   });
 });

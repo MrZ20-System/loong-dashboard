@@ -240,6 +240,18 @@ export class WorktreePool {
   }
 
   /**
+   * Remove one clean worktree from its owning repository. The status check is
+   * repeated immediately before `git worktree remove` so janitor races fail
+   * closed instead of deleting a newly dirty slot.
+   */
+  async removeCleanSlot(mainRepositoryPath: string, slotPath: string): Promise<void> {
+    if (!(await this.isClean(slotPath))) {
+      throw new WorktreePoolError(`Refusing to remove dirty worktree slot ${slotPath}`);
+    }
+    await runGitText(mainRepositoryPath, ["worktree", "remove", slotPath]);
+  }
+
+  /**
    * Unregister a broken slot worktree and remove its leftover directory so
    * the slot can be re-created by the next allocation (plan 12 repair).
    */

@@ -8,17 +8,47 @@
 
 ## 元数据流程
 
-1. Web 显式 POST sync；[RepositorySyncCoordinator](../apps/server/src/sync-coordinator.ts) 返回 202 后在进程中运行，同一仓库不可重复同步，最多同时处理两个仓库。
-2. PR、Issue 分别维护同步流。首次同步按最近更新时间读取所有状态，不单独全量读取 Open；仓库设置中的 `syncLookbackDays` 可选 7 或 30 天，默认 30 天，仅用于首次同步。后续增量同步继续从上次成功水位向前重叠两分钟读取，不受首次同步窗口限制。调整首次同步范围不重置已有成功水位；手动和定时同步使用同一规则。
+1. Web 显式 POST sync；[RepositorySyncCoordinator](../apps/server/src/sync-coordinator.ts) 返回 202 后在进程中运行，同一仓库不可重复同步，最多同时处理两个仓库。forward 与 `fetch_pr` 优先于低优先级 history admission；history 不会占满所有 repository slot。
+2. PR、Issue 分别维护同步流。首次 forward sync 按最近更新时间读取所有状态，不单独全量读取 Open；后续增量同步继续从上次成功水位向前重叠两分钟读取。更老的数据由独立 History target 持续回补，Settings 不再暴露一套与 History 重复的 7/30 bootstrap 选择。
    GraphQL 每页按 `UPDATED_AT DESC` 请求，首轮在结果更新时间早于 cutoff 时停止；`hasNextPage=false` 正常结束，重复或无效 endCursor 记为分页错误而停止，避免重复拉取。实现不按固定总数截断。
 3. 页面结果幂等写入 SQLite。只有整个实体流成功才把水位推进到本次尝试开始时间；失败保留旧行和旧水位并记录错误。
-4. 列表、日期活动、过滤及分页只读 SQLite。排序为 `updated_at DESC, number DESC`，游标包含稳定排序键；日期按配置时区转换为 UTC 半开区间。
+4. 列表、日期活动、过滤及分页只读 SQLite。PR 和 Merged 使用 `page` + `limit` 页码分页，并在同一过滤条件下计算准确的 `totalCount` / `totalPages`。当前 PR 支持 `updated_at DESC, number DESC` 和 `number DESC` 两种排序；Merged 使用 `merged_at DESC, number DESC`，且只包含 `merged_at IS NOT NULL`。PR 的日期筛选按配置时区转换为 UTC 半开区间；Issue 仍使用 cursor 分页。
 
-相关持久化入口：[sync-service](../packages/database/src/sync-service.ts)、[metadata-service](../packages/database/src/metadata-service.ts)。新增列表字段时同步修改 contracts 与 provider 映射，避免给每行引入额外远端请求。
+## Run、历史与 Merged 投影
+
+每次同步先写入 `repository_sync_runs`，并为 PR/Issue（单 PR fetch 只建 PR）写入
+`repository_sync_run_streams`。Run 的 `kind` 为 `forward`、`history` 或 `fetch_pr`，状态为
+`queued`、`running`、`completed`、`partial`、`failed` 或 `interrupted`；页面数、条目数、错误、
+水位前后值和每次 enrichment 的目标写入同一 run。Server 返回 `syncRunId`，等待只绑定这个
+run；同一仓库拒绝重叠 run，其他仓库不互相等待。进程启动会把上次的 queued/running run
+恢复为 `interrupted`，保留已经写入的 rows、history cursor 和最老覆盖边界。
+
+forward 只在两个实体流都成功结束后推进各自水位，仍使用成功水位前两分钟 overlap；失败不会
+推进水位。history 维护每个实体独立的 cursor、更新时间 anchor、目标日期和最老覆盖边界，按
+`UPDATED_AT DESC` 连续分页；每个 run 默认最多消费 20 页，留下 cursor 后由下一批继续，因此
+不会一次请求无限翻页。History 启用时，`partial` batch 完成后以新的持久 run 自动续跑；服务
+重启也从 cursor 新建 continuation，而不是重放旧 run。非空 cursor 续跑时不应用 anchor cutoff；只有 GitHub 明确报告 cursor
+invalid/expired/unknown/not-found 才允许从最新页按 durable anchor 减两分钟重试一次，未知
+GraphQL 错误保留状态并失败。history 不改变 forward watermark。`fetch_pr` 只请求目标 PR、只对
+该目标做文件 enrichment，并不修改 watermark、history cursor 或 recovery anchor。
+
+History 只 upsert 当前 PR/Issue metadata，并不再请求 timeline facts、重放 EOD 状态或写 Daily
+Snapshot。它也不为每个历史 PR 立即补 changed files；forward 只 enrichment 当轮 new/head-changed/
+retry target，`fetch_pr` 只 enrichment 指定 PR，因此 metadata coverage 不被历史文件请求阻塞。
+
+Merged 是 `pull_requests` 的 SQLite projection：`WHERE merged_at IS NOT NULL ORDER BY merged_at DESC,
+number DESC`。它没有独立表、sync run、crawler 或 scheduler；任何 forward/history/fetch_pr 获得的
+merged PR 会自然进入该页面。搜索和 Domain 过滤同时用于列表与 COUNT 查询；Web 使用 response 的
+configured timezone 对当前页扁平结果插入日期分割线，不按日期发 N+1 请求。
+
+相关持久化入口：[sync-service](../packages/database/src/sync-service.ts) 与 [metadata-service](../packages/database/src/metadata-service.ts)。迁移 010 删除已落库的旧 Daily/lifecycle/逐日 coverage 表并建立 Merged partial index；新增列表字段时同步修改 contracts 与 provider 映射，避免给每行引入额外远端请求。
 
 ## 变更文件与分类
 
-[enrichment-service](../apps/server/src/enrichment-service.ts) 在新 PR 或 head SHA 变化时补全文件路径；provider 的 [files.ts](../packages/github/src/files.ts) 管理批次、分页和并发限制。补全失败/截断是显式状态，不可当作空文件列表已成功。
+[enrichment-service](../apps/server/src/enrichment-service.ts) 只接收明确目标：forward 是
+new/head-changed/retry，fetch_pr 是单一 PR；History 默认只补 metadata，不扫描或 enrichment 全库历史项目。
+provider 的 [files.ts](../packages/github/src/files.ts) 管理批次、分页和并发限制。补全失败/截断
+是显式状态，不可当作空文件列表已成功。
 
 [domain-classifier.ts](../apps/server/src/domain-classifier.ts) 使用 picomatch 编译 include/exclude 规则：任意路径匹配 include 且不匹配 exclude 即命中该规则，可以命中多个 Domain。规则编辑经 [reclassification-service](../apps/server/src/reclassification-service.ts) 在进程内使用已存文件重算，不重新请求 GitHub。数据写入 `domain_rules`、`pull_request_domains` 及分类状态。
 

@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import type {
   IssueListItem,
@@ -16,8 +17,12 @@ export function matchesMetadataSearch(
   if (needle.length === 0) return true;
 
   const numberNeedle = needle.startsWith("#") ? needle.slice(1) : needle;
+  const numberMatches =
+    numberNeedle.length > 0 &&
+    /^\d+$/.test(numberNeedle) &&
+    String(item.number).includes(numberNeedle);
   return (
-    (/^\d+$/.test(numberNeedle) && String(item.number) === numberNeedle) ||
+    numberMatches ||
     item.title.toLowerCase().includes(needle) ||
     item.authorLogin?.toLowerCase().includes(needle) === true
   );
@@ -62,24 +67,70 @@ function isPullRequest(
 export function MetadataFeed({
   kind,
   items,
+  groupByUpdatedDay = false,
+  calendarTimeZone = "Asia/Shanghai",
 }: {
   kind: MetadataKind;
   items: MetadataListItem[];
+  groupByUpdatedDay?: boolean;
+  calendarTimeZone?: string;
 }) {
   const navigate = useNavigate();
   if (items.length === 0) return null;
 
-  const singular = kind === "pulls" ? "Pull request" : "Issue";
-  const externalLabel = kind === "pulls" ? "pull request" : "issue";
+  let previousDay: string | null = null;
+  const rows: ReactNode[] = [];
+  for (const item of items) {
+    const day = groupByUpdatedDay ? calendarDay(item.updatedAt, calendarTimeZone) : null;
+    if (day !== null && day !== previousDay) {
+      rows.push(
+        <li className="feed-date-divider" role="separator" key={`date-${day}`}>
+          <span>{day}</span>
+        </li>,
+      );
+      previousDay = day;
+    }
+    rows.push(renderMetadataItem(item, kind, navigate));
+  }
 
   return (
     <ul
       className="feed-list"
       aria-label={kind === "pulls" ? "Pull request feed" : "Issue feed"}
     >
-      {items.map((item) => {
-        const detailPath = `/repositories/${encodeURIComponent(item.repositoryId)}/${kind}/${item.number}`;
-        return (
+      {rows}
+    </ul>
+  );
+}
+
+function calendarDay(value: string, timeZone: string): string {
+  try {
+    const parts = new Intl.DateTimeFormat("en-CA", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(new Date(value));
+    const year = parts.find((part) => part.type === "year")?.value;
+    const month = parts.find((part) => part.type === "month")?.value;
+    const day = parts.find((part) => part.type === "day")?.value;
+    if (year && month && day) return `${year}-${month}-${day}`;
+  } catch {
+    // Invalid time zones are rejected by the server contract; keep rendering
+    // the item without a divider if a legacy response slips through.
+  }
+  return value.slice(0, 10);
+}
+
+function renderMetadataItem(
+  item: MetadataListItem,
+  kind: MetadataKind,
+  navigate: ReturnType<typeof useNavigate>,
+): ReactNode {
+  const singular = kind === "pulls" ? "Pull request" : "Issue";
+  const externalLabel = kind === "pulls" ? "pull request" : "issue";
+  const detailPath = `/repositories/${encodeURIComponent(item.repositoryId)}/${kind}/${item.number}`;
+  return (
           <li
             key={item.number}
             className="feed-row feed-row--interactive"
@@ -139,8 +190,5 @@ export function MetadataFeed({
               </p>
             </div>
           </li>
-        );
-      })}
-    </ul>
   );
 }
