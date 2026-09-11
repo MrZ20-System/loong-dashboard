@@ -53,6 +53,7 @@ import { WorktreePool, type AllocatedSlot } from "@loongboard/git-workspace";
 import type { FastifyInstance, FastifyReply } from "fastify";
 
 import { InvalidRequestError, parseRequest, sendParsed } from "./route-helpers.js";
+import { AgentSessionHomeCleaner } from "./agent-session-home.js";
 import { WorkspaceRunCoordinator } from "./workspace-run-coordinator.js";
 
 export class AgentSessionNotFoundError extends Error {
@@ -229,6 +230,7 @@ function defaultRuntimeFactory(
  */
 export class AgentChatController {
   private readonly host: AgentRuntimeHost;
+  private readonly sessionHomeCleaner: AgentSessionHomeCleaner;
   private readonly subscribers = new Map<string, Set<SseConnection>>();
   private readonly runningTurns = new Map<string, Promise<void>>();
   private readonly cancelled = new Set<string>();
@@ -242,6 +244,7 @@ export class AgentChatController {
       dependencies.runtimeFactory ?? defaultRuntimeFactory(dependencies.credentials),
       idleMs,
     );
+    this.sessionHomeCleaner = new AgentSessionHomeCleaner(dependencies.agentSessionsPath);
     this.worktreePool = dependencies.worktreePool ?? new WorktreePool();
   }
 
@@ -352,8 +355,10 @@ export class AgentChatController {
       throw new AgentTurnBusyError(sessionId);
     }
     requireAgentSession(this.dependencies.database, sessionId);
+    const homeCleanup = await this.sessionHomeCleaner.prepare(sessionId);
     await this.host.restart(sessionId);
     deleteAgentSession(this.dependencies.database, sessionId);
+    await homeCleanup.remove();
     this.clearInteractionResolutions(sessionId);
     const subscribers = this.subscribers.get(sessionId);
     if (subscribers !== undefined) {

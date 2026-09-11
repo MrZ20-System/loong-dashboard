@@ -1,6 +1,13 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import type {
   AgentRuntime,
@@ -8,6 +15,7 @@ import type {
   AgentSessionSpec,
 } from "@loongboard/agent-runtime";
 import {
+  findAgentSession,
   listAgentMessages,
   openDatabase,
   type DatabaseClient,
@@ -21,6 +29,8 @@ type Outcome = "success-without-text" | "error-after-text";
 
 class LifecycleRuntime implements AgentRuntime {
   readonly specs: AgentSessionSpec[] = [];
+  stopCalls = 0;
+  stopHook: (() => void) | undefined;
   private runCount = 0;
 
   constructor(private readonly outcomes: readonly Outcome[]) {}
@@ -49,9 +59,46 @@ class LifecycleRuntime implements AgentRuntime {
     return "opaque-native-session";
   }
 
-  async stop(): Promise<void> {}
+  async stop(): Promise<void> {
+    this.stopCalls += 1;
+    this.stopHook?.();
+  }
 
   async close(): Promise<void> {}
+}
+
+class BlockingRuntime implements AgentRuntime {
+  readonly started: Promise<void>;
+  private startedResolve: (() => void) | undefined;
+  private readonly release: Promise<void>;
+  private releaseResolve: (() => void) | undefined;
+  stopCalls = 0;
+
+  constructor() {
+    this.started = new Promise<void>((resolve) => {
+      this.startedResolve = resolve;
+    });
+    this.release = new Promise<void>((resolve) => {
+      this.releaseResolve = resolve;
+    });
+  }
+
+  async *run(_spec: AgentSessionSpec, _prompt: string): AsyncIterable<AgentRuntimeEvent> {
+    this.startedResolve?.();
+    yield { type: "status", status: "starting" };
+    yield { type: "status", status: "running" };
+    await this.release;
+    yield { type: "status", status: "idle" };
+  }
+
+  async stop(): Promise<void> {
+    this.stopCalls += 1;
+    this.releaseResolve?.();
+  }
+
+  async close(): Promise<void> {
+    this.releaseResolve?.();
+  }
 }
 
 const databases: DatabaseClient[] = [];
@@ -70,6 +117,7 @@ function createFixture(outcomes: readonly Outcome[]): {
   controller: AgentChatController;
   database: DatabaseClient;
   runtime: LifecycleRuntime;
+  directory: string;
 } {
   const directory = mkdtempSync(join(tmpdir(), "loongboard-agent-chat-lifecycle-"));
   directories.push(directory);
@@ -90,7 +138,7 @@ function createFixture(outcomes: readonly Outcome[]): {
     },
     runtimeFactory: () => runtime,
   });
-  return { controller, database, runtime };
+  return { controller, database, runtime, directory };
 }
 
 async function waitForTurn(controller: AgentChatController, sessionId: string): Promise<void> {
@@ -143,6 +191,104 @@ describe("AgentChatController native turn lifecycle", () => {
     expect(runtime.specs[1]?.model).toBe("deepseek-v4-reasoner");
     expect(controller.require(firstSessionId).status).toBe("idle");
 
+    await controller.close();
+  });
+
+  it("stops the runtime, deletes DB data, and removes only the session DSH home", async () => {
+    const { controller, database, runtime } = createFixture(["success-without-text"]);
+    const sessionId = await createAndRun(controller, "delete me");
+    const sessionDir = dirname(controller.require(sessionId).dshHomePath);
+    const dshHome = controller.require(sessionId).dshHomePath;
+    writeFileSync(join(dshHome, "runtime-state.json"), "private");
+    let sessionExistedWhenStopped = false;
+    runtime.stopHook = () => {
+      sessionExistedWhenStopped = controller.require(sessionId).id === sessionId;
+    };
+
+    await expect(controller.deleteSession(sessionId)).resolves.toEqual({ deleted: true });
+    expect(runtime.stopCalls).toBe(1);
+    expect(sessionExistedWhenStopped).toBe(true);
+    expect(existsSync(dshHome)).toBe(false);
+    expect(existsSync(sessionDir)).toBe(false);
+    expect(findAgentSession(database, { kind: "general", route: "delete me" })).toBeNull();
+    expect(() => controller.require(sessionId)).toThrow();
+    await controller.close();
+  });
+
+  it("refuses to delete a running session and leaves its DSH home intact", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "loongboard-agent-chat-running-delete-"));
+    directories.push(directory);
+    const database = openDatabase(join(directory, "state.sqlite3"));
+    databases.push(database);
+    const runtime = new BlockingRuntime();
+    const controller = new AgentChatController({
+      database,
+      workspaceRuns: new WorkspaceRunCoordinator(),
+      agentSessionsPath: join(directory, "agent-sessions"),
+      worktreesPath: join(directory, "worktrees"),
+      knowledgePath: join(directory, "knowledge"),
+      defaults: {
+        provider: "deepseek-official",
+        model: "deepseek-v4-flash",
+        reasoningEffort: "high",
+        idleProcessMinutes: 0,
+      },
+      runtimeFactory: () => runtime,
+    });
+    const created = await controller.ensureSession({ scope: { kind: "general", route: "running-delete" } });
+    await controller.acceptMessage(created.session.id, "hold");
+    await runtime.started;
+    const dshHome = controller.require(created.session.id).dshHomePath;
+    expect(existsSync(dshHome)).toBe(true);
+
+    await expect(controller.deleteSession(created.session.id)).rejects.toMatchObject({ code: "AGENT_TURN_BUSY" });
+    expect(runtime.stopCalls).toBe(0);
+    expect(existsSync(dshHome)).toBe(true);
+    await runtime.stop();
+    await waitForTurn(controller, created.session.id);
+    await controller.close();
+  });
+
+  it("allows deletion when the DSH home does not exist", async () => {
+    const { controller, runtime } = createFixture(["success-without-text"]);
+    const created = await controller.ensureSession({ scope: { kind: "general", route: "missing-home" } });
+    const dshHome = created.session.dshHomePath;
+    expect(existsSync(dshHome)).toBe(false);
+    await expect(controller.deleteSession(created.session.id)).resolves.toEqual({ deleted: true });
+    expect(runtime.stopCalls).toBe(0);
+    await controller.close();
+  });
+
+  it("fails closed for session-directory symlinks and preserves the external sentinel", async () => {
+    const { controller, database, directory } = createFixture(["success-without-text"]);
+    const created = await controller.ensureSession({ scope: { kind: "general", route: "symlink-home" } });
+    const sessionDir = dirname(created.session.dshHomePath);
+    const outside = join(directory, "outside");
+    mkdirSync(dirname(sessionDir), { recursive: true });
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, "sentinel"), "keep");
+    rmSync(sessionDir, { recursive: true, force: true });
+    symlinkSync(outside, sessionDir, "dir");
+
+    await expect(controller.deleteSession(created.session.id)).rejects.toThrow(
+      "session directory is not a real directory",
+    );
+    expect(existsSync(join(outside, "sentinel"))).toBe(true);
+    expect(() => controller.require(created.session.id)).not.toThrow();
+    expect(listAgentMessages(database, created.session.id)).toHaveLength(0);
+
+    const targetLink = await controller.ensureSession({ scope: { kind: "general", route: "symlink-target" } });
+    const targetSessionDir = dirname(targetLink.session.dshHomePath);
+    const targetOutside = join(directory, "target-outside");
+    mkdirSync(targetSessionDir, { recursive: true });
+    mkdirSync(targetOutside, { recursive: true });
+    writeFileSync(join(targetOutside, "sentinel"), "keep");
+    symlinkSync(targetOutside, targetLink.session.dshHomePath, "dir");
+    await expect(controller.deleteSession(targetLink.session.id)).rejects.toThrow(
+      "dsh-home is not a real directory",
+    );
+    expect(existsSync(join(targetOutside, "sentinel"))).toBe(true);
+    expect(() => controller.require(targetLink.session.id)).not.toThrow();
     await controller.close();
   });
 });
