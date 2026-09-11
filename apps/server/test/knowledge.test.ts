@@ -100,5 +100,7 @@ describe("Knowledge checkpoint policy", () => {
     expect(watchers[1]!.closeCalls).toBe(1);
     await controller.close();
     expect(watchers[1]!.closeCalls).toBe(1);
+    controller.start();
+    expect(watchers).toHaveLength(2);
   });
 });

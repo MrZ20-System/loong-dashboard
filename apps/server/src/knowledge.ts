@@ -423,7 +423,7 @@ export class KnowledgeController {
   }
 
   start(): void {
-    if (this.watcher !== null) return;
+    if (this.watcher !== null || this.closed) return;
     // Register the watcher before the synchronous initial scan. Any event
     // raised during that scan is delivered on the next event-loop turn and
     // marks the completed snapshot dirty, closing the scan/watch race.
