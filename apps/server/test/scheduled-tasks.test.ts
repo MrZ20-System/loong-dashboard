@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  getScheduledTask,
   openDatabase,
   reconcileRepositories,
   type DatabaseClient,
@@ -136,10 +137,10 @@ describe("scheduled task repository bindings", () => {
     expect(rejected.statusCode).toBe(400);
     expect(rejected.json().error.message).toContain("managed by Settings");
 
-    const current = database
-      .prepare("SELECT enabled, cron_expression FROM scheduled_tasks WHERE id = ?")
-      .get(taskId) as { enabled: number; cron_expression: string };
-    expect(current).toEqual({ enabled: 0, cron_expression: "0 * * * *" });
+    expect(getScheduledTask(database, taskId)).toMatchObject({
+      enabled: false,
+      cronExpression: "0 * * * *",
+    });
   });
 
   it("rejects converting an Agent task into a system task without changing it", async () => {
@@ -163,9 +164,7 @@ describe("scheduled task repository bindings", () => {
     });
     expect(created.statusCode).toBe(201);
     const taskId = created.json().id as string;
-    const before = database
-      .prepare("SELECT * FROM scheduled_tasks WHERE id = ?")
-      .get(taskId);
+    const before = getScheduledTask(database, taskId);
 
     const rejected = await app.inject({
       method: "PUT",
@@ -175,9 +174,7 @@ describe("scheduled task repository bindings", () => {
     expect(rejected.statusCode).toBe(400);
     expect(rejected.json().error.message).toContain("managed by Settings");
 
-    const after = database
-      .prepare("SELECT * FROM scheduled_tasks WHERE id = ?")
-      .get(taskId);
+    const after = getScheduledTask(database, taskId);
     expect(after).toEqual(before);
   });
 });

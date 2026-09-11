@@ -2,7 +2,7 @@
 
 ## 入口与传输
 
-[provider.ts](../packages/github/src/provider.ts) 的 `GhGitHubMetadataProvider` 保留既有类名，实际通过原生 HTTP fetch 调用 GraphQL/REST。Server 将 provider 与 [GitHubCredentialService](../packages/github/src/credentials.ts) 连接到同一个凭证边界：设置页保存的 token 优先，其次是非空 `GH_TOKEN`、`GITHUB_TOKEN`，最后执行 `gh auth token`；`gh` 解析时通过受控环境继承 token。响应在 provider 使用 Zod 校验，外部 JSON 不直接流入 Web。
+[provider.ts](../packages/github/src/provider.ts) 的 `GhGitHubMetadataProvider` 保留既有类名和外部 contract，作为薄 facade 组装并委派到四个具体模块：[github-client.ts](../packages/github/src/github-client.ts) 统一负责 token、`gh auth token`、REST/GraphQL、错误归一化和 quota header；[pull-requests.ts](../packages/github/src/pull-requests.ts) 负责 PR 查询、状态映射、水位/history 分页和按编号 fetch；[issues.ts](../packages/github/src/issues.ts) 负责 Issue 查询、history、详情及评论；[files.ts](../packages/github/src/files.ts) 保留纯文件 helpers 并负责 changed-file GraphQL batch、REST fallback/cap。Server 将 provider 与 [GitHubCredentialService](../packages/github/src/credentials.ts) 连接到同一个凭证边界：设置页保存的 token 优先，其次是非空 `GH_TOKEN`、`GITHUB_TOKEN`，最后执行 `gh auth token`；`gh` 解析时通过受控环境继承 token。每个 feature schema 在对应模块内严格校验，外部 JSON 不直接流入 Web。
 
 设置页只返回 `configured`、来源和已验证的账号/quota；不会回传 token。设置页保存的 GitHub 凭证位于 `runtime.statePath/github-credential.json`，文件权限为 0600，不进入 `settings.json`、Domain/Knowledge 版本或 Agent workspace。缺少认证时显示 `configured=false/source=none`，不会伪装成已配置。
 

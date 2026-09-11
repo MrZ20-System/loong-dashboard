@@ -29,7 +29,7 @@ flowchart LR
 | apps/server | 配置、依赖组装、HTTP 和跨模块协调 | [runtime.ts](../apps/server/src/runtime.ts)、[runtime-settings-adapters.ts](../apps/server/src/runtime-settings-adapters.ts)、[app.ts](../apps/server/src/app.ts)、[routes/](../apps/server/src/routes) |
 | packages/contracts | Zod 请求/响应及产品事件 | [导出](../packages/contracts/src/index.ts) |
 | packages/database | SQL、schema、迁移、类型化持久化服务 | [导出](../packages/database/src/index.ts) |
-| packages/github | GitHub HTTP、凭证解析、外部响应校验 | [provider.ts](../packages/github/src/provider.ts) |
+| packages/github | GitHub facade、HTTP/凭证 transport、PR/Issue/files 响应校验 | [provider.ts](../packages/github/src/provider.ts)、[github-client.ts](../packages/github/src/github-client.ts)、[pull-requests.ts](../packages/github/src/pull-requests.ts)、[issues.ts](../packages/github/src/issues.ts)、[files.ts](../packages/github/src/files.ts) |
 | packages/git-workspace | Git 命令、diff、worktree 池、checkpoint | [导出](../packages/git-workspace/src/index.ts) |
 | packages/agent-runtime | 产品运行时接口及会话 runtime host | [index.ts](../packages/agent-runtime/src/index.ts) |
 | packages/agent-runtime-dsh | 固定 DSH SDK、子进程、事件转换 | [index.ts](../packages/agent-runtime-dsh/src/index.ts) |
