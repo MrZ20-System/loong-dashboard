@@ -407,3 +407,41 @@ export interface UpdateMaintenanceRunInput {
   commentsDeleted?: number;
   error?: string | null;
 }
+
+export interface PurgeRuntimeHistoryInput {
+  repositoryId: string;
+  /** Explicit UTC cutoff; when omitted it is derived from asOf - retentionDays. */
+  cutoff?: string;
+  asOf?: string;
+  retentionDays?: number;
+  /** Number of newest runs that are always retained, regardless of age. */
+  keepLatest?: number;
+  /** Bounded parent-run deletes per transaction. Defaults to 250. */
+  batchSize?: number;
+  /** Existing purge_runtime_history maintenance run to receive runsDeleted. */
+  maintenanceRunId?: string;
+}
+
+export interface PurgeRuntimeHistoryScope {
+  repositoryId: string;
+  cutoff: string;
+  retentionDays: number;
+  keepLatest: number;
+}
+
+export interface PurgeRuntimeHistoryPreview extends PurgeRuntimeHistoryScope {
+  runCount: number;
+  protectedRunCount: number;
+  queuedOrRunningCount: number;
+  streamCount: number;
+  targetCount: number;
+}
+
+export interface PurgeRuntimeHistoryBatchResult extends PurgeRuntimeHistoryScope {
+  batchSize: number;
+  runsDeleted: number;
+  streamsDeleted: number;
+  targetsDeleted: number;
+  hasMore: boolean;
+  maintenanceRunId: string | null;
+}

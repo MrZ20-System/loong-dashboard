@@ -192,6 +192,12 @@ export {
   restorePullRequest,
   updateMaintenanceRun,
 } from "./retention-service.js";
+export {
+  previewRuntimeHistoryPurge,
+  previewSyncRunPurge,
+  purgeRuntimeHistoryBatch,
+  purgeSyncRunBatch,
+} from "./sync-run-retention-service.js";
 export type {
   ActivityDay,
   ArchiveBatchInput,
@@ -242,4 +248,8 @@ export type {
   SyncStatus,
   SyncStreamUpdate,
   UpdateMaintenanceRunInput,
+  PurgeRuntimeHistoryBatchResult,
+  PurgeRuntimeHistoryInput,
+  PurgeRuntimeHistoryPreview,
+  PurgeRuntimeHistoryScope,
 } from "./types.js";
