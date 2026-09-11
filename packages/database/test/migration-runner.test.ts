@@ -28,6 +28,7 @@ const CORE_TABLES = [
   "pull_requests",
   "repositories",
   "repository_history_state",
+  "repository_maintenance_runs",
   "repository_sync_run_streams",
   "repository_sync_run_targets",
   "repository_sync_runs",
@@ -100,6 +101,7 @@ describe("database migrations", () => {
         { id: "009_list_query_modes" },
         { id: "010_remove_daily_projections" },
         { id: "011_history_rate_limit_recovery" },
+        { id: "012_metadata_retention" },
       ]);
     } finally {
       database.close();
@@ -132,6 +134,7 @@ describe("database migrations", () => {
         expect.objectContaining({ id: "009_list_query_modes" }),
         expect.objectContaining({ id: "010_remove_daily_projections" }),
         expect.objectContaining({ id: "011_history_rate_limit_recovery" }),
+        expect.objectContaining({ id: "012_metadata_retention" }),
       ]);
       expect(
         database
@@ -207,6 +210,61 @@ describe("database migrations", () => {
         { name: "repository_id", descending: 0 },
         { name: "merged_at", descending: 1 },
         { name: "number", descending: 1 },
+      ]);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("adds retention markers and bounded maintenance indexes on a fresh database", () => {
+    const database = openDatabase(createDatabasePath());
+
+    try {
+      expect(
+        database
+          .prepare("PRAGMA table_info(pull_requests)")
+          .all()
+          .map((row) => (row as { name: string }).name),
+      ).toEqual(expect.arrayContaining(["archived_at", "payload_pruned_at"]));
+      expect(
+        database
+          .prepare("PRAGMA table_info(issues)")
+          .all()
+          .map((row) => (row as { name: string }).name),
+      ).toEqual(expect.arrayContaining(["archived_at", "payload_pruned_at"]));
+      expect(
+        database
+          .prepare("PRAGMA table_info(repository_maintenance_runs)")
+          .all()
+          .map((row) => (row as { name: string }).name),
+      ).toEqual(expect.arrayContaining([
+        "id",
+        "repository_id",
+        "kind",
+        "trigger",
+        "status",
+        "cutoff",
+        "selector_json",
+        "requested_at",
+        "started_at",
+        "finished_at",
+        "pr_count",
+        "issue_count",
+        "files_deleted",
+        "comments_deleted",
+        "error",
+      ]));
+      expect(readIndexColumns(database, "pull_requests_retention_idx")).toEqual([
+        { name: "repository_id", descending: 0 },
+        { name: "archived_at", descending: 0 },
+        { name: "status", descending: 0 },
+        { name: "updated_at", descending: 0 },
+      ]);
+      expect(readIndexColumns(database, "issues_retention_idx")).toEqual([
+        { name: "repository_id", descending: 0 },
+        { name: "archived_at", descending: 0 },
+        { name: "state", descending: 0 },
+        { name: "updated_at", descending: 0 },
       ]);
     } finally {
       database.close();

@@ -120,6 +120,61 @@ export const repositorySyncRuns = sqliteTable(
   ],
 );
 
+export const repositoryMaintenanceRuns = sqliteTable(
+  "repository_maintenance_runs",
+  {
+    id: text("id").primaryKey(),
+    repositoryId: text("repository_id")
+      .notNull()
+      .references(() => repositories.id, { onDelete: "cascade" }),
+    kind: text("kind", {
+      enum: ["archive", "prune", "purge_runtime_history", "optimize"],
+    }).notNull(),
+    trigger: text("trigger", { enum: ["manual", "automatic"] }).notNull(),
+    status: text("status", {
+      enum: ["queued", "running", "completed", "failed", "interrupted"],
+    }).notNull(),
+    cutoff: text("cutoff"),
+    selectorJson: text("selector_json").notNull().default("{}"),
+    requestedAt: text("requested_at").notNull(),
+    startedAt: text("started_at"),
+    finishedAt: text("finished_at"),
+    prCount: integer("pr_count").notNull().default(0),
+    issueCount: integer("issue_count").notNull().default(0),
+    filesDeleted: integer("files_deleted").notNull().default(0),
+    commentsDeleted: integer("comments_deleted").notNull().default(0),
+    error: text("error"),
+  },
+  (table) => [
+    index("repository_maintenance_runs_repository_requested_idx").on(
+      table.repositoryId,
+      desc(table.requestedAt),
+    ),
+    check(
+      "repository_maintenance_runs_kind_check",
+      sql`${table.kind} IN ('archive', 'prune', 'purge_runtime_history', 'optimize')`,
+    ),
+    check(
+      "repository_maintenance_runs_trigger_check",
+      sql`${table.trigger} IN ('manual', 'automatic')`,
+    ),
+    check(
+      "repository_maintenance_runs_status_check",
+      sql`${table.status} IN ('queued', 'running', 'completed', 'failed', 'interrupted')`,
+    ),
+    check("repository_maintenance_runs_pr_count_check", sql`${table.prCount} >= 0`),
+    check("repository_maintenance_runs_issue_count_check", sql`${table.issueCount} >= 0`),
+    check(
+      "repository_maintenance_runs_files_deleted_check",
+      sql`${table.filesDeleted} >= 0`,
+    ),
+    check(
+      "repository_maintenance_runs_comments_deleted_check",
+      sql`${table.commentsDeleted} >= 0`,
+    ),
+  ],
+);
+
 export const repositorySyncRunStreams = sqliteTable(
   "repository_sync_run_streams",
   {
@@ -254,6 +309,8 @@ export const pullRequests = sqliteTable(
     filesTruncated: integer("files_truncated", { mode: "boolean" })
       .notNull()
       .default(false),
+    archivedAt: text("archived_at"),
+    payloadPrunedAt: text("payload_pruned_at"),
   },
   (table) => [
     primaryKey({ columns: [table.repositoryId, table.number] }),
@@ -283,6 +340,12 @@ export const pullRequests = sqliteTable(
       table.status,
       desc(table.updatedAt),
       desc(table.number),
+    ),
+    index("pull_requests_retention_idx").on(
+      table.repositoryId,
+      table.archivedAt,
+      table.status,
+      table.updatedAt,
     ),
     check("pull_requests_number_check", sql`${table.number} > 0`),
     check(
@@ -408,6 +471,8 @@ export const issues = sqliteTable(
     closedAt: text("closed_at"),
     detailBody: text("detail_body"),
     detailSyncedUpdatedAt: text("detail_synced_updated_at"),
+    archivedAt: text("archived_at"),
+    payloadPrunedAt: text("payload_pruned_at"),
   },
   (table) => [
     primaryKey({ columns: [table.repositoryId, table.number] }),
@@ -422,6 +487,12 @@ export const issues = sqliteTable(
       table.state,
       desc(table.updatedAt),
       desc(table.number),
+    ),
+    index("issues_retention_idx").on(
+      table.repositoryId,
+      table.archivedAt,
+      table.state,
+      table.updatedAt,
     ),
     check("issues_number_check", sql`${table.number} > 0`),
     check("issues_comments_count_check", sql`${table.commentsCount} >= 0`),
@@ -702,6 +773,7 @@ export const schema = {
   pullRequestFiles,
   pullRequests,
   repositories,
+  repositoryMaintenanceRuns,
   repositoryHistoryState,
   repositorySyncRunStreams,
   repositorySyncRunTargets,

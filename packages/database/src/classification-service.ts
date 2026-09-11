@@ -67,7 +67,9 @@ export function replacePullRequestFiles(
     }
     database
       .prepare(
-        `UPDATE pull_requests SET files_truncated = ?
+        `UPDATE pull_requests SET
+           files_truncated = ?,
+           payload_pruned_at = NULL
          WHERE repository_id = ? AND number = ?`,
       )
       .run(truncated ? 1 : 0, repositoryId, prNumber);
@@ -101,11 +103,17 @@ export function listCurrentPullRequestEnrichmentStates(
   return database
     .prepare(
       `SELECT pr.number AS number, pr.head_sha AS headSha,
-         EXISTS (
+         CASE
+           WHEN pr.archived_at IS NOT NULL
+             AND pr.payload_pruned_at IS NOT NULL
+             AND pr.status IN ('closed', 'merged')
+           THEN 1
+           ELSE EXISTS (
            SELECT 1 FROM pull_request_files f
            WHERE f.repository_id = pr.repository_id
              AND f.pr_number = pr.number AND f.head_sha = pr.head_sha
-         ) AS enriched
+           )
+         END AS enriched
        FROM pull_requests pr
        WHERE pr.repository_id = ? AND pr.number IN (${placeholders})
        ORDER BY pr.number ASC`,
@@ -139,7 +147,12 @@ export function listPullRequestsNeedingFileEnrichment(
     .prepare(
       `SELECT pr.number, pr.node_id AS nodeId, pr.head_sha AS headSha
        FROM pull_requests pr
-       WHERE pr.repository_id = ?${numberClause}
+         WHERE pr.repository_id = ?${numberClause}
+         AND NOT (
+           pr.archived_at IS NOT NULL
+           AND pr.payload_pruned_at IS NOT NULL
+           AND pr.status IN ('closed', 'merged')
+         )
          AND NOT EXISTS (
            SELECT 1 FROM pull_request_files f
            WHERE f.repository_id = pr.repository_id

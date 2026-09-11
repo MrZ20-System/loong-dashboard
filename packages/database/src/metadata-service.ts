@@ -83,7 +83,16 @@ export function upsertPullRequestPage(
       additions = excluded.additions,
       deletions = excluded.deletions,
       changed_files_count = excluded.changed_files_count,
-      detail_body = COALESCE(excluded.detail_body, pull_requests.detail_body)`,
+      detail_body = COALESCE(excluded.detail_body, pull_requests.detail_body),
+      archived_at = CASE
+        WHEN excluded.status IN ('open', 'draft')
+          THEN NULL
+        ELSE pull_requests.archived_at
+      END,
+      payload_pruned_at = CASE
+        WHEN @detailBodyProvided = 1 THEN NULL
+        ELSE pull_requests.payload_pruned_at
+      END`,
   );
 
   let changes = 0;
@@ -110,6 +119,7 @@ export function upsertPullRequestPage(
         deletions: item.deletions,
         changedFilesCount: item.changedFilesCount,
         detailBody: item.detailBody ?? null,
+        detailBodyProvided: item.detailBody === undefined ? 0 : 1,
       }).changes;
     }
   })();
@@ -139,7 +149,11 @@ export function upsertIssuePage(
       created_at = excluded.created_at,
       updated_at = excluded.updated_at,
       closed_at = excluded.closed_at,
-      detail_body = COALESCE(excluded.detail_body, issues.detail_body)`,
+      detail_body = COALESCE(excluded.detail_body, issues.detail_body),
+      archived_at = CASE
+        WHEN excluded.state = 'open' THEN NULL
+        ELSE issues.archived_at
+      END`,
   );
 
   let changes = 0;
@@ -186,7 +200,12 @@ export function replaceIssueDetailCache(
        updated_at = @updatedAt,
        closed_at = @closedAt,
        detail_body = @body,
-       detail_synced_updated_at = @updatedAt
+       detail_synced_updated_at = @updatedAt,
+       payload_pruned_at = NULL,
+       archived_at = CASE
+         WHEN @state = 'open' THEN NULL
+         ELSE archived_at
+       END
      WHERE repository_id = @repositoryId AND number = @number`,
   );
   const deleteComments = database.prepare(
@@ -265,6 +284,7 @@ export function getIssueDetailSyncedUpdatedAt(
 export interface IssueDetailCacheState {
   updatedAt: string;
   syncedUpdatedAt: string | null;
+  payloadPrunedAt: string | null;
 }
 
 /** Lightweight cache check that does not load the Issue body or comments. */
@@ -276,17 +296,22 @@ export function getIssueDetailCacheState(
   requireRepository(database, repositoryId);
   const row = database
     .prepare(
-      `SELECT updated_at, detail_synced_updated_at
+      `SELECT updated_at, detail_synced_updated_at, payload_pruned_at
        FROM issues
        WHERE repository_id = ? AND number = ?`,
     )
     .get(repositoryId, number) as
-    | { updated_at: string; detail_synced_updated_at: string | null }
+    | {
+        updated_at: string;
+        detail_synced_updated_at: string | null;
+        payload_pruned_at: string | null;
+      }
     | undefined;
   if (row === undefined) return null;
   return {
     updatedAt: row.updated_at,
     syncedUpdatedAt: row.detail_synced_updated_at ?? null,
+    payloadPrunedAt: row.payload_pruned_at ?? null,
   };
 }
 
@@ -407,6 +432,8 @@ function mapPullRequest(
     changedFilesCount: row.changed_files_count as number,
     additions: row.additions as number,
     deletions: row.deletions as number,
+    archivedAt: (row.archived_at as string | null) ?? null,
+    payloadPrunedAt: (row.payload_pruned_at as string | null) ?? null,
   };
 }
 
@@ -420,6 +447,8 @@ function mapIssue(row: Record<string, unknown>): IssueListItem {
     status: row.state as IssueStatus,
     commentsCount: row.comments_count as number,
     updatedAt: row.updated_at as string,
+    archivedAt: (row.archived_at as string | null) ?? null,
+    payloadPrunedAt: (row.payload_pruned_at as string | null) ?? null,
   };
 }
 
@@ -444,6 +473,25 @@ function compareComments(
   );
 }
 
+function appendArchiveFilter(
+  clauses: string[],
+  filter: PullRequestListOptions["archive"] | IssueListOptions["archive"],
+  column: string,
+): void {
+  switch (filter ?? "current") {
+    case "current":
+      clauses.push(`${column} IS NULL`);
+      return;
+    case "archived":
+      clauses.push(`${column} IS NOT NULL`);
+      return;
+    case "all":
+      return;
+    default:
+      throw new Error(`Unknown archive filter: ${String(filter)}`);
+  }
+}
+
 export function listPullRequests(
   database: DatabaseClient,
   repositoryId: string,
@@ -456,6 +504,7 @@ export function listPullRequests(
   const sort = options.sort ?? "updated";
   const clauses = ["repository_id = ?"];
   const parameters: unknown[] = [repositoryId];
+  appendArchiveFilter(clauses, options.archive, "archived_at");
   datePredicate(
     clauses,
     parameters,
@@ -509,7 +558,8 @@ export function listPullRequests(
   const rows = database
     .prepare(
       `SELECT repository_id, number, title, url, author_login, status,
-              updated_at, changed_files_count, additions, deletions
+              updated_at, changed_files_count, additions, deletions,
+              archived_at, payload_pruned_at
        FROM pull_requests
        WHERE ${clauses.join(" AND ")}
        ORDER BY ${orderBy}
@@ -592,7 +642,8 @@ export function listMergedPullRequests(
   const rows = database
     .prepare(
       `SELECT repository_id, number, title, url, author_login, status,
-              updated_at, changed_files_count, additions, deletions, merged_at
+              updated_at, changed_files_count, additions, deletions, merged_at,
+              archived_at, payload_pruned_at
        FROM pull_requests
        WHERE ${clauses.join(" AND ")}
        ORDER BY merged_at DESC, number DESC
@@ -630,7 +681,8 @@ export function getPullRequestDetail(
       `SELECT repository_id, number, title, url, author_login, status,
               updated_at, changed_files_count, additions, deletions,
               created_at, closed_at, merged_at, base_ref_name,
-              head_ref_name, head_sha, detail_body
+              head_ref_name, head_sha, detail_body,
+              archived_at, payload_pruned_at
        FROM pull_requests
        WHERE repository_id = ? AND number = ?`,
     )
@@ -661,6 +713,7 @@ export function listIssues(
   const cursor = cursorValues(options.cursor);
   const clauses = ["repository_id = ?"];
   const parameters: unknown[] = [repositoryId];
+  appendArchiveFilter(clauses, options.archive, "archived_at");
   datePredicate(
     clauses,
     parameters,
@@ -686,7 +739,7 @@ export function listIssues(
   const rows = database
     .prepare(
       `SELECT repository_id, number, title, url, author_login, state,
-              comments_count, updated_at
+              comments_count, updated_at, archived_at, payload_pruned_at
        FROM issues
        WHERE ${clauses.join(" AND ")}
        ORDER BY updated_at DESC, number DESC
@@ -716,7 +769,8 @@ export function getIssueDetail(
   const row = database
     .prepare(
       `SELECT repository_id, number, title, url, author_login, state,
-              comments_count, updated_at, created_at, closed_at, detail_body
+              comments_count, updated_at, created_at, closed_at, detail_body,
+              archived_at, payload_pruned_at
        FROM issues
        WHERE repository_id = ? AND number = ?`,
     )

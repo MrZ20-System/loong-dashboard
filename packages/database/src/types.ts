@@ -5,12 +5,13 @@ import type {
   DomainRule,
   EntityKind,
   IssueComment,
-  IssueListItem,
+  IssueDetail as ContractIssueDetail,
+  IssueListItem as ContractIssueListItem,
   IssueStatus,
-  MergedPullRequestListItem,
-  PullRequestDetail,
+  MergedPullRequestListItem as ContractMergedPullRequestListItem,
+  PullRequestDetail as ContractPullRequestDetail,
   PullRequestFileItem,
-  PullRequestListItem,
+  PullRequestListItem as ContractPullRequestListItem,
   PullRequestListSort,
   PullRequestStatus,
   SyncStatus,
@@ -22,17 +23,26 @@ export type {
   DomainTag,
   EntityKind,
   IssueComment,
-  IssueDetail,
-  IssueListItem,
   IssueStatus,
-  MergedPullRequestListItem,
-  PullRequestDetail,
   PullRequestFileItem,
-  PullRequestListItem,
   PullRequestListSort,
   PullRequestStatus,
   SyncStatus,
 } from "@loongboard/contracts";
+
+/** Fields retained on a metadata row after it is archived or payload-pruned. */
+export interface ArchiveMetadataFields {
+  archivedAt: string | null;
+  payloadPrunedAt: string | null;
+}
+
+/** Database projections include retention markers in addition to the public contract. */
+export type PullRequestListItem = ContractPullRequestListItem & ArchiveMetadataFields;
+export type MergedPullRequestListItem =
+  ContractMergedPullRequestListItem & ArchiveMetadataFields;
+export type PullRequestDetail = ContractPullRequestDetail & ArchiveMetadataFields;
+export type IssueListItem = ContractIssueListItem & ArchiveMetadataFields;
+export type IssueDetail = ContractIssueDetail & ArchiveMetadataFields;
 
 /** The repository shape read from system.yaml by the Server boundary. */
 export interface ConfiguredRepository {
@@ -238,6 +248,8 @@ export interface PullRequestListOptions extends ListQueryOptions {
   search?: string | null;
   /** Match pull requests carrying ANY of these domain rules (plan 10.3). */
   domainIds?: readonly string[] | null;
+  /** Retention projection to read; current is the safe default. */
+  archive?: ArchiveFilter | null;
 }
 
 /** Stored domain rule row; identical in shape to the shared contract. */
@@ -258,6 +270,8 @@ export interface IssueListOptions extends ListQueryOptions {
   status?: IssueStatus | null;
   /** Case-insensitive contiguous title/author or issue-number search. */
   search?: string | null;
+  /** Retention projection to read; current is the safe default. */
+  archive?: ArchiveFilter | null;
 }
 
 export interface MergedPullRequestListOptions {
@@ -290,3 +304,106 @@ export interface ActivityDaysOptions {
 }
 
 export type DatabaseClient = Database.Database;
+
+export type ArchiveFilter = "current" | "archived" | "all";
+export type ArchiveScope = "merged_prs" | "closed_prs" | "closed_issues";
+export type MaintenanceRunKind =
+  | "archive"
+  | "prune"
+  | "purge_runtime_history"
+  | "optimize";
+export type MaintenanceRunTrigger = "manual" | "automatic";
+export type MaintenanceRunStatus =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "interrupted";
+
+export interface ArchivePreviewInput {
+  repositoryId: string;
+  /** Canonical UTC timestamp, including the trailing Z. */
+  cutoff: string;
+  includeMergedPrs: boolean;
+  includeClosedPrs: boolean;
+  includeClosedIssues: boolean;
+}
+
+export interface ArchivePreview extends ArchivePreviewInput {
+  scopes: readonly ArchiveScope[];
+  mergedPrCount: number;
+  closedPrCount: number;
+  closedIssueCount: number;
+  prFileRows: number;
+  issueCommentRows: number;
+  prPayloadCount: number;
+  issuePayloadCount: number;
+}
+
+export interface ArchiveBatchInput extends ArchivePreviewInput {
+  archiveAt: string;
+  prune?: boolean;
+  /** A batch is intentionally bounded to keep SQLite write locks short. */
+  batchSize?: number;
+}
+
+export interface ArchiveBatchResult {
+  repositoryId: string;
+  cutoff: string;
+  archiveAt: string;
+  batchSize: number;
+  prCount: number;
+  issueCount: number;
+  filesDeleted: number;
+  commentsDeleted: number;
+  prPayloadPruned: number;
+  issuePayloadPruned: number;
+  hasMore: boolean;
+}
+
+export interface RestoreResult {
+  repositoryId: string;
+  entityKind: "pull_request" | "issue";
+  number: number;
+  archivedAt: null;
+  payloadPrunedAt: string | null;
+}
+
+export interface MaintenanceRunRecord {
+  id: string;
+  repositoryId: string;
+  kind: MaintenanceRunKind;
+  trigger: MaintenanceRunTrigger;
+  status: MaintenanceRunStatus;
+  cutoff: string | null;
+  selector: Record<string, unknown>;
+  requestedAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  prCount: number;
+  issueCount: number;
+  filesDeleted: number;
+  commentsDeleted: number;
+  error: string | null;
+}
+
+export interface CreateMaintenanceRunInput {
+  id?: string;
+  repositoryId: string;
+  kind: MaintenanceRunKind;
+  trigger: MaintenanceRunTrigger;
+  cutoff?: string | null;
+  selector?: Record<string, unknown>;
+  requestedAt?: string;
+}
+
+export interface UpdateMaintenanceRunInput {
+  status?: MaintenanceRunStatus;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  prCount?: number;
+  issueCount?: number;
+  filesDeleted?: number;
+  commentsDeleted?: number;
+  error?: string | null;
+}
