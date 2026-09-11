@@ -5,6 +5,10 @@ import { calendarDateSchema, repositoryIdSchema, utcDateTimeSchema } from "./val
 /** The three read projections exposed by PR and Issue lists. */
 export const archiveFilterSchema = z.enum(["current", "archived", "all"]);
 
+/** Runtime history cleanup is intentionally a fixed safety policy. */
+export const RUNTIME_HISTORY_RETENTION_DAYS = 30 as const;
+export const RUNTIME_HISTORY_KEEP_LATEST = 100 as const;
+
 /** Terminal metadata scopes that can be selected by a maintenance run. */
 export const archiveScopeSchema = z.enum([
   "merged_prs",
@@ -69,6 +73,35 @@ export const archivePreviewResponseSchema = z
     issueCommentRows: z.number().int().nonnegative(),
     prPayloadCount: z.number().int().nonnegative(),
     issuePayloadCount: z.number().int().nonnegative(),
+  })
+  .strict();
+
+const runtimeHistoryPurgeRequestBodySchema = z
+  .object({
+    /** Optional UTC snapshot used by deterministic callers and tests. */
+    asOf: utcDateTimeSchema.optional(),
+  })
+  .strict();
+
+export const runtimeHistoryPurgePreviewRequestSchema = z.preprocess(
+  (value) => (value === undefined ? {} : value),
+  runtimeHistoryPurgeRequestBodySchema,
+);
+
+export const runtimeHistoryPurgeRunCreateSchema = runtimeHistoryPurgePreviewRequestSchema;
+
+export const runtimeHistoryPurgePreviewResponseSchema = z
+  .object({
+    repositoryId: repositoryIdSchema,
+    asOf: utcDateTimeSchema,
+    cutoff: utcDateTimeSchema,
+    retentionDays: z.literal(RUNTIME_HISTORY_RETENTION_DAYS),
+    keepLatest: z.literal(RUNTIME_HISTORY_KEEP_LATEST),
+    runCount: z.number().int().nonnegative(),
+    protectedRunCount: z.number().int().nonnegative(),
+    queuedOrRunningCount: z.number().int().nonnegative(),
+    streamCount: z.number().int().nonnegative(),
+    targetCount: z.number().int().nonnegative(),
   })
   .strict();
 
@@ -144,6 +177,9 @@ export type RepositoryRetentionSettingsUpdate = z.infer<typeof repositoryRetenti
 export type ArchivePreviewRequest = z.infer<typeof archivePreviewRequestSchema>;
 export type ArchiveRunCreate = z.infer<typeof archiveRunCreateSchema>;
 export type ArchivePreviewResponse = z.infer<typeof archivePreviewResponseSchema>;
+export type RuntimeHistoryPurgePreviewRequest = z.infer<typeof runtimeHistoryPurgePreviewRequestSchema>;
+export type RuntimeHistoryPurgeRunCreate = z.infer<typeof runtimeHistoryPurgeRunCreateSchema>;
+export type RuntimeHistoryPurgePreviewResponse = z.infer<typeof runtimeHistoryPurgePreviewResponseSchema>;
 export type MaintenanceRun = z.infer<typeof maintenanceRunSchema>;
 export type MaintenanceRunsResponse = z.infer<typeof maintenanceRunsResponseSchema>;
 export type MaintenanceRunAccepted = z.infer<typeof maintenanceRunAcceptedSchema>;

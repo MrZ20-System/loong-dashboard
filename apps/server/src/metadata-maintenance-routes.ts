@@ -9,6 +9,9 @@ import {
   pullRequestParamsSchema,
   repositoryParamsSchema,
   restoreMetadataResponseSchema,
+  runtimeHistoryPurgePreviewRequestSchema,
+  runtimeHistoryPurgePreviewResponseSchema,
+  runtimeHistoryPurgeRunCreateSchema,
 } from "@loongboard/contracts";
 import type { FastifyInstance } from "fastify";
 
@@ -49,6 +52,28 @@ export function registerMetadataMaintenanceRoutes(
     const { id } = parseRequest(repositoryParamsSchema, request.params);
     const body = parseRequest(archiveRunCreateSchema, request.body);
     const { run } = service.start(id, body, "manual");
+    return sendParsed(reply, 202, maintenanceRunAcceptedSchema, {
+      repositoryId: id,
+      runId: run.id,
+      status: "accepted",
+    });
+  });
+
+  app.post("/api/repositories/:id/maintenance/runtime-history/preview", async (request, reply) => {
+    const { id } = parseRequest(repositoryParamsSchema, request.params);
+    const body = parseRequest(runtimeHistoryPurgePreviewRequestSchema, request.body);
+    return sendParsed(
+      reply,
+      200,
+      runtimeHistoryPurgePreviewResponseSchema,
+      service.previewRuntimeHistory(id, body),
+    );
+  });
+
+  app.post("/api/repositories/:id/maintenance/runtime-history", async (request, reply) => {
+    const { id } = parseRequest(repositoryParamsSchema, request.params);
+    const body = parseRequest(runtimeHistoryPurgeRunCreateSchema, request.body);
+    const { run } = service.startRuntimeHistory(id, body, "manual");
     return sendParsed(reply, 202, maintenanceRunAcceptedSchema, {
       repositoryId: id,
       runId: run.id,

@@ -3,9 +3,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  completeSyncRunStream,
+  createSyncRun,
   getMaintenanceRun,
   getPullRequestDetail,
   openDatabase,
+  recordSyncRunTarget,
   reconcileRepositories,
   upsertPullRequestPage,
   type ConfiguredRepository,
@@ -156,6 +159,47 @@ describe("MetadataMaintenanceService", () => {
     await expect(first.completion).resolves.toMatchObject({ status: "completed", prCount: 1 });
     await expect(second.completion).resolves.toMatchObject({ status: "completed", prCount: 0 });
     expect(admission).toEqual([true, false, true, false]);
+    await service.close();
+  });
+
+  it("queues runtime-history cleanup and accumulates bounded deletion counts", async () => {
+    const database = fixture();
+    const requestedAt = Date.parse("2026-08-01T00:00:00.000Z");
+    for (let index = 0; index < 351; index += 1) {
+      const run = createSyncRun(database, {
+        repositoryId: "repo",
+        kind: "forward",
+        trigger: "manual",
+        attemptStartedAt: new Date(requestedAt + index * 1_000),
+        entityKinds: ["pull_request"],
+      });
+      completeSyncRunStream(database, run.syncRunId, "pull_request", {
+        finishedAt: new Date(requestedAt + index * 1_000 + 500),
+      });
+      recordSyncRunTarget(database, run.syncRunId, {
+        repositoryId: "repo",
+        prNumber: index + 1,
+        headSha: String(index + 1).padStart(40, "0"),
+        reason: "new",
+      });
+    }
+    const service = new MetadataMaintenanceService({
+      database,
+      calendarTimeZone: "UTC",
+      now: () => new Date("2026-09-11T00:00:00.000Z"),
+    });
+    const started = service.startRuntimeHistory("repo", {
+      asOf: "2026-09-11T00:00:00.000Z",
+    });
+
+    expect(started.run).toMatchObject({ status: "queued", kind: "purge_runtime_history" });
+    const completed = await started.completion;
+    expect(completed).toMatchObject({ status: "completed", kind: "purge_runtime_history" });
+    expect(getMaintenanceRun(database, started.run.id)?.selector).toMatchObject({
+      runsDeleted: 251,
+      retentionDays: 30,
+      keepLatest: 100,
+    });
     await service.close();
   });
 });

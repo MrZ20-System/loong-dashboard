@@ -320,15 +320,27 @@ export function createServerRuntime(
           if (repositorySettings === undefined) {
             throw new Error(`Repository settings are unavailable: ${task.repositoryId}`);
           }
-          const completed = await metadataMaintenance.runAndWait(
+          const purge = await metadataMaintenance.runRuntimeHistoryAndWait(
             task.repositoryId,
-            metadataMaintenance.automaticRequest(repositorySettings.retention),
+            {},
             "automatic",
           );
-          if (completed.status !== "completed") {
+          if (purge.status !== "completed") {
             throw new Error(
-              completed.error ?? `Metadata maintenance ${completed.status} for ${task.repositoryId}`,
+              purge.error ?? `Runtime history purge ${purge.status} for ${task.repositoryId}`,
             );
+          }
+          if (repositorySettings.retention.automaticArchiveEnabled) {
+            const archive = await metadataMaintenance.runAndWait(
+              task.repositoryId,
+              metadataMaintenance.automaticRequest(repositorySettings.retention),
+              "automatic",
+            );
+            if (archive.status !== "completed") {
+              throw new Error(
+                archive.error ?? `Metadata archive ${archive.status} for ${task.repositoryId}`,
+              );
+            }
           }
           return;
         }
@@ -995,10 +1007,10 @@ function ensureMetadataMaintenanceTask(input: {
   const task = existing === null
     ? createScheduledTask(input.database, {
         id: input.taskId,
-        name: `Archive metadata ${repositoryName}`,
+        name: `Maintain metadata ${repositoryName}`,
         cronExpression: "0 3 * * *",
         timezone: input.config.timezone,
-        prompt: `Archive terminal metadata for repository ${repositoryKey}.`,
+        prompt: `Maintain repository metadata and runtime history for ${repositoryKey}.`,
         workspacePath: repositoryPath,
         provider: input.config.agent.defaultProvider,
         model: input.config.agent.defaultModel,
@@ -1006,13 +1018,15 @@ function ensureMetadataMaintenanceTask(input: {
         kind: "system",
         action: "repository.metadata-maintenance",
         repositoryId: repositoryKey,
-        enabled: input.retention.automaticArchiveEnabled,
+        // Keep one daily task for safe runtime-history cleanup; this setting
+        // controls only the optional metadata archive phase.
+        enabled: true,
       })
     : updateScheduledTask(input.database, existing.id, {
-        name: existing.name,
+        name: `Maintain metadata ${repositoryName}`,
         cronExpression: "0 3 * * *",
         timezone: input.config.timezone,
-        prompt: existing.prompt,
+        prompt: `Maintain repository metadata and runtime history for ${repositoryKey}.`,
         workspacePath: repositoryPath,
         provider: existing.provider,
         model: existing.model,
@@ -1020,7 +1034,7 @@ function ensureMetadataMaintenanceTask(input: {
         kind: "system",
         action: "repository.metadata-maintenance",
         repositoryId: repositoryKey,
-        enabled: input.retention.automaticArchiveEnabled,
+        enabled: true,
       });
   input.scheduler.refresh(task.id);
   return getScheduledTask(input.database, task.id) ?? task;

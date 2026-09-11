@@ -9,7 +9,9 @@ import {
 import {
   fetchMaintenanceRuns,
   previewRepositoryMaintenance,
+  previewRuntimeHistoryPurge,
   startRepositoryMaintenance,
+  startRuntimeHistoryPurge,
 } from "../../retention-client";
 import { SettingsSwitch } from "./SettingsSwitch";
 
@@ -40,6 +42,7 @@ export function RepositoryRetentionSection({ repositoryId }: { repositoryId: str
   const [retention, setRetention] = useState(DEFAULT_RETENTION);
   const [date, setDate] = useState(() => todayValue());
   const [preview, setPreview] = useState<Awaited<ReturnType<typeof previewRepositoryMaintenance>> | null>(null);
+  const [runtimeHistoryPreview, setRuntimeHistoryPreview] = useState<Awaited<ReturnType<typeof previewRuntimeHistoryPurge>> | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const state = settings.data;
 
@@ -77,8 +80,21 @@ export function RepositoryRetentionSection({ repositoryId }: { repositoryId: str
       void client.invalidateQueries({ queryKey: ["maintenance-runs", repositoryId] });
     },
   });
-  const actionError = settings.error ?? runs.error ?? save.error ?? previewRun.error ?? run.error;
+  const runtimePreviewRun = useMutation({
+    mutationFn: () => previewRuntimeHistoryPurge(repositoryId),
+    onSuccess: (data) => setRuntimeHistoryPreview(data),
+  });
+  const runtimeRun = useMutation({
+    mutationFn: () => startRuntimeHistoryPurge(repositoryId),
+    onSuccess: (accepted) => {
+      setMessage(`Run history cleanup queued (${accepted.runId}).`);
+      void client.invalidateQueries({ queryKey: ["maintenance-runs", repositoryId] });
+    },
+  });
+  const actionError = settings.error ?? runs.error ?? save.error ?? previewRun.error ?? run.error ?? runtimePreviewRun.error ?? runtimeRun.error;
   const latestRun = runs.data?.items[0];
+  const latestRuntimeRun = runs.data?.items.find((item) => item.kind === "purge_runtime_history");
+  const runsDeleted = latestRuntimeRun?.selector.runsDeleted;
 
   const update = <K extends keyof RepositoryRetentionSettings>(key: K, value: RepositoryRetentionSettings[K]) => {
     setRetention((current) => ({ ...current, [key]: value }));
@@ -87,6 +103,10 @@ export function RepositoryRetentionSection({ repositoryId }: { repositoryId: str
   const start = () => {
     if (!window.confirm("Archive the selected terminal metadata? Pruned cached payloads will need a GitHub refresh.")) return;
     run.mutate();
+  };
+  const cleanRuntimeHistory = () => {
+    if (!window.confirm("Clean sync-run history older than 30 days, retaining the latest 100 runs?")) return;
+    runtimeRun.mutate();
   };
 
   return (
@@ -127,10 +147,20 @@ export function RepositoryRetentionSection({ repositoryId }: { repositoryId: str
         </div>
         {preview && <dl className="settings-details retention-preview-counts"><div><dt>Merged PRs</dt><dd>{preview.mergedPrCount}</dd></div><div><dt>Closed PRs</dt><dd>{preview.closedPrCount}</dd></div><div><dt>Closed issues</dt><dd>{preview.closedIssueCount}</dd></div><div><dt>Files</dt><dd>{preview.prFileRows}</dd></div><div><dt>Comments</dt><dd>{preview.issueCommentRows}</dd></div><div><dt>Payloads</dt><dd>{preview.prPayloadCount + preview.issuePayloadCount}</dd></div></dl>}
       </section>
+      <section className="settings-maintenance-storage" aria-labelledby={`storage-maintenance-${repositoryId}`}>
+        <h5 id={`storage-maintenance-${repositoryId}`}>Storage maintenance</h5>
+        <p className="settings-muted">Sync-run history cleanup is fixed at 30 days while retaining at least the latest 100 runs. Active and history-protected runs are never deleted.</p>
+        <div className="settings-form-row">
+          <button type="button" onClick={() => runtimePreviewRun.mutate()} disabled={runtimePreviewRun.isPending}>{runtimePreviewRun.isPending ? "Previewing…" : "Preview run history"}</button>
+          <button type="button" className="button-primary" onClick={cleanRuntimeHistory} disabled={runtimeRun.isPending || runtimeHistoryPreview === null}>{runtimeRun.isPending ? "Queueing…" : "Clean run history"}</button>
+        </div>
+        {runtimeHistoryPreview && <dl className="settings-details retention-preview-counts"><div><dt>Runs to delete</dt><dd>{runtimeHistoryPreview.runCount}</dd></div><div><dt>Protected runs</dt><dd>{runtimeHistoryPreview.protectedRunCount}</dd></div><div><dt>Active runs</dt><dd>{runtimeHistoryPreview.queuedOrRunningCount}</dd></div><div><dt>Streams</dt><dd>{runtimeHistoryPreview.streamCount}</dd></div><div><dt>Targets</dt><dd>{runtimeHistoryPreview.targetCount}</dd></div></dl>}
+        {latestRuntimeRun && <p className="settings-muted"><span className={`status-pill status-pill--${latestRuntimeRun.status}`}>{latestRuntimeRun.status}</span> · {typeof runsDeleted === "number" ? `${runsDeleted} runs deleted` : "No runs deleted"}</p>}
+      </section>
       <section className="settings-maintenance-runs" aria-labelledby={`maintenance-runs-${repositoryId}`}>
         <h5 id={`maintenance-runs-${repositoryId}`}>Recent maintenance</h5>
         {latestRun ? <p className="settings-muted"><span className={`status-pill status-pill--${latestRun.status}`}>{latestRun.status}</span> · {latestRun.prCount} PR · {latestRun.issueCount} issues · {latestRun.filesDeleted} files · {latestRun.commentsDeleted} comments{latestRun.error ? ` · ${latestRun.error}` : ""}</p> : <p className="settings-muted">No maintenance runs yet.</p>}
-        <p className="settings-muted">Sync run history remains available separately; no runtime-history cleanup is performed here.</p>
+        <p className="settings-muted">Run-history cleanup uses the fixed 30-day and latest-100 safety policy above.</p>
       </section>
       {actionError && <p role="alert" className="settings-error">{actionError instanceof Error ? actionError.message : String(actionError)}</p>}
       {message && <p role="status" className="settings-message">{message}</p>}

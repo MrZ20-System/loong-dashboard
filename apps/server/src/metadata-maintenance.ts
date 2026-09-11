@@ -6,6 +6,8 @@ import {
   listMaintenanceRuns,
   listRepositories,
   previewArchive,
+  previewRuntimeHistoryPurge,
+  purgeRuntimeHistoryBatch,
   requireMaintenanceRun,
   restoreIssue,
   restorePullRequest,
@@ -19,6 +21,8 @@ import {
   archivePreviewRequestSchema,
   archiveRunCreateSchema,
   archivePreviewResponseSchema,
+  RUNTIME_HISTORY_KEEP_LATEST,
+  RUNTIME_HISTORY_RETENTION_DAYS,
   maintenanceRunSchema,
   type ArchivePreviewRequest,
   type ArchivePreviewResponse,
@@ -26,10 +30,17 @@ import {
   type MaintenanceRun,
   type RepositoryRetentionSettings,
   type RestoreMetadataResponse,
+  runtimeHistoryPurgePreviewRequestSchema,
+  runtimeHistoryPurgePreviewResponseSchema,
+  runtimeHistoryPurgeRunCreateSchema,
+  type RuntimeHistoryPurgePreviewRequest,
+  type RuntimeHistoryPurgePreviewResponse,
+  type RuntimeHistoryPurgeRunCreate,
   restoreMetadataResponseSchema,
 } from "@loongboard/contracts";
 
 const DEFAULT_BATCH_SIZE = 250;
+const DAY_MILLISECONDS = 24 * 60 * 60 * 1_000;
 
 export interface MetadataMaintenanceServiceOptions {
   database: DatabaseClient;
@@ -48,13 +59,28 @@ export interface MetadataMaintenanceStartResult {
   completion: Promise<MaintenanceRunRecord>;
 }
 
-interface MaintenanceJob {
+type QueuedMaintenanceJob =
+  | Omit<ArchiveMaintenanceJob, "launched" | "resolve" | "reject">
+  | Omit<RuntimeHistoryMaintenanceJob, "launched" | "resolve" | "reject">;
+
+interface BaseMaintenanceJob {
   repositoryId: string;
-  selection: ArchiveRunCreate;
   launched: boolean;
   resolve: (run: MaintenanceRunRecord) => void;
   reject: (error: unknown) => void;
 }
+
+interface ArchiveMaintenanceJob extends BaseMaintenanceJob {
+  kind: "archive";
+  selection: ArchiveRunCreate;
+}
+
+interface RuntimeHistoryMaintenanceJob extends BaseMaintenanceJob {
+  kind: "runtime-history";
+  selection: RuntimeHistoryPurgeRunCreate;
+}
+
+type MaintenanceJob = ArchiveMaintenanceJob | RuntimeHistoryMaintenanceJob;
 
 export class MetadataMaintenanceClosedError extends Error {
   readonly code = "METADATA_MAINTENANCE_CLOSED" as const;
@@ -143,6 +169,21 @@ export class MetadataMaintenanceService {
     });
   }
 
+  previewRuntimeHistory(
+    repositoryId: string,
+    request: RuntimeHistoryPurgePreviewRequest = {},
+  ): RuntimeHistoryPurgePreviewResponse {
+    const input = runtimeHistoryPurgePreviewRequestSchema.parse(request);
+    const asOf = input.asOf ?? this.timestamp();
+    const preview = previewRuntimeHistoryPurge(this.database, {
+      repositoryId,
+      asOf,
+      retentionDays: RUNTIME_HISTORY_RETENTION_DAYS,
+      keepLatest: RUNTIME_HISTORY_KEEP_LATEST,
+    });
+    return runtimeHistoryPurgePreviewResponseSchema.parse({ ...preview, asOf });
+  }
+
   start(
     repositoryId: string,
     request: ArchiveRunCreate,
@@ -165,28 +206,38 @@ export class MetadataMaintenanceService {
       },
       requestedAt: this.timestamp(),
     });
-    let resolveCompletion!: (value: MaintenanceRunRecord) => void;
-    let rejectCompletion!: (error: unknown) => void;
-    const completion = new Promise<MaintenanceRunRecord>((resolve, reject) => {
-      resolveCompletion = resolve;
-      rejectCompletion = reject;
-    });
-    this.completions.set(run.id, completion);
-    this.jobs.set(run.id, {
+    return this.enqueue(run, { repositoryId, kind: "archive", selection: input });
+  }
+
+  startRuntimeHistory(
+    repositoryId: string,
+    request: RuntimeHistoryPurgeRunCreate = {},
+    trigger: "manual" | "automatic" = "manual",
+  ): MetadataMaintenanceStartResult {
+    if (this.closed) throw new MetadataMaintenanceClosedError();
+    const input = runtimeHistoryPurgeRunCreateSchema.parse(request);
+    const asOf = input.asOf ?? this.timestamp();
+    const cutoff = new Date(
+      Date.parse(asOf) - RUNTIME_HISTORY_RETENTION_DAYS * DAY_MILLISECONDS,
+    ).toISOString();
+    const run = createMaintenanceRun(this.database, {
       repositoryId,
-      selection: input,
-      launched: false,
-      resolve: resolveCompletion,
-      reject: rejectCompletion,
+      kind: "purge_runtime_history",
+      trigger,
+      cutoff,
+      selector: {
+        asOf,
+        retentionDays: RUNTIME_HISTORY_RETENTION_DAYS,
+        keepLatest: RUNTIME_HISTORY_KEEP_LATEST,
+        runsDeleted: 0,
+      },
+      requestedAt: this.timestamp(),
     });
-    const queue = this.repositoryQueues.get(repositoryId) ?? [];
-    queue.push(run.id);
-    this.repositoryQueues.set(repositoryId, queue);
-    // Keep the HTTP caller on the durable queued boundary. The first batch is
-    // launched on the next turn of the event loop, after any earlier run for
-    // this repository has released its admission.
-    setImmediate(() => this.pumpRepository(repositoryId));
-    return { run, completion };
+    return this.enqueue(run, {
+      repositoryId,
+      kind: "runtime-history",
+      selection: { asOf },
+    });
   }
 
   async runAndWait(
@@ -195,6 +246,14 @@ export class MetadataMaintenanceService {
     trigger: "manual" | "automatic" = "automatic",
   ): Promise<MaintenanceRunRecord> {
     return (this.start(repositoryId, request, trigger)).completion;
+  }
+
+  async runRuntimeHistoryAndWait(
+    repositoryId: string,
+    request: RuntimeHistoryPurgeRunCreate = {},
+    trigger: "manual" | "automatic" = "automatic",
+  ): Promise<MaintenanceRunRecord> {
+    return this.startRuntimeHistory(repositoryId, request, trigger).completion;
   }
 
   automaticRequest(
@@ -256,6 +315,33 @@ export class MetadataMaintenanceService {
     }
     this.repositoryQueues.clear();
     await this.waitForIdle();
+  }
+
+  private enqueue(
+    run: MaintenanceRunRecord,
+    jobInput: QueuedMaintenanceJob,
+  ): MetadataMaintenanceStartResult {
+    let resolveCompletion!: (value: MaintenanceRunRecord) => void;
+    let rejectCompletion!: (error: unknown) => void;
+    const completion = new Promise<MaintenanceRunRecord>((resolve, reject) => {
+      resolveCompletion = resolve;
+      rejectCompletion = reject;
+    });
+    this.completions.set(run.id, completion);
+    this.jobs.set(run.id, {
+      ...jobInput,
+      launched: false,
+      resolve: resolveCompletion,
+      reject: rejectCompletion,
+    });
+    const queue = this.repositoryQueues.get(jobInput.repositoryId) ?? [];
+    queue.push(run.id);
+    this.repositoryQueues.set(jobInput.repositoryId, queue);
+    // Keep the HTTP caller on the durable queued boundary. The first batch is
+    // launched on the next turn of the event loop, after any earlier run for
+    // this repository has released its admission.
+    setImmediate(() => this.pumpRepository(jobInput.repositoryId));
+    return { run, completion };
   }
 
   private pumpRepository(repositoryId: string): void {
@@ -322,28 +408,39 @@ export class MetadataMaintenanceService {
           this.setRepositoryMaintenanceActive?.(job.repositoryId, true);
           active = true;
         }
-        const batch = archiveBatch(this.database, {
-          repositoryId: job.repositoryId,
-          cutoff: calendarDateToUtc(job.selection.date, this.calendarTimeZone).from,
-          includeMergedPrs: job.selection.includeMergedPrs,
-          includeClosedPrs: job.selection.includeClosedPrs,
-          includeClosedIssues: job.selection.includeClosedIssues,
-          archiveAt: this.timestamp(),
-          prune: job.selection.prune,
-          batchSize: this.batchSize,
-        });
-        this.accumulate(batch, (next) => {
-          prCount += next.prCount;
-          issueCount += next.issueCount;
-          filesDeleted += next.filesDeleted;
-          commentsDeleted += next.commentsDeleted;
-        });
-        updateMaintenanceRun(this.database, runId, {
-          prCount,
-          issueCount,
-          filesDeleted,
-          commentsDeleted,
-        });
+        const batch = job.kind === "archive"
+          ? archiveBatch(this.database, {
+              repositoryId: job.repositoryId,
+              cutoff: calendarDateToUtc(job.selection.date, this.calendarTimeZone).from,
+              includeMergedPrs: job.selection.includeMergedPrs,
+              includeClosedPrs: job.selection.includeClosedPrs,
+              includeClosedIssues: job.selection.includeClosedIssues,
+              archiveAt: this.timestamp(),
+              prune: job.selection.prune,
+              batchSize: this.batchSize,
+            })
+          : purgeRuntimeHistoryBatch(this.database, {
+              repositoryId: job.repositoryId,
+              asOf: job.selection.asOf,
+              retentionDays: RUNTIME_HISTORY_RETENTION_DAYS,
+              keepLatest: RUNTIME_HISTORY_KEEP_LATEST,
+              batchSize: this.batchSize,
+              maintenanceRunId: runId,
+            });
+        if (job.kind === "archive") {
+          this.accumulate(batch as ArchiveBatchResult, (next) => {
+            prCount += next.prCount;
+            issueCount += next.issueCount;
+            filesDeleted += next.filesDeleted;
+            commentsDeleted += next.commentsDeleted;
+          });
+          updateMaintenanceRun(this.database, runId, {
+            prCount,
+            issueCount,
+            filesDeleted,
+            commentsDeleted,
+          });
+        }
         // Release at every batch boundary. Foreground coordinator work can
         // therefore enter between archive transactions.
         this.setRepositoryMaintenanceActive?.(job.repositoryId, false);
