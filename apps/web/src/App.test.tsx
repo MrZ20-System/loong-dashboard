@@ -401,7 +401,7 @@ describe("LoongBoard metadata routes", () => {
         { pullRequests: "idle", issues: "failed" },
       ],
     });
-    appQueryClient.setQueryData(["metadata", "repo", "issues", "updated", "::::", 1, null], {
+    appQueryClient.setQueryData(["metadata", "repo", "issues", "updated", ":::current::", 1, null], {
       items: [oldIssue], page: 1, pageSize: 100, totalCount: 1, totalPages: 1, calendarTimeZone: "Asia/Shanghai",
     });
     renderApp("/repositories/repo/pulls");
@@ -427,7 +427,7 @@ describe("LoongBoard metadata routes", () => {
         { pullRequests: "failed", issues: "idle" },
       ],
     });
-    appQueryClient.setQueryData(["metadata", "repo", "pulls", "updated", "::::", 1, null], {
+    appQueryClient.setQueryData(["metadata", "repo", "pulls", "updated", ":::current::", 1, null], {
       items: [oldPull], page: 1, pageSize: 100, totalCount: 1, totalPages: 1, calendarTimeZone: "Asia/Shanghai",
     });
     renderApp("/repositories/repo/issues");
@@ -453,7 +453,7 @@ describe("LoongBoard metadata routes", () => {
         { pullRequests: "idle", issues: "failed" },
       ],
     });
-    appQueryClient.setQueryData(["metadata", "repo", "issues", "updated", "::::", 1, null], {
+    appQueryClient.setQueryData(["metadata", "repo", "issues", "updated", ":::current::", 1, null], {
       items: [oldIssue], page: 1, pageSize: 100, totalCount: 1, totalPages: 1, calendarTimeZone: "Asia/Shanghai",
     });
     renderApp("/repositories/repo/pulls");
@@ -462,7 +462,7 @@ describe("LoongBoard metadata routes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
     expect(await screen.findByText("Delayed synced pull", {}, { timeout: 4_000 })).toBeInTheDocument();
     expect(await screen.findByText(/Last sync failed/, {}, { timeout: 4_000 })).toBeInTheDocument();
-    const issueQuery = appQueryClient.getQueryCache().find({ queryKey: ["metadata", "repo", "issues", "updated", "::::", 1, null] });
+    const issueQuery = appQueryClient.getQueryCache().find({ queryKey: ["metadata", "repo", "issues", "updated", ":::current::", 1, null] });
     expect(issueQuery?.state.isInvalidated).toBe(false);
     expect(issueQuery?.state.data).toMatchObject({ items: [oldIssue] });
     fireEvent.click(primaryNavigation().getByRole("link", { name: "Issues" }));
@@ -482,7 +482,7 @@ describe("LoongBoard metadata routes", () => {
         { pullRequests: "failed", issues: "idle" },
       ],
     });
-    appQueryClient.setQueryData(["metadata", "repo", "pulls", "updated", "::::", 1, null], {
+    appQueryClient.setQueryData(["metadata", "repo", "pulls", "updated", ":::current::", 1, null], {
       items: [oldPull], page: 1, pageSize: 100, totalCount: 1, totalPages: 1, calendarTimeZone: "Asia/Shanghai",
     });
     renderApp("/repositories/repo/issues");
@@ -491,7 +491,7 @@ describe("LoongBoard metadata routes", () => {
     fireEvent.click(screen.getByRole("button", { name: "Sync now" }));
     expect(await screen.findByText("Delayed synced issue", {}, { timeout: 4_000 })).toBeInTheDocument();
     expect(await screen.findByText(/Last sync failed/, {}, { timeout: 4_000 })).toBeInTheDocument();
-    const pullQuery = appQueryClient.getQueryCache().find({ queryKey: ["metadata", "repo", "pulls", "updated", "::::", 1, null] });
+    const pullQuery = appQueryClient.getQueryCache().find({ queryKey: ["metadata", "repo", "pulls", "updated", ":::current::", 1, null] });
     expect(pullQuery?.state.isInvalidated).toBe(false);
     expect(pullQuery?.state.data).toMatchObject({ items: [oldPull] });
     fireEvent.click(primaryNavigation().getByRole("link", { name: "Pull requests" }));
