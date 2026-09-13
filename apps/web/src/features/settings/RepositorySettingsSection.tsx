@@ -69,7 +69,7 @@ export function repositoryDefaultsFromUrl(value: string) {
 
 const onboardingSteps = [
   ["validating", { en: "Validate", "zh-CN": "验证" }],
-  ["cloning", { en: "Clone or reuse", "zh-CN": "Clone / 复用" }],
+  ["cloning", { en: "Clone or reuse", "zh-CN": "克隆 / 复用" }],
   ["registering", { en: "Register", "zh-CN": "注册" }],
   ["initializing", { en: "Initialize", "zh-CN": "初始化" }],
   ["syncing", { en: "First sync", "zh-CN": "首次同步" }],
@@ -79,7 +79,7 @@ const onboardingSteps = [
 const onboardingStatusLabels = {
   queued: { en: "Queued", "zh-CN": "排队中" },
   validating: { en: "Validate", "zh-CN": "验证" },
-  cloning: { en: "Clone or reuse", "zh-CN": "Clone / 复用" },
+  cloning: { en: "Clone or reuse", "zh-CN": "克隆 / 复用" },
   registering: { en: "Register", "zh-CN": "注册" },
   initializing: { en: "Initialize", "zh-CN": "初始化" },
   syncing: { en: "First sync", "zh-CN": "首次同步" },
@@ -108,8 +108,18 @@ function storeOnboardingJobId(jobId: string | null): void {
   }
 }
 
-function onboardingFailure(t: I18nContextValue["t"], error: unknown): string {
+export function onboardingFailure(t: I18nContextValue["t"], error: unknown): string {
   const detail = error instanceof Error ? error.message : String(error);
+  const duplicate = detail.match(/Repository key or GitHub repository is already configured:\s*(.+)$/);
+  if (duplicate?.[1]) {
+    return t(
+      {
+        en: "Repository onboarding failed: This GitHub repository or repository key is already connected ({target}).",
+        "zh-CN": "仓库接入失败：该 GitHub 仓库或仓库键已接入（{target}）。",
+      },
+      { target: duplicate[1] },
+    );
+  }
   return `${t({ en: "Repository onboarding failed:", "zh-CN": "仓库接入失败：" })} ${detail}`;
 }
 

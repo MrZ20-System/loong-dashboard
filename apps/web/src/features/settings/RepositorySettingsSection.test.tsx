@@ -3,9 +3,9 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { LocaleProvider } from "../../i18n";
+import { LocaleProvider, translate } from "../../i18n";
 import type { RepositoryOnboarding } from "../../settings-client";
-import { OnboardingProgress, RepositoryOnboardingCard, repositoryDefaultsFromUrl } from "./RepositorySettingsSection";
+import { onboardingFailure, OnboardingProgress, RepositoryOnboardingCard, repositoryDefaultsFromUrl } from "./RepositorySettingsSection";
 
 const settingsMocks = vi.hoisted(() => ({
   createRepositoryOnboarding: vi.fn(),
@@ -22,6 +22,7 @@ vi.mock("../../settings-client", async () => {
 afterEach(() => {
   vi.clearAllMocks();
   window.sessionStorage.removeItem("loongboard.repository-onboarding.jobId");
+  vi.restoreAllMocks();
 });
 
 function onboardingJob(overrides: Partial<RepositoryOnboarding> = {}): RepositoryOnboarding {
@@ -88,5 +89,15 @@ describe("repository onboarding", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(cancel).toHaveBeenCalledOnce();
     expect(screen.queryByText(/Repository onboarding failed:/)).not.toBeInTheDocument();
+  });
+
+  it("keeps onboarding steps and duplicate-repository feedback fully localized in Chinese", () => {
+    expect(onboardingFailure(
+      (localizedMessage, values) => translate("zh-CN", localizedMessage, values),
+      new Error("POST /api/repositories failed with HTTP 409: Repository key or GitHub repository is already configured: owner-repo"),
+    )).toBe("仓库接入失败：该 GitHub 仓库或仓库键已接入（owner-repo）。");
+    vi.spyOn(window.navigator, "language", "get").mockReturnValue("zh-CN");
+    render(<LocaleProvider><MemoryRouter><OnboardingProgress job={onboardingJob({ status: "cloning", step: "cloning", detail: "", progress: 20, repositoryId: null })} onRetry={vi.fn()} onCancel={vi.fn()} retrying={false} cancelling={false} /></MemoryRouter></LocaleProvider>);
+    expect(screen.getAllByText("克隆 / 复用").length).toBeGreaterThan(0);
   });
 });
