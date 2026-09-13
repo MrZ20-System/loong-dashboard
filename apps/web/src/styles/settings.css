@@ -375,6 +375,24 @@
 .settings-tile-icon { display: inline-grid; width: 32px; height: 32px; place-items: center; border-radius: 9px; background: var(--accent-soft); color: var(--accent-dark); font-weight: 700; }
 .settings-stack { display: flex; flex-direction: column; gap: 14px; }
 .settings-card { padding: 18px; }
+.repository-onboarding-card { border-color: color-mix(in srgb, var(--accent) 42%, var(--border)); }
+.repository-onboarding-form { display: flex; flex-direction: column; gap: 12px; margin-top: 14px; }
+.repository-onboarding-form label { display: flex; flex-direction: column; gap: 5px; color: var(--text-secondary); font-size: 12px; font-weight: 650; }
+.repository-onboarding-form input { width: 100%; }
+.repository-onboarding-form details { border-top: 1px solid var(--border-soft); padding-top: 11px; }
+.repository-onboarding-form summary { cursor: pointer; color: var(--text-secondary); font-size: 12px; font-weight: 650; }
+.repository-onboarding-form details .settings-grid { margin-bottom: 4px; }
+.repository-onboarding-progress { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border-soft); }
+.repository-onboarding-progress progress { display: block; width: 100%; height: 8px; margin: 14px 0; accent-color: var(--accent); }
+.repository-onboarding-steps { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 8px; margin: 16px 0; padding: 0; list-style: none; }
+.repository-onboarding-steps li { display: flex; min-width: 0; flex-direction: column; align-items: center; gap: 6px; color: var(--text-tertiary); font-size: 10.5px; text-align: center; overflow-wrap: anywhere; }
+.repository-onboarding-steps li span { display: grid; width: 24px; height: 24px; place-items: center; border: 1px solid var(--border); border-radius: 50%; background: var(--surface-muted); color: var(--text-secondary); font-size: 11px; font-weight: 700; }
+.repository-onboarding-steps li.is-current { color: var(--accent-dark); font-weight: 700; }
+.repository-onboarding-steps li.is-current span { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-dark); }
+.repository-onboarding-steps li.is-complete { color: var(--green); }
+.repository-onboarding-steps li.is-complete span { border-color: var(--green); background: var(--green-soft); color: var(--green); }
+.settings-status-group { display: flex; min-width: 0; flex-direction: column; align-items: flex-end; gap: 4px; text-align: right; }
+.settings-status-group .settings-muted { max-width: 190px; margin: 0; font-size: 10px; }
 .settings-subsection { margin-top: 18px; padding-top: 18px; border-top: 1px solid var(--border-soft); }
 .settings-history-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin: 14px 0; }
 .settings-history-summary div { min-width: 0; padding: 10px; border-radius: 9px; background: var(--surface-muted); }
@@ -429,6 +447,8 @@
 .secret-form { display: flex; flex-direction: column; gap: 12px; }
 .secret-form input { width: 100%; }
 .settings-error, .settings-message { margin: 12px 0; color: var(--red); font-size: 12px; }
+.settings-neutral { margin: 12px 0; color: var(--text-secondary); font-size: 12px; }
+.repository-onboarding-reset { margin-top: 12px; }
 .button-primary, .button-link { border-color: var(--accent); background: var(--accent); color: #fff; }
 .button-link { display: inline-flex; min-height: 34px; align-items: center; padding: 0 12px; border: 1px solid var(--accent); border-radius: 8px; font-size: 12px; font-weight: 650; }
 .button-link:hover { color: #fff; background: var(--accent-dark); text-decoration: none; }
@@ -458,3 +478,13 @@
 .filter-dropdown__icon.tone-accent, .filter-dropdown__option-icon.tone-accent { background: var(--accent-soft); color: var(--accent-dark); }
 .filter-dropdown__icon.tone-green, .filter-dropdown__option-icon.tone-green { background: var(--green-soft); color: var(--green); }
 .filter-dropdown__icon.tone-red, .filter-dropdown__option-icon.tone-red { background: var(--red-soft); color: var(--red); }
+
+@media (max-width: 760px) {
+  .repository-onboarding-steps { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 12px; }
+  .settings-status-group { align-items: flex-start; text-align: left; }
+}
+
+@media (max-width: 560px) {
+  .repository-onboarding-form .settings-grid, .repository-settings-card .settings-grid { grid-template-columns: 1fr; }
+  .repository-onboarding-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

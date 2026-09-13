@@ -20,7 +20,7 @@ const repositorySchema = z
     path: z.string().trim().min(1),
     remote: z.string().trim().min(1),
     defaultBranch: z.string().trim().min(1),
-    worktreeSlots: z.number().int().nonnegative(),
+    worktreeSlots: z.number().int().min(1).max(16),
   })
   .strict();
 
@@ -60,6 +60,8 @@ const baseSystemConfigSchema = z
       .object({
         statePath: z.string().trim().min(1),
         worktreesPath: z.string().trim().min(1),
+        /** Managed root for repositories added from Settings. */
+        repositoriesPath: z.string().trim().min(1).optional().default("./repositories"),
         serverHost: z.string().trim().min(1),
         serverPort: z.number().int().min(1).max(65_535),
       })
@@ -103,7 +105,8 @@ export const systemConfigSchema = baseSystemConfigSchema.superRefine(
     const keys = new Map<string, number>();
     const githubRepositories = new Map<string, number>();
     config.repositories.forEach((repository, index) => {
-      const previousKey = keys.get(repository.key);
+      const normalizedKey = repository.key.toLocaleLowerCase("en-US");
+      const previousKey = keys.get(normalizedKey);
       if (previousKey !== undefined) {
         context.addIssue({
           code: z.ZodIssueCode.custom,
@@ -111,7 +114,7 @@ export const systemConfigSchema = baseSystemConfigSchema.superRefine(
           message: `Duplicate repository key; already used at index ${previousKey}`,
         });
       } else {
-        keys.set(repository.key, index);
+        keys.set(normalizedKey, index);
       }
 
       // GitHub repository names are case-insensitive for identity purposes.
@@ -199,6 +202,10 @@ export function parseSystemConfig(
       worktreesPath: resolveConfiguredPath(
         configDirectory,
         parsed.data.runtime.worktreesPath,
+      ),
+      repositoriesPath: resolveConfiguredPath(
+        configDirectory,
+        parsed.data.runtime.repositoriesPath,
       ),
     },
   };

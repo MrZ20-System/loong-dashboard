@@ -229,6 +229,50 @@ describe("system schedule projector", () => {
     expect(getScheduledTask(database, SYSTEM_TASK_IDS.codeCheckpoint)?.enabled).toBe(false);
     expect(getScheduledTask(database, SYSTEM_TASK_IDS.codePush)?.enabled).toBe(false);
   });
+
+  it("gates repository sync, metadata, and worktree tasks until checkout is available", () => {
+    const { config, database } = fixture();
+    const scheduler = {
+      refresh(taskId: string) {
+        const task = getScheduledTask(database, taskId);
+        if (task === null) throw new Error(`missing task ${taskId}`);
+        return task;
+      },
+    };
+    const unavailable = createSystemScheduleProjector({
+      database,
+      scheduler,
+      config,
+      repositoryAvailability: () => false,
+    });
+    unavailable.projectAll({
+      ...projectInput(config),
+      repositories: [{
+        repository: config.repositories[0],
+        settings: { automaticSync: true, syncFrequencyMinutes: 30, retention },
+      }],
+    });
+    expect(getScheduledTask(database, SYSTEM_TASK_IDS.repositorySync("repo"))?.enabled).toBe(false);
+    expect(getScheduledTask(database, SYSTEM_TASK_IDS.metadataMaintenance("repo"))?.enabled).toBe(false);
+    expect(getScheduledTask(database, SYSTEM_TASK_IDS.worktreeCleanup("repo"))?.enabled).toBe(false);
+
+    const available = createSystemScheduleProjector({
+      database,
+      scheduler,
+      config,
+      repositoryAvailability: () => true,
+    });
+    available.projectAll({
+      ...projectInput(config),
+      repositories: [{
+        repository: config.repositories[0],
+        settings: { automaticSync: true, syncFrequencyMinutes: 30, retention },
+      }],
+    });
+    expect(getScheduledTask(database, SYSTEM_TASK_IDS.repositorySync("repo"))?.enabled).toBe(true);
+    expect(getScheduledTask(database, SYSTEM_TASK_IDS.metadataMaintenance("repo"))?.enabled).toBe(true);
+    expect(getScheduledTask(database, SYSTEM_TASK_IDS.worktreeCleanup("repo"))?.enabled).toBe(true);
+  });
 });
 
 function updateScheduledTaskForTest(database: DatabaseClient, taskId: string): void {

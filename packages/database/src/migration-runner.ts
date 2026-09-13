@@ -15,10 +15,12 @@ import { metadataRetentionMigration } from "./migrations/012-metadata-retention.
 import { agentSessionTitleSourceMigration } from "./migrations/013-agent-session-title-source.js";
 import { phase1SchemaCanonicalizationMigration } from "./migrations/014-phase1-schema-canonicalization.js";
 import { retentionKindCanonicalizationMigration } from "./migrations/015-retention-kind-canonicalization.js";
+import { repositoryOnboardingMigration } from "./migrations/016_repository_onboarding.js";
 import {
   recoverInterruptedSyncRuns,
   recoverInterruptedSyncStates,
 } from "./sync-service.js";
+import { recoverInterruptedRepositoryOnboardingJobs } from "./repository-onboarding-service.js";
 
 export interface Migration {
   readonly id: string;
@@ -41,6 +43,7 @@ const migrations: readonly Migration[] = [
   agentSessionTitleSourceMigration,
   phase1SchemaCanonicalizationMigration,
   retentionKindCanonicalizationMigration,
+  repositoryOnboardingMigration,
 ];
 
 function orderedMigrations(items: readonly Migration[]): readonly Migration[] {
@@ -96,6 +99,7 @@ export function openDatabase(databasePath: string): Database.Database {
     runMigrations(database);
     recoverInterruptedSyncStates(database);
     recoverInterruptedSyncRuns(database);
+    recoverInterruptedRepositoryOnboardingJobs(database);
     return database;
   } catch (error) {
     database.close();

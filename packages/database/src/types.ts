@@ -74,6 +74,53 @@ export interface RepositoryRecord {
   updatedAt: string;
 }
 
+export type RepositoryOnboardingStatus =
+  | "queued"
+  | "validating"
+  | "cloning"
+  | "registering"
+  | "initializing"
+  | "syncing"
+  | "ready"
+  | "failed"
+  | "cancelled";
+
+/** Sanitized onboarding input; credentials are deliberately not represented. */
+export interface RepositoryOnboardingInput {
+  github: string;
+  cloneUrl: string;
+  key: string;
+  displayName: string;
+  remoteName: string;
+  defaultBranch: string;
+  targetPath: string;
+  worktreeSlots: number;
+}
+
+export interface RepositoryOnboardingError {
+  code: string;
+  message: string;
+  retryable: boolean;
+}
+
+export interface RepositoryOnboardingJob {
+  jobId: string;
+  status: RepositoryOnboardingStatus;
+  step: RepositoryOnboardingStatus;
+  detail: string;
+  progress: number;
+  repositoryId: string | null;
+  githubMetadataPending: boolean;
+  input: RepositoryOnboardingInput;
+  error: RepositoryOnboardingError | null;
+  /** Hash of system.yaml observed when this job was created. */
+  configHash: string;
+  createdAt: string;
+  startedAt: string | null;
+  finishedAt: string | null;
+  updatedAt: string;
+}
+
 export interface RepositorySyncState {
   repositoryId: string;
   entityKind: EntityKind;

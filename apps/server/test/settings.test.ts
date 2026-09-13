@@ -81,7 +81,7 @@ describe("SettingsController", () => {
         vllm: {
           automaticSync: false,
           syncFrequencyMinutes: 60,
-          syncLookbackDays: 30,
+          syncLookbackDays: 7,
           worktrees: { configuredSlots: 1, idleCleanupTtlHours: 24 },
         },
       },
@@ -114,7 +114,7 @@ describe("SettingsController", () => {
     expect(persisted.repositories.vllm).toMatchObject({
       automaticSync: false,
       syncFrequencyMinutes: 60,
-      syncLookbackDays: 30,
+      syncLookbackDays: 7,
       worktrees: { configuredSlots: 1, idleCleanupTtlHours: 24 },
     });
   });
@@ -177,7 +177,7 @@ describe("SettingsController", () => {
       repositoryId: "vllm",
       automaticSync: true,
       syncFrequencyMinutes: 30,
-      syncLookbackDays: 30,
+      syncLookbackDays: 7,
     });
 
     const persisted = JSON.parse(readFileSync(settingsPath, "utf8")) as Record<string, unknown>;
@@ -185,7 +185,7 @@ describe("SettingsController", () => {
     expect(persisted.unrelated).toBeUndefined();
     expect(persisted.agent).toMatchObject({ retentionMinutes: 0 });
     expect(persisted.repositories).toMatchObject({
-      vllm: { automaticSync: true, syncFrequencyMinutes: 30, syncLookbackDays: 30 },
+      vllm: { automaticSync: true, syncFrequencyMinutes: 30, syncLookbackDays: 7 },
     });
     expect(settingsDocumentV2Schema.safeParse(persisted).success).toBe(true);
   });

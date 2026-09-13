@@ -23,10 +23,31 @@ import {
   knowledgeCheckpointSettingsUpdateSchema,
   type KnowledgeCheckpointSettings,
   type KnowledgeCheckpointSettingsUpdate,
+  repositoryOnboardingAcceptedSchema,
+  repositoryOnboardingSchema,
+  type RepositoryOnboarding,
+  type RepositoryOnboardingAccepted,
+  type RepositoryOnboardingCreate,
 } from "@loongboard/contracts";
 import { dispatchAuthRequiredEvent } from "./auth-required-event";
 
-export type { AgentArchiveSettings, AgentArchiveSettingsUpdate, AgentRuntimeSettings, AgentRuntimeSettingsUpdate, CodeBackupSettings, CodeBackupSettingsUpdate, GitHubIntegration, JsonSource, KnowledgeCheckpointSettings, KnowledgeCheckpointSettingsUpdate, RepositorySettings } from "@loongboard/contracts";
+export type { AgentArchiveSettings, AgentArchiveSettingsUpdate, AgentRuntimeSettings, AgentRuntimeSettingsUpdate, CodeBackupSettings, CodeBackupSettingsUpdate, GitHubIntegration, JsonSource, KnowledgeCheckpointSettings, KnowledgeCheckpointSettingsUpdate, RepositorySettings, RepositoryOnboarding, RepositoryOnboardingAccepted, RepositoryOnboardingCreate } from "@loongboard/contracts";
+
+export function createRepositoryOnboarding(input: RepositoryOnboardingCreate): Promise<RepositoryOnboardingAccepted> {
+  return json("/api/repositories", repositoryOnboardingAcceptedSchema, { method: "POST", body: JSON.stringify(input) });
+}
+
+export function fetchRepositoryOnboarding(jobId: string, signal?: AbortSignal): Promise<RepositoryOnboarding> {
+  return json(`/api/repository-onboarding/${encodeURIComponent(jobId)}`, repositoryOnboardingSchema, { signal });
+}
+
+export function retryRepositoryOnboarding(jobId: string): Promise<RepositoryOnboardingAccepted> {
+  return json(`/api/repository-onboarding/${encodeURIComponent(jobId)}/retry`, repositoryOnboardingAcceptedSchema, { method: "POST" });
+}
+
+export function cancelRepositoryOnboarding(jobId: string): Promise<RepositoryOnboarding> {
+  return json(`/api/repository-onboarding/${encodeURIComponent(jobId)}/cancel`, repositoryOnboardingSchema, { method: "POST" });
+}
 
 async function json<T>(path: string, schema: { parse(value: unknown): T }, init: RequestInit = {}): Promise<T> {
   let response: Response;

@@ -43,7 +43,7 @@ export interface AgentRuntimeDefaults {
   idleProcessMinutes: number;
 }
 
-export const MAX_WORKTREE_SLOTS = 8;
+export const MAX_WORKTREE_SLOTS = 16;
 export const AGENT_TITLE_RETRY_COOLDOWN_MS = 2_000;
 
 export type WorktreeSlotCapacityResolver = (

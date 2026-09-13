@@ -31,6 +31,19 @@ export type {
 export { MAX_DIFF_FILE_BYTES } from "./diff-types.js";
 export { GitCommandError, runGitBuffer, runGitOptionalText, runGitText, type RunGitOptions } from "./git-command.js";
 export { GitObjectMissingError, GitPathUnsafeError, LocalGitWorkspace, type LocalGitWorkspaceOptions } from "./local-git-workspace.js";
+export {
+  RepositoryOnboardingError,
+  RepositoryOnboardingGit,
+  type RepositoryCloneResult,
+  type RepositoryCredential,
+  type RepositoryCredentialProvider,
+  type RepositoryEnsureResult,
+  type RepositoryGitRunner,
+  type RepositoryInspection,
+  type RepositoryOnboardingInput,
+  type RepositoryOnboardingOptions,
+  type RepositoryOnboardingErrorCode,
+} from "./repository-onboarding.js";
 export { isGitRepository, pushBackupRef, runCheckpoint } from "./checkpoint.js";
 export type {
   PushBackupRefInput,

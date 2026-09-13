@@ -58,6 +58,7 @@ describe("GhGitHubMetadataProvider", () => {
       repository,
       mode: "bootstrap",
       syncStartedAt,
+      lookbackDays: 30,
     }));
 
     expect(pages).toHaveLength(1);
@@ -86,7 +87,7 @@ describe("GhGitHubMetadataProvider", () => {
     expect(requestBody(http, 0).query).not.toContain("timelineItems");
   });
 
-  it("keeps the 30-day initial PR boundary across all states and stops before the next page", async () => {
+  it("keeps the 7-day initial PR boundary across all states and stops before the next page", async () => {
     const http = createFakeHttp([
       httpJson(pullRequestResponse(
         [
@@ -94,26 +95,26 @@ describe("GhGitHubMetadataProvider", () => {
             id: "PR_OPEN",
             number: 91,
             state: "OPEN",
-            updatedAt: "2024-05-11T00:00:00Z",
+            updatedAt: "2024-06-03T00:00:00Z",
           }),
           pullRequestNode({
             id: "PR_CLOSED",
             number: 92,
             state: "CLOSED",
-            updatedAt: "2024-05-11T00:00:00Z",
+            updatedAt: "2024-06-03T00:00:00Z",
           }),
           pullRequestNode({
             id: "PR_BOUNDARY",
             number: 90,
             state: "MERGED",
-            mergedAt: "2024-05-11T00:00:00Z",
-            updatedAt: "2024-05-11T00:00:00Z",
+            mergedAt: "2024-06-03T00:00:00Z",
+            updatedAt: "2024-06-03T00:00:00Z",
           }),
           pullRequestNode({
             id: "PR_OLD",
             number: 89,
             state: "CLOSED",
-            updatedAt: "2024-05-10T23:59:59Z",
+            updatedAt: "2024-06-02T23:59:59Z",
           }),
         ],
         { hasNextPage: true, endCursor: "initial-pr-next" },
@@ -138,7 +139,7 @@ describe("GhGitHubMetadataProvider", () => {
       number: 90,
       stateRaw: "MERGED",
       status: "merged",
-      updatedAt: "2024-05-11T00:00:00.000Z",
+      updatedAt: "2024-06-03T00:00:00.000Z",
     });
     expect(requestBody(http, 0).variables.states).toEqual(["OPEN", "CLOSED", "MERGED"]);
     expect(http.calls).toHaveLength(1);
@@ -379,7 +380,7 @@ describe("GhGitHubMetadataProvider", () => {
     expect(requestBody(http, 0).query).not.toContain("comments(first");
   });
 
-  it("keeps the 30-day initial Issue boundary across all states and stops before the next page", async () => {
+  it("keeps the 7-day initial Issue boundary across all states and stops before the next page", async () => {
     const http = createFakeHttp([
       httpJson(issueResponse(
         [
@@ -387,22 +388,22 @@ describe("GhGitHubMetadataProvider", () => {
             id: "I_OPEN",
             number: 91,
             state: "OPEN",
-            updatedAt: "2024-05-11T00:00:00Z",
+            updatedAt: "2024-06-03T00:00:00Z",
             closedAt: null,
           }),
           issueNode({
             id: "I_BOUNDARY",
             number: 90,
             state: "CLOSED",
-            updatedAt: "2024-05-11T00:00:00Z",
-            closedAt: "2024-05-11T00:00:00Z",
+            updatedAt: "2024-06-03T00:00:00Z",
+            closedAt: "2024-06-03T00:00:00Z",
           }),
           issueNode({
             id: "I_OLD",
             number: 89,
             state: "CLOSED",
-            updatedAt: "2024-05-10T23:59:59Z",
-            closedAt: "2024-05-10T23:59:59Z",
+            updatedAt: "2024-06-02T23:59:59Z",
+            closedAt: "2024-06-02T23:59:59Z",
           }),
         ],
         { hasNextPage: true, endCursor: "initial-issue-next" },
@@ -423,7 +424,7 @@ describe("GhGitHubMetadataProvider", () => {
       number: 90,
       state: "CLOSED",
       status: "closed",
-      updatedAt: "2024-05-11T00:00:00.000Z",
+      updatedAt: "2024-06-03T00:00:00.000Z",
     });
     expect(requestBody(http, 0).variables.states).toEqual(["OPEN", "CLOSED"]);
     expect(http.calls).toHaveLength(1);

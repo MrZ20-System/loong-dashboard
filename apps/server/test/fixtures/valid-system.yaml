@@ -14,7 +14,7 @@ repositories:
     path: /absolute/vllm
     remote: upstream
     defaultBranch: main
-    worktreeSlots: 3
+    worktreeSlots: 10
 knowledge:
   path: ./knowledge
   inbox: inbox

@@ -56,7 +56,7 @@ export interface PullRequestSyncInput {
   readonly watermarkUpdatedAt?: Date | string | null;
   /** Captured sync-attempt time. Defaults to the first iterator turn. */
   readonly syncStartedAt?: Date | string;
-  /** Initial/bootstrap sync window measured by updatedAt. Defaults to 30 days. */
+  /** Initial/bootstrap sync window measured by updatedAt. Defaults to 7 days. */
   readonly lookbackDays?: number;
   readonly cursor?: string | null;
 }
@@ -68,7 +68,7 @@ export interface IssueSyncInput {
   readonly watermarkUpdatedAt?: Date | string | null;
   /** Captured sync-attempt time. Defaults to the first iterator turn. */
   readonly syncStartedAt?: Date | string;
-  /** Initial/bootstrap sync window measured by updatedAt. Defaults to 30 days. */
+  /** Initial/bootstrap sync window measured by updatedAt. Defaults to 7 days. */
   readonly lookbackDays?: number;
   readonly cursor?: string | null;
 }

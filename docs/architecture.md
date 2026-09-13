@@ -43,7 +43,7 @@ flowchart LR
 
 生产流程先由根脚本执行 `pnpm build`，再由 `pnpm start` 使用 `node --conditions=production apps/server/dist/start.js` 启动。workspace package 的 `production` export 指向各自 `dist/index.js`，开发和测试仍通过 `types`/`import` 使用 `src`。编译后的 start 入口按自身位置解析 `apps/web/dist`，因此不依赖当前工作目录。只有 production start 传入 static root 时，Fastify 才注册静态文件和 React deep-link fallback；`/api/*` 未匹配路由保持 JSON 404。
 
-代码和运行数据分离：代码、构建产物及依赖属于应用仓库或镜像；SQLite、Agent session、Knowledge、worktrees、Settings 和凭证路径由 `system.yaml` 指定。YAML 相对路径相对配置文件目录解析。Docker 将宿主机 data root 挂载为 `/data`，并通过 `LOONGBOARD_SERVER_HOST`/`LOONGBOARD_SERVER_PORT` 覆盖容器监听地址/端口，不改变这些数据路径。
+代码和运行数据分离：代码、构建产物及依赖属于应用仓库或镜像；SQLite、managed repositories、Agent session、Knowledge、worktrees、Settings 和凭证路径由 `system.yaml` 指定。YAML 相对路径相对配置文件目录解析。Docker 将宿主机 data root 挂载为 `/data`，并通过 `LOONGBOARD_SERVER_HOST`/`LOONGBOARD_SERVER_PORT` 覆盖容器监听地址/端口，不改变这些数据路径。`system.yaml.repositories` 是 repository 定义的唯一 authority；Settings onboarding 只通过 Server 原子更新这份 YAML，SQLite 仅保存 projection 与 durable job state。
 
 聊天和调度器注入同一个 `WorkspaceRunCoordinator`。Repository metadata 的 admission 还由 [sync-coordinator.ts](../apps/server/src/sync-coordinator.ts) 统一协调：同一仓库的 foreground sync / `fetch_pr` 优先于 History；metadata maintenance 以 batch 为边界让出 admission，不能在长批处理中饿死前台请求。后台 worker 不应另建一套 repository lock。
 

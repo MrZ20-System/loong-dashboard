@@ -158,7 +158,7 @@ describe("dynamic worktree capacity", () => {
       workspaceRuns: new WorkspaceRunCoordinator(),
       agentSessionsPath: join(fixture.root, "agent-sessions"),
       worktreesPath: join(fixture.root, "worktrees"),
-      worktreeSlotCapacity: () => 9,
+      worktreeSlotCapacity: () => 17,
       defaults: {
         provider: "deepseek-official",
         model: "deepseek-v4-flash",
@@ -172,7 +172,7 @@ describe("dynamic worktree capacity", () => {
       controller.ensureSession({
         scope: { kind: "pr", repositoryId: "alpha", prNumber: 1, targetSha: fixture.sha },
       }),
-    ).rejects.toThrow(/expected an integer from 1 to 8/);
+    ).rejects.toThrow(/expected an integer from 1 to 16/);
     expect(listWorktreeSlots(fixture.database, "alpha")).toEqual([]);
   });
 });

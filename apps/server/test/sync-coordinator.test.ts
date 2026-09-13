@@ -556,6 +556,45 @@ describe("RepositorySyncCoordinator", () => {
     await coordinator.close();
   });
 
+  it("does not resume history for a repository whose checkout is unavailable", async () => {
+    const database = fixture();
+    updateRepositoryHistoryState(database, "vllm", "pull_request", {
+      enabled: true,
+      status: "idle",
+      targetDate: "2026-07-01",
+    });
+    updateRepositoryHistoryState(database, "vllm", "issue", {
+      enabled: true,
+      status: "idle",
+      targetDate: "2026-07-01",
+    });
+    const captures: { pull: number; issue: number } = { pull: 0, issue: 0 };
+    const base = providerFor({ pull: undefined, issue: undefined });
+    const provider: GitHubMetadataProvider = {
+      ...base,
+      async *fetchPullRequestHistory() {
+        captures.pull += 1;
+        yield { items: [], pageInfo: { hasNextPage: false, endCursor: null }, rateLimit: { cost: 1, remaining: 4999, resetAt: "2026-09-10T00:00:00.000Z" } };
+      },
+      async *fetchIssueHistory() {
+        captures.issue += 1;
+        yield { items: [], pageInfo: { hasNextPage: false, endCursor: null }, rateLimit: { cost: 1, remaining: 4999, resetAt: "2026-09-10T00:00:00.000Z" } };
+      },
+    };
+    const coordinator = new RepositorySyncCoordinator({
+      database,
+      provider,
+      repositoryAvailability: () => false,
+    });
+
+    coordinator.resumeEnabledHistories();
+    await coordinator.waitForIdle();
+
+    expect(captures).toEqual({ pull: 0, issue: 0 });
+    expect(listSyncRuns(database, "vllm", 10)).toEqual([]);
+    await coordinator.close();
+  });
+
   it("fetches and enriches only one PR without changing forward watermarks", async () => {
     const database = fixture();
     const captures: {

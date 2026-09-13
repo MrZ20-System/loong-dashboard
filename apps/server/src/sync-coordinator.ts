@@ -85,6 +85,8 @@ export interface RepositorySyncCoordinatorOptions {
   calendarTimeZone?: string;
   /** Maximum provider pages admitted by one history run. */
   historyPageBudget?: number;
+  /** Startup gate for configured repositories awaiting checkout onboarding. */
+  repositoryAvailability?: (repository: RepositoryRecord) => boolean;
   now?: () => Date;
   logger?: SyncCoordinatorLogger;
   enricher?: PullRequestFileEnricher;
@@ -208,6 +210,7 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
     | undefined;
   private readonly calendarTimeZone: string;
   private readonly historyPageBudget: number;
+  private readonly repositoryAvailability: ((repository: RepositoryRecord) => boolean) | undefined;
   private readonly now: () => Date;
   private readonly logger: SyncCoordinatorLogger;
   private readonly enricher: PullRequestFileEnricher | undefined;
@@ -248,6 +251,7 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
     this.lookbackDaysForRepository = options.lookbackDaysForRepository;
     this.calendarTimeZone = options.calendarTimeZone ?? DEFAULT_CALENDAR_TIME_ZONE;
     this.historyPageBudget = options.historyPageBudget ?? DEFAULT_HISTORY_PAGE_BUDGET;
+    this.repositoryAvailability = options.repositoryAvailability;
     if (
       !Number.isInteger(this.historyPageBudget) ||
       this.historyPageBudget < 1 ||
@@ -474,6 +478,9 @@ export class RepositorySyncCoordinator implements SyncCoordinator {
   resumeEnabledHistories(): void {
     if (this.closed) return;
     for (const repository of listRepositories(this.database)) {
+      if (this.repositoryAvailability !== undefined && !this.repositoryAvailability(repository)) {
+        continue;
+      }
       const pullRequestState = getRepositoryHistoryState(
         this.database,
         repository.id,

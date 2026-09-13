@@ -23,7 +23,7 @@ import type {
 
 export const PULL_REQUEST_PAGE_SIZE = 100;
 export const WATERMARK_OVERLAP_MS = 2 * 60 * 1000;
-export const DEFAULT_LOOKBACK_DAYS = 30;
+export const DEFAULT_LOOKBACK_DAYS = 7;
 
 const dateTimeSchema = z.string().refine(isDateTime, {
   message: "must be a valid ISO date-time",

@@ -6,7 +6,8 @@
 
 | 表 | 职责 | 服务源码 |
 | --- | --- | --- |
-| repositories | 配置仓库的 SQLite 投影，key 为稳定 id，移除配置后禁用并保留历史 | [repository-service](../packages/database/src/repository-service.ts) |
+| repositories | `system.yaml.repositories` 的 SQLite 投影，key 为稳定 id，移除配置后禁用并保留历史 | [repository-service](../packages/database/src/repository-service.ts) |
+| repository_onboarding_jobs | 仓库验证、clone、注册、初始化和首次同步的持久异步状态；保存规范化非秘密输入与可重试错误，不保存凭证 | [repository-onboarding-service](../packages/database/src/repository-onboarding-service.ts) |
 | repository_sync_state | PR/Issue 分流状态、水位和错误 | [sync-service](../packages/database/src/sync-service.ts) |
 | repository_sync_runs / repository_sync_run_streams / repository_sync_run_targets | 持久 sync run、实体流进度、forward / fetch_pr 当轮 enrichment 目标和错误/水位前后值 | [sync-service](../packages/database/src/sync-service.ts) |
 | repository_history_state | 每实体 history cursor、更新时间恢复 anchor、目标日期、最老覆盖边界和运行状态 | [sync-service](../packages/database/src/sync-service.ts) |
@@ -25,7 +26,7 @@ Repository summary 的 list/get projection 同时返回本地 `pullRequestCount`
 
 ## 当前迁移序列
 
-[migrations](../packages/database/src/migrations) 中依次包含：001 初始模型、002 列表索引、003 Issue 状态约束、004 Domain 分类、005 Issue 详情缓存、006 Agent 来源元数据与统一 Scheduler 字段、007 持久 repository sync/history、008 曾引入的 PR lifecycle 数据、009 PR 查询模式索引、010 删除已废弃的 lifecycle/逐日 coverage 并加入 Merged partial index、011 持久 History rate-limit recovery、012 metadata retention 字段和 maintenance runs、013 Agent session title source、014 Scheduler task/run、Agent session `origin_kind` 与 Worktree slot 的 canonical schema、015 retention kind canonicalization。007–010 可能已经存在于用户数据库，因此保留为升级历史；008/010 的 Daily/lifecycle/逐日 projection 只属于升级历史，当前 schema 不再包含 Daily 体系。011 的 `resume_after` 是 History 的下次安全 admission 时间；012 的 `archived_at`/`payload_pruned_at` 是可逆 metadata 状态；013 将升级前已有 title 标为 `manual`；014 将旧 Scheduler/session/worktree 形状一次性收敛到当前模型，并对无法安全保留的 repository 绑定明确失败；015 将 `repository_maintenance_runs.kind` 收敛为 `archive` 与 `purge_runtime_history`，旧 `prune` 映射为 `archive`，旧 `optimize` 保留为 `interrupted archive` 并在 selector/error 中写入迁移说明，同时保留时间、计数、FK 和索引。新增 schema 变化必须添加新迁移，并同步对应 typed service，不能改写已执行迁移。
+[migrations](../packages/database/src/migrations) 中依次包含：001 初始模型、002 列表索引、003 Issue 状态约束、004 Domain 分类、005 Issue 详情缓存、006 Agent 来源元数据与统一 Scheduler 字段、007 持久 repository sync/history、008 曾引入的 PR lifecycle 数据、009 PR 查询模式索引、010 删除已废弃的 lifecycle/逐日 coverage 并加入 Merged partial index、011 持久 History rate-limit recovery、012 metadata retention 字段和 maintenance runs、013 Agent session title source、014 Scheduler task/run、Agent session `origin_kind` 与 Worktree slot 的 canonical schema、015 retention kind canonicalization、016 repository onboarding jobs。007–010 可能已经存在于用户数据库，因此保留为升级历史；008/010 的 Daily/lifecycle/逐日 projection 只属于升级历史，当前 schema 不再包含 Daily 体系。011 的 `resume_after` 是 History 的下次安全 admission 时间；012 的 `archived_at`/`payload_pruned_at` 是可逆 metadata 状态；013 将升级前已有 title 标为 `manual`；014 将旧 Scheduler/session/worktree 形状一次性收敛到当前模型，并对无法安全保留的 repository 绑定明确失败；015 收敛 retention kind；016 保存接入步骤、非秘密规范化输入与重试信息。新增 schema 变化必须添加新迁移，并同步对应 typed service，不能改写已执行迁移。
 
 Domain 的用户源文件位于 system workspace 的 `domains/<repository-key>.json`，由 [DomainFileService](../apps/server/src/domain-file.ts) 负责安全路径、机械校验、pretty format 和外部编辑吸收；`domain_rules` 与 `pull_request_domains` 只是分类查询投影。文件解析失败时源文本仍可读，最近一次有效投影继续提供分类，修复后再投影并触发重分类。文件版本的内容和 hash 保存在 `runtime.statePath/domain-file-versions/`，它是短期恢复记录，不替代 JSON 源文件或 Git。
 

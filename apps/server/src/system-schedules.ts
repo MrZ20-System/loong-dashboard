@@ -108,6 +108,8 @@ export function createSystemScheduleProjector(options: {
   database: DatabaseClient;
   scheduler: SchedulerRefresher;
   config: SystemConfig;
+  /** Optional startup gate for configured repositories awaiting onboarding. */
+  repositoryAvailability?: (path: string) => boolean;
 }): SystemScheduleProjector {
   const projectRepository = (
     repository: ScheduleRepository,
@@ -116,6 +118,7 @@ export function createSystemScheduleProjector(options: {
     const repositoryId = repository.key;
     const repositoryName = "displayName" in repository ? repository.displayName : repository.name;
     const repositoryPath = "localPath" in repository ? repository.localPath : repository.path;
+    const checkoutAvailable = options.repositoryAvailability?.(repositoryPath) ?? true;
     const syncTask = projectRepositorySync(repository, settings);
     projectMetadataMaintenance(repository, settings.retention);
     projectWorktreeCleanup(repository);
@@ -148,13 +151,13 @@ export function createSystemScheduleProjector(options: {
             kind: "system",
             action: "repository.sync",
             repositoryId,
-            enabled: policy.automaticSync,
+            enabled: policy.automaticSync && checkoutAvailable,
           })
         : updateScheduledTask(options.database, existing.id, {
             cronExpression,
             workspacePath: repositoryPath,
             timezone: options.config.timezone,
-            enabled: policy.automaticSync,
+            enabled: policy.automaticSync && checkoutAvailable,
             kind: "system",
             action: "repository.sync",
             repositoryId,
@@ -191,7 +194,7 @@ export function createSystemScheduleProjector(options: {
             repositoryId,
             // Runtime history cleanup remains enabled even when metadata
             // archive policy is disabled; the action checks retention at run time.
-            enabled: true,
+            enabled: checkoutAvailable,
           })
         : updateScheduledTask(options.database, existing.id, {
             name: `Maintain metadata ${repositoryName}`,
@@ -205,7 +208,7 @@ export function createSystemScheduleProjector(options: {
             kind: "system",
             action: "repository.metadata-maintenance",
             repositoryId,
-            enabled: true,
+            enabled: checkoutAvailable,
           });
       options.scheduler.refresh(task.id);
       return getScheduledTask(options.database, task.id) ?? task;
@@ -234,7 +237,7 @@ export function createSystemScheduleProjector(options: {
             kind: "system",
             action: "repository.worktrees.cleanup",
             repositoryId,
-            enabled: true,
+            enabled: checkoutAvailable,
           })
         : updateScheduledTask(options.database, existing.id, {
             // Worktree maintenance is a fixed low-frequency system schedule.
@@ -249,7 +252,7 @@ export function createSystemScheduleProjector(options: {
             kind: "system",
             action: "repository.worktrees.cleanup",
             repositoryId,
-            enabled: true,
+            enabled: checkoutAvailable,
           });
       options.scheduler.refresh(task.id);
       return getScheduledTask(options.database, task.id) ?? task;

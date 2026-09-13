@@ -20,6 +20,10 @@ export class GitCommandError extends Error {
 export interface RunGitOptions {
   readonly timeoutMs?: number;
   readonly maxBufferBytes?: number;
+  /** Forward cancellation to the underlying Git process. */
+  readonly signal?: AbortSignal;
+  /** Environment additions/replacements for the Git process. */
+  readonly env?: NodeJS.ProcessEnv;
 }
 
 export async function runGitText(
@@ -69,6 +73,8 @@ async function execGit(
     reject: false,
     timeout: options.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS,
     maxBuffer: options.maxBufferBytes ?? DEFAULT_MAX_BUFFER_BYTES,
+    ...(options.signal === undefined ? {} : { cancelSignal: options.signal }),
+    ...(options.env === undefined ? {} : { env: { ...process.env, ...options.env } }),
     encoding,
     // `git show` content is byte-exact: do not let execa trim the final
     // newline of blob output or binary captures.

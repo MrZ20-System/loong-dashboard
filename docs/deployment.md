@@ -43,9 +43,9 @@ docker compose up -d --build
 - 容器使用 `restart: unless-stopped`。
 - healthcheck 使用镜像内 Node 请求 `http://127.0.0.1:4174/api/health/live`，不依赖 curl/wget。
 
-容器内 YAML 的相对路径相对 `/data`，所以 `./knowledge`、`./.loong`、`./.worktrees` 分别落在 `/data/knowledge`、`/data/.loong`、`/data/.worktrees`。首次启动前必须确认 `/data/system.yaml` 存在，并且其中配置的 repository path 对容器可访问。
+容器内 YAML 的相对路径相对 `/data`，所以 `./knowledge`、`./.loong`、`./repositories`、`./.worktrees` 分别落在 `/data/knowledge`、`/data/.loong`、`/data/repositories`、`/data/.worktrees`。示例配置默认接入 `vllm-project/vllm` 与 `vllm-project/vllm-ascend`，每个仓库默认 10 个 Worktree slots；缺失的受管 checkout 会在启动后通过持久异步任务初始化，首次 metadata sync 默认回看 7 天。首次启动前必须确认 `/data/system.yaml` 存在且整个 `/data` 对容器可写。
 
-Native 环境中父目录 `system.yaml` 的 `./vllm`、`./vllm-ascend` 等 repository path 会解析到宿主机 system workspace；容器只挂载 `/data`，不会自动看到这些宿主机路径。不要把 native 配置原样用于 Compose，除非 repository checkout 已放入 data root，或在本地 Compose override 中为每个 checkout 显式增加可访问的 mount，并同步修改容器内路径。
+Native 环境中父目录 `system.yaml` 的 `./vllm`、`./vllm-ascend` 等 repository path 会解析到宿主机 system workspace；容器只挂载 `/data`，不会自动看到这些宿主机路径。容器部署应使用 `./repositories/<key>` 或其他位于 `/data` 下的路径；Settings 新接入的仓库始终位于 `runtime.repositoriesPath`。不要把指向宿主机外部 checkout 的 native 配置原样用于 Compose。
 
 当前 Dockerfile 和 Compose 没有声明 `USER`、`user`、`PUID` 或 `PGID`；镜像不支持通过 PUID/PGID 改变运行用户，设置这些变量本身也不会改变权限。`/data` bind mount 必须对容器实际用户可写；如果通过本地 override 使用非 root 用户，需自行配置用户映射和目录权限，这不属于当前默认部署的保证范围。
 

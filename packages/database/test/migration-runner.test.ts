@@ -35,6 +35,7 @@ const CORE_TABLES = [
   "repositories",
   "repository_history_state",
   "repository_maintenance_runs",
+  "repository_onboarding_jobs",
   "repository_sync_run_streams",
   "repository_sync_run_targets",
   "repository_sync_runs",
@@ -192,6 +193,7 @@ describe("database migrations", () => {
         { id: "013_agent_session_title_source" },
         { id: "014_phase1_schema_canonicalization" },
         { id: "015_retention_kind_canonicalization" },
+        { id: "016_repository_onboarding" },
       ]);
     } finally {
       database.close();
@@ -228,6 +230,7 @@ describe("database migrations", () => {
         expect.objectContaining({ id: "013_agent_session_title_source" }),
         expect.objectContaining({ id: "014_phase1_schema_canonicalization" }),
         expect.objectContaining({ id: "015_retention_kind_canonicalization" }),
+        expect.objectContaining({ id: "016_repository_onboarding" }),
       ]);
       expect(
         database

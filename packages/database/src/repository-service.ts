@@ -104,12 +104,13 @@ export function reconcileRepositories(
   const seenGithub = new Set<string>();
 
   for (const repository of configuredRepositories) {
-    if (seenKeys.has(repository.key)) {
+    const normalizedKey = repository.key.toLocaleLowerCase("en-US");
+    if (seenKeys.has(normalizedKey)) {
       throw new Error(`Duplicate configured repository key: ${repository.key}`);
     }
-    seenKeys.add(repository.key);
+    seenKeys.add(normalizedKey);
     const [owner, name] = splitGithubRepository(repository.github);
-    const githubKey = `${owner}/${name}`;
+    const githubKey = `${owner}/${name}`.toLocaleLowerCase("en-US");
     if (seenGithub.has(githubKey)) {
       throw new Error(`Duplicate configured GitHub repository: ${githubKey}`);
     }
@@ -179,7 +180,7 @@ export function reconcileRepositories(
       .prepare("SELECT id FROM repositories WHERE enabled = 1")
       .all() as Array<{ id: string }>;
     for (const row of existingRows) {
-      if (!seenKeys.has(row.id)) disable.run(timestamp, row.id);
+      if (!seenKeys.has(row.id.toLocaleLowerCase("en-US"))) disable.run(timestamp, row.id);
     }
   })();
 

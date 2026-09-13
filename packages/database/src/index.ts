@@ -14,6 +14,22 @@ export {
   RepositoryNotFoundError,
 } from "./repository-service.js";
 export {
+  cancelRepositoryOnboardingJob,
+  createRepositoryOnboardingJob,
+  getRepositoryOnboardingJob,
+  listRepositoryOnboardingJobs,
+  recoverInterruptedRepositoryOnboardingJobs,
+  requireRepositoryOnboardingJob,
+  RepositoryOnboardingNotFoundError,
+  RepositoryOnboardingTransitionError,
+  retryRepositoryOnboardingJob,
+  updateRepositoryOnboardingJob,
+} from "./repository-onboarding-service.js";
+export type {
+  CreateRepositoryOnboardingJobInput,
+  UpdateRepositoryOnboardingJobInput,
+} from "./repository-onboarding-service.js";
+export {
   completeSyncStream,
   completeSyncRunStream,
   createSyncRun,
@@ -225,6 +241,10 @@ export type {
   PullRequestMetadata,
   PullRequestStatus,
   RepositoryRecord,
+  RepositoryOnboardingError,
+  RepositoryOnboardingInput,
+  RepositoryOnboardingJob,
+  RepositoryOnboardingStatus,
   RepositorySyncState,
   RepositorySyncStatus,
   RestoreResult,

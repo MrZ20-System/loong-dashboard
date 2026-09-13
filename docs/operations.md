@@ -24,10 +24,12 @@ pnpm dev
 | version / timezone | 当前 version=1；日期活动的 IANA 时区 |
 | repositories[] | key、name、GitHub owner/repo、本地 path、remote、defaultBranch、worktreeSlots（Worktree capacity fallback） |
 | knowledge | path、相对 inbox、historyLimit；可选 checkpoint 配置见 Knowledge 章节 |
-| runtime | statePath、worktreesPath、serverHost、serverPort；`LOONGBOARD_SERVER_HOST`/`LOONGBOARD_SERVER_PORT` 可在进程环境中覆盖监听值 |
+| runtime | statePath、repositoriesPath、worktreesPath、serverHost、serverPort；`repositoriesPath` 是页面接入仓库的受管 clone 根目录；`LOONGBOARD_SERVER_HOST`/`LOONGBOARD_SERVER_PORT` 可在进程环境中覆盖监听值 |
 | agent | defaultProvider、defaultModel、defaultReasoningEffort、idleProcessMinutes |
 
-仓库配置是唯一来源，启动时投影到 SQLite；不提供仓库增删 API。配置拒绝重复 key/GitHub slug、无效时区和越界 inbox。修改环境变量/配置后重启服务。
+`system.yaml.repositories` 是仓库定义的唯一持久来源，启动时投影到 SQLite。Settings → Repositories 可提交 GitHub HTTPS/SSH 地址或 `owner/repo`；Server 在 `runtime.repositoriesPath` 下安全 clone 或复用已验证 checkout，并通过原子写入把定义追加到 `system.yaml`。SQLite 只保存投影和可恢复的接入任务状态，不是第二份仓库注册表。配置拒绝重复 key/GitHub slug、无效时区、越界 inbox 和逃出受管根目录的路径。
+
+仓库接入是异步流程：验证、clone/复用、YAML 注册、SQLite 投影、Settings/Domain/Scheduler 初始化及首次 metadata sync 都有持久状态。失败或取消不会被标为 ready，可从页面重试；服务重启会恢复 queued 任务。已有有效 checkout 不会覆盖，目标目录、父目录或符号链接越界时 fail closed。新仓库默认 10 个 Worktree slots，允许范围为 1–16；首次 metadata sync 默认回看 7 天，已有显式 30 天设置继续保留。
 
 `agent.idleProcessMinutes` 缺省为 120，`0` 表示 Never。该时间从 turn 完成后开始计算，不限制正在执行的 Agent 长任务；已有显式配置继续生效。`system.yaml` 的 Agent 字段是安装级 fallback；服务启动后会把 `settings.json` 中保存的 default provider/model/reasoning 和 retention overrides 应用到 Agent runtime。Scheduled Task 自己保存的模型配置不受该默认值 hydration 覆盖。
 
@@ -56,6 +58,7 @@ Settings → Integrations → GitHub 是 GitHub 凭证的唯一控制入口。�
 | knowledge.path | Markdown 和知识 Git，长期保留 |
 | runtime.statePath/loongboard.sqlite3 | 索引、消息、短期版本、任务状态，需备份 |
 | runtime.statePath/agent-sessions | 每会话 DSH home，随会话保留；不作为 Agent Archive 的输入目录 |
+| runtime.repositoriesPath | Settings 接入和默认容器仓库的持久 checkout；不能与 state/worktree/Knowledge 根目录混用 |
 | runtime.worktreesPath | PR slot 缓存；清理前由 WorktreeJanitor 确认没有 busy/dirty 内容，Git status 失败时 fail closed |
 | system workspace/agent-history | Agent Archive 默认目录；Docker 中对应 `/data/agent-history`，用户保存的自定义 archive path 优先 |
 | system workspace/settings.json | 控制中心非秘密设置；严格 Settings V2 policy。缺失文件或 V1 文档会迁移为完整 V2；V2 的未知、缺失或非法字段会拒绝并保留原文件，V1 迁移可能丢弃 legacy 未知字段 |
@@ -67,7 +70,7 @@ SIGINT/SIGTERM 触发服务的有序退出。服务启动会把数据库中上�
 
 ### GitHub history 与 Merged 验收边界
 
-数据库启动会执行有序迁移至 015；010 删除旧 Daily/lifecycle/逐日 coverage 表并建立 Merged partial index，011 持久化 History rate-limit recovery，012 增加 metadata retention/maintenance runs，013 增加 Agent title source，014 canonicalize Scheduler task/run、Agent session origin_kind 与 Worktree slot，015 将 `repository_maintenance_runs.kind` 收敛为 `archive` 与 `purge_runtime_history`。迁移 015 会把旧 `prune` 行转为 `archive` 并保留 selector 中的 `prune` 布尔值；旧 `optimize` 行不删除，保留为 `interrupted` 的 `archive`，并在 selector/error 写入迁移说明，同时保留原计数和时间字段。History 保留每个实体的 cursor、recovery anchor、target date、最老 metadata 覆盖边界和 `resume_after`。非空 cursor 续跑不会重新套用 anchor cutoff，只有明确的 GitHub invalid/expired cursor 才进行一次 anchor-overlap 恢复；未知 GraphQL 错误应使本次 history 失败并保留原状态。History 是低优先级 admission，forward、`fetch_pr` 和 metadata maintenance 的 batch boundary 必须保留可用容量。
+数据库启动会执行有序迁移至 016；010 删除旧 Daily/lifecycle/逐日 coverage 表并建立 Merged partial index，011 持久化 History rate-limit recovery，012 增加 metadata retention/maintenance runs，013 增加 Agent title source，014 canonicalize Scheduler task/run、Agent session origin_kind 与 Worktree slot，015 将 `repository_maintenance_runs.kind` 收敛为 `archive` 与 `purge_runtime_history`，016 增加持久 repository onboarding jobs。迁移 015 会把旧 `prune` 行转为 `archive` 并保留 selector 中的 `prune` 布尔值；旧 `optimize` 行不删除，保留为 `interrupted` 的 `archive`，并在 selector/error 写入迁移说明，同时保留原计数和时间字段。History 保留每个实体的 cursor、recovery anchor、target date、最老 metadata 覆盖边界和 `resume_after`。非空 cursor 续跑不会重新套用 anchor cutoff，只有明确的 GitHub invalid/expired cursor 才进行一次 anchor-overlap 恢复；未知 GraphQL 错误应使本次 history 失败并保留原状态。History 是低优先级 admission，forward、`fetch_pr` 和 metadata maintenance 的 batch boundary 必须保留可用容量。
 
 单个 History run 仍有页预算并可显示 `partial`；这不是 2000 条总上限。只要 enabled、cursor 未结束且未触发 pause/error/rate-limit floor，Coordinator 会以新 run 继续，重启后也从持久 cursor/anchor 恢复。History 只扩展当前 metadata coverage，不生成额外历史 projection，也不对整批历史 PR 立即补 changed files。
 
@@ -85,6 +88,7 @@ SIGINT/SIGTERM 触发服务的有序退出。服务启动会把数据库中上�
 | Knowledge 内容不一致 | 磁盘文件、watcher、id/hash、版本记录 |
 | Domain 分类不一致 | `domains/*.json`、source 的 `parseError`、`domain_rules` 投影和重分类状态；非法 JSON 不会覆盖上一次有效投影 |
 | GitHub 显示未配置 | Settings 的 credential source、`gh auth status`、环境变量和私有 credential 文件权限；不要打印 token |
+| 仓库接入失败或停住 | 查看 Settings → Repositories 的接入步骤；核对 GitHub 凭证、managed path、目标目录和持久 onboarding job；不要手工覆盖已有 checkout |
 | Code backup 不可用 | 先看 Settings API 的 runtime `available` 和只读 `repositoryPath`；镜像 checkout 没有 `.git` 时保持自动/手工 Code backup 关闭，使用页面提示，不要把它写入 settings |
 | 计划未执行 | enabled、timezone、nextRunAt、workspace busy、服务是否在线 |
 

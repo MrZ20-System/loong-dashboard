@@ -127,7 +127,7 @@ export function createRuntimeSettingsAdapters(
     const settings = options.getSettingsController()?.repositorySettingsSync(repositoryId);
     return {
       configuredSlots:
-        settings?.worktrees.configuredSlots ?? Math.min(8, Math.max(1, fallbackSlots)),
+        settings?.worktrees.configuredSlots ?? Math.min(16, Math.max(1, fallbackSlots)),
       idleCleanupTtlMs:
         (settings?.worktrees.idleCleanupTtlHours ?? 24) * 60 * 60 * 1_000,
     };

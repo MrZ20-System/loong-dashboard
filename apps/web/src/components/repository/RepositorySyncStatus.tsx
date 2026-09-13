@@ -207,7 +207,7 @@ export function RepositorySyncStatus({ repositoryId }: { repositoryId: string })
     queryKey: ["repository-settings", repositoryId],
     queryFn: () => fetchRepositorySettings(repositoryId),
   });
-  const lookbackDays = settings.data?.syncLookbackDays ?? 30;
+  const lookbackDays = settings.data?.syncLookbackDays ?? 7;
   return (
     <div className="topbar-sync" aria-label={t(repositoryMessages.syncStatus, { repositoryId })}>
       <span className="status-dot" aria-hidden="true" />

@@ -6,7 +6,8 @@
 | --- | --- | --- |
 | `/health` | GET，精确返回 `{ "status": "ok" }` | [health](../packages/contracts/src/health.ts) / [app](../apps/server/src/app.ts) |
 | `/auth/status`、`/auth/unlock`、`/auth/password`、`/auth/disable`、`/auth/logout` | GET/POST 可选本地密码锁；仅 status/unlock/health 是公共 API，其余 API 在锁启用时需要 HttpOnly session cookie | [auth](../packages/contracts/src/auth.ts) / [auth route](../apps/server/src/routes/auth.ts) |
-| `/repositories` | GET 配置仓库投影 | [repositories](../packages/contracts/src/repositories.ts) / [repositories route](../apps/server/src/routes/repositories.ts) |
+| `/repositories` | GET 配置仓库投影；POST 创建持久异步仓库接入任务并以 202 返回 job id | [repositories](../packages/contracts/src/repositories.ts)、[repository onboarding](../packages/contracts/src/repository-onboarding.ts) / [repositories route](../apps/server/src/routes/repositories.ts) |
+| `/repository-onboarding/:jobId` | GET 查询验证、clone、注册、初始化、同步或终态进度；POST `retry` / `cancel` 重试或取消 | repository onboarding / repositories route |
 | `/repositories/:id/sync`、`/sync-status` | POST 接受 forward/history/fetch_pr 同步并返回 `syncRunId`，GET 当前状态；HTTP trigger 固定为 `api` | [sync](../packages/contracts/src/sync.ts) / [sync route](../apps/server/src/routes/sync.ts) |
 | `/repositories/:id/sync-runs`、`/sync-runs/:runId` | GET 最近 run 或具体 run（含 PR/Issue stream、计数、水位、错误） | sync / [sync route](../apps/server/src/routes/sync.ts) |
 | `/repositories/:id/sync-history` | GET metadata history target、cursor/anchor 与最老覆盖边界；PUT 设置目标日期或 enable；POST `/pause`、`/continue` 控制 batch admission | sync / [sync route](../apps/server/src/routes/sync.ts) |
@@ -33,7 +34,7 @@ Maintenance run kind 是 canonical 的 `archive` 或 `purge_runtime_history`；`
 
 | 路径组 | 操作 |
 | --- | --- |
-| `/repositories/:id/settings` | GET/PUT 仓库同步、retention policy 与 Worktrees operational policy；retention 默认 automatic OFF/7 天，`configuredSlots` 为 1-8，`idleCleanupTtlHours` 为正数，响应包含 configured/physical/active/idle/dirty/pending retirement |
+| `/repositories/:id/settings` | GET/PUT 仓库同步、retention policy 与 Worktrees operational policy；retention 默认 automatic OFF/7 天，`configuredSlots` 为 1-16（新仓库默认 10），`idleCleanupTtlHours` 为正数，响应包含 configured/physical/active/idle/dirty/pending retirement |
 | `/repositories/:id/settings/worktrees/cleanup` | POST 显式清理 unused Worktrees；busy、dirty 和 Git status 失败的 slot fail closed |
 | `/settings/integrations/github`、`/verify` | GET 摘要、PUT/DELETE token、POST 验证；不回传 secret |
 | `/settings/agent`、`/providers` | GET runtime 能力与默认值、PUT 默认值/私有 provider secret |

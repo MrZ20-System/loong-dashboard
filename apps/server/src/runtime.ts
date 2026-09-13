@@ -16,7 +16,11 @@ import {
   type GhGitHubMetadataProviderOptions,
   type GitHubMetadataProvider,
 } from "@loongboard/github";
-import { LocalGitWorkspace } from "@loongboard/git-workspace";
+import {
+  isGitRepository,
+  LocalGitWorkspace,
+  RepositoryOnboardingGit,
+} from "@loongboard/git-workspace";
 import type { FastifyInstance } from "fastify";
 
 import {
@@ -52,8 +56,8 @@ import { AuthService } from "./auth.js";
 import { MetadataMaintenanceService } from "./metadata-maintenance.js";
 import { createSystemActionExecutor } from "./system-actions.js";
 import { createSystemScheduleProjector, SYSTEM_TASK_IDS } from "./system-schedules.js";
-import { isGitRepository } from "@loongboard/git-workspace";
 import { createRuntimeSettingsAdapters } from "./runtime-settings-adapters.js";
+import { RepositoryOnboardingService } from "./repository-onboarding.js";
 
 export interface CreateServerRuntimeOptions {
   /** Use a prevalidated config in tests or an embedding process. */
@@ -86,6 +90,7 @@ export interface ServerRuntime {
   readonly settings: SettingsController;
   readonly auth: AuthService;
   readonly metadataMaintenance: MetadataMaintenanceService;
+  readonly repositoryOnboarding: RepositoryOnboardingService;
 }
 
 /** Resolve the one SQLite path owned by the Server runtime. */
@@ -156,8 +161,9 @@ export function createServerRuntime(
       now: options.now,
       logger: options.coordinatorLogger,
       enricher,
+      repositoryAvailability: (repository) => isGitRepository(repository.localPath),
       lookbackDaysForRepository: (repositoryId) =>
-        settingsController?.repositorySettingsSync(repositoryId).syncLookbackDays ?? 30,
+        settingsController?.repositorySettingsSync(repositoryId).syncLookbackDays ?? 7,
     });
     const metadataMaintenance = new MetadataMaintenanceService({
       database,
@@ -238,7 +244,15 @@ export function createServerRuntime(
       agentSessionsPath: join(config.runtime.statePath, "agent-sessions"),
       executor,
     });
-    const projector = createSystemScheduleProjector({ database, scheduler, config });
+    const projector = createSystemScheduleProjector({
+      database,
+      scheduler,
+      config,
+      // Existing configured repositories may point at a managed path that is
+      // not checked out yet. Keep all repository system tasks disabled until
+      // onboarding has verified or cloned the checkout.
+      repositoryAvailability: (repositoryPath) => isGitRepository(repositoryPath),
+    });
 
     const runtimeBridges = runtimeSettingsAdapters.createBridges({
       knowledge,
@@ -268,6 +282,27 @@ export function createServerRuntime(
       },
     });
     settingsController = settings;
+    const domainFiles = new DomainFileService({
+      database,
+      systemRoot,
+      statePath: config.runtime.statePath,
+      reclassification,
+    });
+    const repositoryOnboarding = new RepositoryOnboardingService({
+      database,
+      config,
+      configPath: resolvedConfigPath,
+      gitWorkspace: new RepositoryOnboardingGit(),
+      settings,
+      domainFiles,
+      projector,
+      syncCoordinator: coordinator,
+      credentialSummary: () => credential.summary(),
+      credentialToken: () => credential.resolveToken(),
+      ...(options.now === undefined ? {} : { now: options.now }),
+      logger: options.coordinatorLogger,
+    });
+    domainFiles.start();
     // system.yaml constructed AgentChatController with installation defaults;
     // apply user operational overrides before any scheduler run can create a
     // new session. Scheduled task settings remain their own authority.
@@ -289,18 +324,15 @@ export function createServerRuntime(
     );
     metadataMaintenance.recoverInterruptedRuns();
     knowledge.start();
+    // Scan/continue configured managed checkouts without delaying HTTP listen.
+    // Repository system tasks were projected with the checkout gate above;
+    // onboarding enables them again after full initialization.
+    repositoryOnboarding.start();
     scheduler.start();
     // Resume enabled cursors left by an interrupted run or by an older
     // release that stopped after one bounded partial batch. Always admit a
     // fresh run; prior durable run records remain immutable.
     coordinator.resumeEnabledHistories();
-    const domainFiles = new DomainFileService({
-      database,
-      systemRoot,
-      statePath: config.runtime.statePath,
-      reclassification,
-    });
-    domainFiles.start();
     const app = buildProductionApp(
       {
         database,
@@ -323,6 +355,7 @@ export function createServerRuntime(
         settings,
         auth,
         metadataMaintenance,
+        repositoryOnboarding,
       },
       options.appOptions,
     );
@@ -336,6 +369,9 @@ export function createServerRuntime(
         // runs can finish against a live dependency graph.
         await scheduler.close();
         await agentChat.close();
+        // Onboarding can be waiting on an initial coordinator run. Abort and
+        // join those jobs before closing their coordinator dependency.
+        await repositoryOnboarding.close();
         await coordinator.close();
         await knowledge.close();
         await domainFiles.close();
@@ -359,6 +395,7 @@ export function createServerRuntime(
       settings,
       auth,
       metadataMaintenance,
+      repositoryOnboarding,
     };
   } catch (error) {
     database.close();

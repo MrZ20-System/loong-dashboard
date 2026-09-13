@@ -33,6 +33,7 @@ import { DomainReclassificationService, type DomainReclassification } from "./re
 import { registerAuthRoutes, isPublicApiPath } from "./routes/auth.js";
 import { registerMetadataRoutes } from "./routes/metadata.js";
 import { registerRepositoryRoutes } from "./routes/repositories.js";
+import { registerRepositoryOnboardingRoutes } from "./routes/repository-onboarding.js";
 import { registerSyncRoutes } from "./routes/sync.js";
 import {
   InvalidRequestError,
@@ -44,6 +45,7 @@ import {
   type SettingsController,
 } from "./settings.js";
 import type { SyncCoordinator } from "./sync-coordinator.js";
+import type { RepositoryOnboardingService } from "./repository-onboarding.js";
 import { IssueDetailService } from "./issue-detail-service.js";
 import { registerProductionStaticSite } from "./static-site.js";
 
@@ -69,6 +71,7 @@ export interface BuildProductionAppDependencies {
   settings: SettingsController;
   auth: AuthService;
   metadataMaintenance: MetadataMaintenanceService;
+  repositoryOnboarding: RepositoryOnboardingService;
 }
 
 /** Lightweight dependency set intentionally limited to focused route tests. */
@@ -89,6 +92,7 @@ export interface BuildTestAppDependencies {
   settings?: SettingsController;
   auth?: AuthService;
   metadataMaintenance?: MetadataMaintenanceService;
+  repositoryOnboarding?: RepositoryOnboardingService;
 }
 
 /** Fastify options shared by production and focused test app builders. */
@@ -177,6 +181,7 @@ interface RegisterRoutesDependencies {
   };
   settings?: SettingsController;
   metadataMaintenance?: MetadataMaintenanceService;
+  repositoryOnboarding?: RepositoryOnboardingService;
 }
 
 function configureAppShell(app: FastifyInstance, auth: AuthService): void {
@@ -214,7 +219,15 @@ function registerRoutes(
   app: FastifyInstance,
   dependencies: RegisterRoutesDependencies,
 ): void {
-  registerRepositoryRoutes(app, { database: dependencies.database });
+  registerRepositoryRoutes(app, {
+    database: dependencies.database,
+    onboarding: dependencies.repositoryOnboarding,
+  });
+  if (dependencies.repositoryOnboarding !== undefined) {
+    registerRepositoryOnboardingRoutes(app, {
+      onboarding: dependencies.repositoryOnboarding,
+    });
+  }
   registerSyncRoutes(app, {
     database: dependencies.database,
     syncCoordinator: dependencies.syncCoordinator,
@@ -291,7 +304,8 @@ function errorResponse(error: unknown): {
             code === "SCHEDULED_TASK_NOT_FOUND" ||
             code === "AGENT_SESSION_NOT_FOUND" ||
             code === "SYNC_RUN_NOT_FOUND" ||
-            code === "MAINTENANCE_RUN_NOT_FOUND"
+            code === "MAINTENANCE_RUN_NOT_FOUND" ||
+            code === "REPOSITORY_ONBOARDING_NOT_FOUND"
           ? 404
           : code === "AUTH_REQUIRED" || code === "AUTH_INVALID_PASSWORD"
             ? 401
@@ -306,7 +320,9 @@ function errorResponse(error: unknown): {
                   code === "WORKSPACE_REVISION_MISMATCH" ||
                   code === "KNOWLEDGE_DOCUMENT_CONFLICT" ||
                   code === "WORKTREE_POOL_EXHAUSTED" ||
-                  code === "SCHEDULED_TASK_WORKSPACE_BUSY"
+                  code === "SCHEDULED_TASK_WORKSPACE_BUSY" ||
+                  code === "REPOSITORY_ONBOARDING_CONFLICT" ||
+                  code === "REPOSITORY_ONBOARDING_FAILED"
                 ? 409
                 : 500;
   const message = requestErrorMessage(error, code);
@@ -324,6 +340,9 @@ function errorCode(error: unknown): ApiErrorCode {
   }
   if (hasCode(error, "INVALID_CURSOR")) return "INVALID_CURSOR";
   if (hasCode(error, "REPOSITORY_NOT_FOUND")) return "REPOSITORY_NOT_FOUND";
+  if (hasCode(error, "REPOSITORY_ONBOARDING_NOT_FOUND")) return "REPOSITORY_ONBOARDING_NOT_FOUND";
+  if (hasCode(error, "REPOSITORY_ONBOARDING_CONFLICT")) return "REPOSITORY_ONBOARDING_CONFLICT";
+  if (hasCode(error, "REPOSITORY_ONBOARDING_FAILED")) return "REPOSITORY_ONBOARDING_FAILED";
   if (hasCode(error, "DOMAIN_NOT_FOUND")) return "DOMAIN_NOT_FOUND";
   if (hasCode(error, "DOMAIN_VERSION_NOT_FOUND")) return "DOMAIN_VERSION_NOT_FOUND";
   if (hasCode(error, "DOMAIN_NAME_CONFLICT")) return "DOMAIN_NAME_CONFLICT";

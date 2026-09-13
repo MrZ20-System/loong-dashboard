@@ -172,7 +172,9 @@ function migrateRepositories(
     repositories[id] = {
       automaticSync: readBoolean(stored.automaticSync, false),
       syncFrequencyMinutes: readPositiveInteger(stored.syncFrequencyMinutes, 60),
-      syncLookbackDays: stored.syncLookbackDays === 7 ? 7 : 30,
+      // New repositories bootstrap a small, predictable metadata window.
+      // An explicit legacy value of 30 remains a user choice.
+      syncLookbackDays: stored.syncLookbackDays === 30 ? 30 : 7,
       retention: {
         automaticArchiveEnabled: readBoolean(
           asRecord(stored.retention).automaticArchiveEnabled,
@@ -204,9 +206,9 @@ function migrateRepositories(
       worktrees: {
         configuredSlots: readBoundedInteger(
           asRecord(stored.worktrees).configuredSlots,
-          repositoryDefaults.configuredSlots ?? 1,
+          repositoryDefaults.configuredSlots ?? 10,
           1,
-          8,
+          16,
         ),
         idleCleanupTtlHours: readBoundedInteger(
           asRecord(stored.worktrees).idleCleanupTtlHours,

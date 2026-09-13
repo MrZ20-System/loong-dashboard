@@ -114,6 +114,22 @@ export {
   type RestoreMetadataResponse,
 } from "./retention.js";
 export {
+  repositoryOnboardingAcceptedSchema,
+  repositoryOnboardingCreateSchema,
+  repositoryOnboardingErrorSchema,
+  repositoryOnboardingInputSchema,
+  repositoryOnboardingParamsSchema,
+  repositoryOnboardingSchema,
+  repositoryOnboardingStatusSchema,
+  type RepositoryOnboarding,
+  type RepositoryOnboardingAccepted,
+  type RepositoryOnboardingCreate,
+  type RepositoryOnboardingError,
+  type RepositoryOnboardingInput,
+  type RepositoryOnboardingParams,
+  type RepositoryOnboardingStatus,
+} from "./repository-onboarding.js";
+export {
   knowledgeAssetPathQuerySchema,
   knowledgeDocumentCreateSchema,
   knowledgeDocumentParamsSchema,

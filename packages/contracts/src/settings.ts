@@ -17,7 +17,7 @@ export const worktreeMaintenanceErrorSchema = z
 /** Repository-local worktree capacity policy and maintenance projection. */
 export const repositoryWorktreeSettingsSchema = z
   .object({
-    configuredSlots: z.number().int().min(1).max(8),
+    configuredSlots: z.number().int().min(1).max(16),
     idleCleanupTtlHours: z.number().int().positive(),
     physicalSlots: z.number().int().nonnegative(),
     active: z.number().int().nonnegative(),
@@ -33,7 +33,7 @@ export const repositoryWorktreeSettingsSchema = z
 
 export const repositoryWorktreeSettingsUpdateSchema = z
   .object({
-    configuredSlots: z.number().int().min(1).max(8).optional(),
+    configuredSlots: z.number().int().min(1).max(16).optional(),
     idleCleanupTtlHours: z.number().int().positive().max(24 * 365).optional(),
   })
   .strict()
@@ -61,7 +61,7 @@ export const repositorySettingsSchema = z
       prunePayloadWhenArchived: true,
     }),
     worktrees: repositoryWorktreeSettingsSchema.default({
-      configuredSlots: 1,
+      configuredSlots: 10,
       idleCleanupTtlHours: 24,
       physicalSlots: 0,
       active: 0,
@@ -327,7 +327,7 @@ export const settingsResponseSchema = z
  */
 export const settingsDocumentRepositoryWorktreeSchema = z
   .object({
-    configuredSlots: z.number().int().min(1).max(8),
+    configuredSlots: z.number().int().min(1).max(16),
     idleCleanupTtlHours: z.number().int().positive().max(24 * 365),
   })
   .strict();

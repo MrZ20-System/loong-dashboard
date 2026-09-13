@@ -1,7 +1,22 @@
 version: 1
 timezone: Asia/Shanghai
 
-repositories: []
+repositories:
+  - key: vllm
+    name: vLLM
+    github: vllm-project/vllm
+    path: ./repositories/vllm
+    remote: upstream
+    defaultBranch: main
+    worktreeSlots: 10
+
+  - key: vllm-ascend
+    name: vLLM Ascend
+    github: vllm-project/vllm-ascend
+    path: ./repositories/vllm-ascend
+    remote: upstream
+    defaultBranch: main
+    worktreeSlots: 10
 
 knowledge:
   path: ./knowledge
@@ -18,6 +33,7 @@ knowledge:
 
 runtime:
   statePath: ./.loong
+  repositoriesPath: ./repositories
   worktreesPath: ./.worktrees
   serverHost: 127.0.0.1
   serverPort: 4174

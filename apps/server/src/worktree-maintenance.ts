@@ -13,7 +13,7 @@ import {
   type WorktreeMaintenanceResult,
 } from "@loongboard/git-workspace";
 
-export const MAX_WORKTREE_SLOTS = 8;
+export const MAX_WORKTREE_SLOTS = 16;
 
 export interface WorktreeOperationalPolicy {
   readonly configuredSlots: number;
