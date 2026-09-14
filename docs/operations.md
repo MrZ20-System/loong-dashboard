@@ -21,7 +21,7 @@ pnpm dev
 
 | 字段组 | 含义 |
 | --- | --- |
-| version / timezone | 当前 version=2；日期活动及 system task 使用的 IANA 时区 |
+| version / timezone | 当前 `version=3`；日期活动及 system task 使用的 IANA 时区 |
 | repositories[] | key、name、GitHub owner/repo、本地 path、remote、defaultBranch、worktreeSlots（Worktree capacity fallback） |
 | knowledge | path、相对 inbox、historyLimit；可选 checkpoint/push Cron 配置见 Knowledge 章节 |
 | runtime | statePath、repositoriesPath、worktreesPath、serverHost、serverPort；`repositoriesPath` 是页面接入仓库的受管 clone 根目录；`LOONGBOARD_SERVER_HOST`/`LOONGBOARD_SERVER_PORT` 可在进程环境中覆盖监听值 |

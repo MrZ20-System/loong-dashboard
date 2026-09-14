@@ -31,7 +31,7 @@
 
 各 `*-client.ts` 管理传输及 contracts 响应校验。Query 默认配置在 [app/query.ts](../apps/web/src/app/query.ts)，路由过滤和请求 hook 在 [app/hooks.ts](../apps/web/src/app/hooks.ts)。PR/Issue 同步成功后分别刷新相关查询，失败流保留旧数据。页面筛选和分页不能隐式触发远端同步。
 
-Pull Requests 只提供 Recently Updated 与 PR Number 两种当前事实视图。前者按 `updatedAt + number`、后者按 number 使用服务端分页；搜索在 SQLite 全结果集上执行，不只过滤当前页。Web 每页固定请求 100 条，URL 使用 `?page=N`，由共享 [Pagination](../apps/web/src/components/metadata/Pagination.tsx) 提供首尾页、邻近页码、省略号、Previous/Next 和可访问的 Go to page 输入。过滤、搜索或排序变化会回到第 1 页。
+Pull Requests 只提供 Recently Updated 与 PR Number 两种当前事实视图。前者按 `updatedAt + number`、后者按 number 使用服务端分页；搜索在 SQLite 全结果集上执行，不只过滤当前页。Web 每页固定请求 100 条，URL 使用 `?page=N`，由共享 [Pagination](../apps/web/src/components/metadata/Pagination.tsx) 提供首尾页、邻近页码、省略号、Previous/Next 和可访问的 Go to page 输入。Status 与 Archive 都是可保持打开的多选筛选器，多个值以重复 query 参数发送；过滤、搜索或排序变化会回到第 1 页。
 
 PR/Issue 列表默认显示 current metadata，Archive filter 可切换 Archived 或 All；Merged 仍显示所有 `merged_at` projection，包括已归档 PR，并继续使用 page/limit 分页。payload 被 prune 的详情由 Server 在需要时重新获取，不能在 Web 中把空文件或空评论当成成功缓存。
 
@@ -55,7 +55,7 @@ Settings → Repositories 顶部提供仓库接入卡片，接受 GitHub HTTPS�
 
 Repository Settings 的 Worktrees 区域维护每 repository 的 maximum slots（1-16，新仓库默认 10）和 idle cleanup TTL，并展示 configured/physical/active/idle/dirty/pending retirement；`Clean unused now` 只回收可安全删除的 clean、非 busy worktree，不代表 Agent 全局并发。
 
-Domains 页面提供 Rendered、JSON Source 和 Agent Update 三种视角。JSON 保存前只做必要的 JSON 解析校验并 pretty format，成功后刷新 rendered projection；解析失败时保留错误提示和最后有效投影。更新 prompt 存在可编辑 Markdown 文件中，Agent Update 通过同一个持久 Agent conversation 继续编辑 Domain JSON。
+Domains 页面提供 Rendered、JSON Source 和 Agent Update 三种视角。JSON 保存前只做必要的 JSON 解析校验并 pretty format，成功后刷新 rendered projection；解析失败时保留错误提示和最后有效投影。更新 prompt 存在可编辑 Markdown 文件中，页面以只读/编辑两态提供 Edit、Save、Restore；canonical bilingual prompt 包含用户输入占位符与 JSON 输出格式示例，不提供内置模板选择器。Agent Update 通过同一个持久 Agent conversation 继续编辑 Domain JSON。
 
 Schedules 页面统一展示 Agent 和 system 任务的启用状态、next/last run、运行历史和 Run now；Agent 任务支持编辑和删除，system 任务的 policy 通过对应 Settings 管理，通用 scheduled-task PUT 不允许修改 system task。Agent 运行历史中的 `agentSessionId` 可直接跳到全局 Agent 页面继续对话；system 任务显示对应 action。
 

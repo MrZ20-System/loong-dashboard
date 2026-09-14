@@ -1,10 +1,10 @@
 # LoongBoard 仓库说明书
 
-本目录是当前实现的统一阅读入口，面向维护者和 Agent。2026-09-09 随 Settings、原生 DSH 会话和同步行为改造更新；功能修改时同步更新对应章节，历史验收单独记录。本文档描述已实现行为，不再按开发阶段组织。
+本目录是当前实现的统一阅读入口，面向维护者和 Agent。2026-09-14 随仓库接入、Personal Data、Cron 和元数据体验收尾更新；功能修改时同步更新对应章节，历史验收单独记录。本文档描述已实现行为，不再按开发阶段组织。
 
 ## 快速阅读
 
-首次进入仓库：先读 [产品范围](requirements.md) 和 [架构与代码地图](architecture.md)，再读目标模块。准备运行时读 [配置与运行](operations.md)；准备修改时读 [开发与验收](testing.md) 和最近的 `AGENTS.md`。
+首次进入仓库：先读 [产品范围](requirements.md) 和 [架构与代码地图](architecture.md)，再读目标模块。准备运行时读 [配置与运行](operations.md)；准备修改时读 [开发与验收](testing.md) 和最近的 `AGENTS.md`。准备发布时先读 [v0.1.0rc1 Release Note](releases/v0.1.0rc1.md)。
 
 | 板块 | 内容 |
 | --- | --- |
@@ -27,6 +27,7 @@
 | [开发与验收](testing.md) | 改动顺序、测试分层、手工验收 |
 | [文档维护规则](maintenance.md) | 文档 authority、更新和历史验收边界 |
 | [历史验收记录](validation-history.md) | 过去的检查及其适用边界 |
+| [v0.1.0rc1 Release Note](releases/v0.1.0rc1.md) | 本候选版本范围、部署注意和已知限制 |
 
 ## 架构决策
 

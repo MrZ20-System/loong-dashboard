@@ -39,7 +39,7 @@ docker compose up -d --build
 - `${LOONGBOARD_DATA_DIR:-./loongboard-data}` 挂载到 `/data`。
 - `LOONGBOARD_SYSTEM_CONFIG=/data/system.yaml`。
 - `LOONGBOARD_SERVER_HOST=0.0.0.0`、`LOONGBOARD_SERVER_PORT=4174`。
-- 宿主机只绑定 `127.0.0.1:4174:4174`。
+- 宿主机绑定 `4174:4174`，容器服务可直接接受网络连接；外部可达性必须由部署机防火墙、安全组或上游网络 ACL 限制。
 - 容器使用 `restart: unless-stopped`。
 - healthcheck 使用镜像内 Node 请求 `http://127.0.0.1:4174/api/health/live`，不依赖 curl/wget。
 
@@ -62,6 +62,14 @@ docker compose logs -f loongboard
 ```
 
 `down` 不删除宿主机 data directory。
+
+### 直接监听与网络白名单
+
+正式部署若需要从白名单内的其他设备访问，不使用 SSH 隧道或临时端口转发。应用容器和当前 Compose 都监听/绑定 `0.0.0.0:4174`，由部署机的防火墙、安全组或上游网络 ACL 将 4174 仅放行给明确的白名单源地址；应用自身没有产品级 IP allowlist，并在放行前确认主机防火墙规则已生效。
+
+仅在需要把服务限制为部署机本机访问时，才在本地 override 中改为 `127.0.0.1:4174:4174`。直接绑定公网/私网端口不等于开放给所有人，实际风险取决于主机和上游白名单规则是否正确生效。
+
+直接暴露只改变网络可达性，不改变单用户模型或凭证边界；仍应启用可选的 Settings → Security password lock，并避免将端口暴露到未受控网络。
 
 ## Git credentials and local access
 

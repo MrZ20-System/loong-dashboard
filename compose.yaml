@@ -1,10 +1,11 @@
 services:
   loongboard:
+    image: "${LOONGBOARD_IMAGE:-quay.io/lonng/dashboard:v0.1.0rc1}"
     build:
       context: .
     restart: unless-stopped
     ports:
-      - "127.0.0.1:4174:4174"
+      - "4174:4174"
     environment:
       LOONGBOARD_SYSTEM_CONFIG: /data/system.yaml
       LOONGBOARD_SERVER_HOST: 0.0.0.0

@@ -46,10 +46,11 @@ describe("Docker deployment files", () => {
     }
   });
 
-  it("binds one persistent data root and localhost port in compose", async () => {
+  it("binds one persistent data root and directly published port in compose", async () => {
     const compose = parseYaml(await readRepositoryFile("compose.yaml")) as {
       services?: {
         loongboard?: {
+          image?: string;
           restart?: string;
           ports?: string[];
           environment?: Record<string, string | number>;
@@ -67,8 +68,9 @@ describe("Docker deployment files", () => {
     const service = compose.services?.loongboard;
 
     expect(service).toBeDefined();
+    expect(service?.image).toBe("${LOONGBOARD_IMAGE:-quay.io/lonng/dashboard:v0.1.0rc1}");
     expect(service?.restart).toBe("unless-stopped");
-    expect(service?.ports).toContain("127.0.0.1:4174:4174");
+    expect(service?.ports).toContain("4174:4174");
     expect(service?.volumes).toContain("${LOONGBOARD_DATA_DIR:-./loongboard-data}:/data");
     expect(service?.environment).toMatchObject({
       LOONGBOARD_SYSTEM_CONFIG: "/data/system.yaml",

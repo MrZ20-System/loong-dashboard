@@ -9,10 +9,10 @@
 ## 元数据流程
 
 1. Web 显式 POST sync；[RepositorySyncCoordinator](../apps/server/src/sync-coordinator.ts) 返回 202 后在进程中运行，同一仓库按 admission FIFO 排队，最多同时处理两个仓库。foreground forward、`fetch_pr` 和 metadata maintenance batch boundary 优先于低优先级 History admission；History 不会占满所有 repository slot。
-2. PR、Issue 分别维护同步流。首次 forward sync 按最近更新时间读取所有状态，不单独全量读取 Open；后续增量同步继续从上次成功水位向前重叠两分钟读取。更老的数据由独立 History target 持续回补，Settings 不再暴露一套与 History 重复的 7/30 bootstrap 选择。History 遇到 rate-limit floor 时将 provider 的 `resetAt` 持久化为 `repository_history_state.resume_after`，到达该 UTC 时间前不重新 admission；服务重启后按该字段恢复 continuation，而不是永久停在 rate-limit 状态。
+2. PR、Issue 分别维护同步流。仓库接入表单的首次 metadata sync 默认回看 7 天（可在高级设置中确认）；首次 forward sync 按该窗口读取所有状态，不单独全量读取 Open。后续增量同步继续从上次成功水位向前重叠两分钟读取。更老的数据由独立 History target 持续回补，不能把首次同步窗口当作历史覆盖目标。History 遇到 rate-limit floor 时将 provider 的 `resetAt` 持久化为 `repository_history_state.resume_after`，到达该 UTC 时间前不重新 admission；服务重启后按该字段恢复 continuation，而不是永久停在 rate-limit 状态。
    GraphQL 每页按 `UPDATED_AT DESC` 请求，首轮在结果更新时间早于 cutoff 时停止；`hasNextPage=false` 正常结束，重复或无效 endCursor 记为分页错误而停止，避免重复拉取。实现不按固定总数截断。
 3. 页面结果幂等写入 SQLite。只有整个实体流成功才把水位推进到本次尝试开始时间；失败保留旧行和旧水位并记录错误。归档 metadata 仍可被列表读取：PR/Issue 默认 current，也可选 archived/all；reopen 会自动解除 archive，继续处于 terminal 状态的 metadata update 不会自动解除归档，Merged 仍保留已归档的 PR 且不改变既有 page/limit 分页。payload prune 后，PR files 和 Issue detail 发现 marker/过期缓存会重新请求 GitHub，成功刷新清除 marker。
-4. 列表、日期活动、过滤及分页只读 SQLite。PR 和 Merged 使用 `page` + `limit` 页码分页，并在同一过滤条件下计算准确的 `totalCount` / `totalPages`。当前 PR 支持 `updated_at DESC, number DESC` 和 `number DESC` 两种排序；Merged 使用 `merged_at DESC, number DESC`，且只包含 `merged_at IS NOT NULL`。PR 的日期筛选按配置时区转换为 UTC 半开区间；Issue 仍使用 cursor 分页。
+4. 列表、日期活动、过滤及分页只读 SQLite。PR 和 Merged 使用 `page` + `limit` 页码分页，并在同一过滤条件下计算准确的 `totalCount` / `totalPages`。当前 PR 支持 `updated_at DESC, number DESC` 和 `number DESC` 两种排序；Merged 使用 `merged_at DESC, number DESC`，且只包含 `merged_at IS NOT NULL`。PR 的日期筛选按配置时区转换为 UTC 半开区间；Issue 仍使用 cursor 分页。状态和 archive 条件都支持重复 query 参数，多个值按 ANY-match 处理；未提供 archive 条件时默认只读 current，`all` 仅作为兼容值。
 
 ## Run、历史与 Merged 投影
 
@@ -53,7 +53,7 @@ provider 的 [files.ts](../packages/github/src/files.ts) 管理批次、分页�
 
 Domain 源文件位于 system workspace 的 `domains/<repository-key>.json`，JSON 是唯一编辑来源，SQLite 是渲染与分类投影。创建、编辑和删除 Domain 都先更新该文件再重投影；外部编辑和 Agent 文件工具的修改在 watcher 或读取时吸收。程序只做 JSON 解析及分类所需字段的机械校验，不限制 Domain 数量，也不施加 AI 类别、confidence 等上限。源文件暂时是非法 JSON 时，source API 仍返回原文和 `parseError`，最近一次有效投影继续可见；直接保存非法内容返回 400 并保留原文件。
 
-每次有效 Domain/prompt 内容变化都会生成 content hash 版本，来源记录为 `manual`、`agent`、`external` 或 `restore`，短期历史位于 `runtime.statePath/domain-file-versions/`，可通过 history/restore API 修复文件。更新 prompt 是 system workspace 中可编辑的 `prompts/update-domains.md`；Agent 更新通过普通持久 conversation 读取该 prompt、仓库代码并直接编辑 Domain JSON。
+每次有效 Domain/prompt 内容变化都会生成 content hash 版本，来源记录为 `manual`、`agent`、`external` 或 `restore`，短期历史位于 `runtime.statePath/domain-file-versions/`，可通过 history/restore API 修复文件。更新 prompt 是 system workspace 中可编辑的 `prompts/update-domains.md`；页面默认只读，进入 Edit 后可 Save 或 Restore canonical bilingual prompt。提示词包含用户输入占位符和 JSON 输出格式约束，不再提供内置模板选择器；Agent 更新通过普通持久 conversation 读取该 prompt、仓库代码并直接编辑 Domain JSON。
 
 ## Issue 详情例外
 

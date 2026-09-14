@@ -40,7 +40,7 @@ $EDITOR "$LOONGBOARD_DATA_DIR/system.yaml"
 docker compose up -d --build
 ```
 
-Compose 将 `${LOONGBOARD_DATA_DIR:-./loongboard-data}` 挂载为容器 `/data`，并读取 `/data/system.yaml`。因此示例中的 `personalData.path: ./personal-data` 会解析为持久的 `/data/personal-data`，Knowledge 内容位于其 `knowledge/` 子目录；runtime 和 worktree 相对路径也相对 `/data` 解析。Compose 设置 `LOONGBOARD_SERVER_HOST=0.0.0.0`、端口 `4174`，宿主机仍只通过 `127.0.0.1:4174` 暴露服务。
+Compose 将 `${LOONGBOARD_DATA_DIR:-./loongboard-data}` 挂载为容器 `/data`，并读取 `/data/system.yaml`。因此示例中的 `personalData.path: ./personal-data` 会解析为持久的 `/data/personal-data`，Knowledge 内容位于其 `knowledge/` 子目录；runtime 和 worktree 相对路径也相对 `/data` 解析。Compose 设置 `LOONGBOARD_SERVER_HOST=0.0.0.0`、端口 `4174`，默认直接绑定 `4174:4174`。正式部署必须由部署机防火墙、安全组或网络 ACL 限制白名单来源；不要使用 SSH 隧道作为常规入口。若只需部署机本机访问，可在 compose override 中改为 `127.0.0.1:4174:4174`。具体边界见 [部署](docs/deployment.md#直接监听与网络白名单)。
 
 镜像内包含 Node、Git 和 CA certificates；这些不需要宿主机挂载。GitHub 凭证应通过 Settings 保存，或在运行容器时显式提供 `GH_TOKEN`/`GITHUB_TOKEN`。宿主机的 `gh` 登录状态不会自动进入容器。镜像不 COPY SSH key、token 或凭证文件；如需额外凭证挂载，应使用本地 compose override，并保持只读和不入镜像。
 
