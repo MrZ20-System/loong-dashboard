@@ -68,7 +68,7 @@ describe("Docker deployment files", () => {
     const service = compose.services?.loongboard;
 
     expect(service).toBeDefined();
-    expect(service?.image).toBe("${LOONGBOARD_IMAGE:-quay.io/lonng/dashboard:v0.1.0rc1}");
+    expect(service?.image).toBe("${LOONGBOARD_IMAGE:-quay.io/lonng/system:v0.1.0rc1}");
     expect(service?.restart).toBe("unless-stopped");
     expect(service?.ports).toContain("4174:4174");
     expect(service?.volumes).toContain("${LOONGBOARD_DATA_DIR:-./loongboard-data}:/data");

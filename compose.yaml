@@ -1,6 +1,6 @@
 services:
   loongboard:
-    image: "${LOONGBOARD_IMAGE:-quay.io/lonng/dashboard:v0.1.0rc1}"
+    image: "${LOONGBOARD_IMAGE:-quay.io/lonng/system:v0.1.0rc1}"
     build:
       context: .
     restart: unless-stopped
