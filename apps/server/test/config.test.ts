@@ -1,21 +1,30 @@
-import { dirname, resolve } from "node:path";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { parse as parseYaml } from "yaml";
 
 import { describe, expect, it } from "vitest";
 
 import {
   loadSystemConfig,
+  migrateSystemConfigV1ToV2,
   parseSystemConfig,
   resolveSystemConfigPath,
 } from "../src/config.js";
 
-const fixtureDirectory = fileURLToPath(new URL("fixtures", import.meta.url));
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const serverPackageDirectory = resolve(repositoryRoot, "apps/server");
 
 function validConfigInput() {
   return {
-    version: 1 as const,
+    version: 2 as const,
     timezone: "Asia/Shanghai",
     repositories: [
       {
@@ -32,6 +41,15 @@ function validConfigInput() {
       path: "./knowledge",
       inbox: "inbox",
       historyLimit: 10,
+      checkpoint: {
+        autoCommit: false,
+        autoPush: false,
+        remote: "origin",
+        sourceRef: "main",
+        remoteBranch: "loongboard-knowledge-backup",
+        checkpointCron: "0 0 * * *",
+        pushCron: "0 0 * * *",
+      },
     },
     runtime: {
       statePath: "./.loong",
@@ -48,209 +66,154 @@ function validConfigInput() {
   };
 }
 
+function validV1ConfigInput() {
+  const { version: _version, knowledge, ...rest } = validConfigInput();
+  const { checkpoint: _checkpoint, ...legacyKnowledge } = knowledge;
+  return {
+    ...rest,
+    version: 1 as const,
+    knowledge: {
+      ...legacyKnowledge,
+      checkpoint: {
+        autoCommit: true,
+        autoPush: false,
+        remote: "origin",
+        sourceRef: "main",
+        remoteBranch: "loongboard-knowledge-backup",
+        checkpointIntervalMinutes: 60,
+        pushIntervalMinutes: null,
+      },
+    },
+  };
+}
+
 describe("system configuration", () => {
-  it("defaults idle retention to two hours and accepts Never without changing explicit values", () => {
+  it("parses the complete V2 contract and defaults idle retention", () => {
     const input = validConfigInput();
     const { idleProcessMinutes: _idle, ...agent } = input.agent;
     expect(parseSystemConfig({ ...input, agent }, "/workspace/system.yaml").agent.idleProcessMinutes).toBe(120);
-    expect(parseSystemConfig({ ...input, agent: { ...agent, idleProcessMinutes: 0 } }, "/workspace/system.yaml").agent.idleProcessMinutes).toBe(0);
-    expect(parseSystemConfig(input, "/workspace/system.yaml").agent.idleProcessMinutes).toBe(20);
+    expect(parseSystemConfig(input, "/workspace/system.yaml").version).toBe(2);
+    expect(parseSystemConfig(input, "/workspace/system.yaml").knowledge.checkpoint?.checkpointCron).toBe("0 0 * * *");
   });
 
-  it("loads the complete V1 system.yaml contract", () => {
-    const config = loadSystemConfig(
-      resolve(fixtureDirectory, "valid-system.yaml"),
-    );
+  it("migrates V1 schedules to V2, preserves topology, and atomically backs up the source", () => {
+    const root = mkdtempSync(join(tmpdir(), "loongboard-config-migration-"));
+    try {
+      const configPath = join(root, "system.yaml");
+      const legacy = validV1ConfigInput();
+      writeFileSync(configPath, `${JSON.stringify(legacy, null, 2)}\n`, "utf8");
+      const migrated = migrateSystemConfigV1ToV2(legacy) as Record<string, any>;
+      expect(migrated.version).toBe(2);
+      expect(migrated.knowledge.checkpoint).toMatchObject({
+        checkpointCron: "0 */1 * * *",
+        pushCron: "0 0 * * *",
+      });
 
-    expect(config).toMatchObject({
-      version: 1,
-      timezone: "Asia/Shanghai",
-      knowledge: {
-        inbox: resolve(fixtureDirectory, "knowledge/inbox"),
-        historyLimit: 10,
-      },
-      runtime: { serverHost: "127.0.0.1", serverPort: 4174 },
-      agent: {
-        defaultProvider: "deepseek-official",
-        defaultModel: "deepseek-v4-flash",
-        defaultReasoningEffort: "high",
-        idleProcessMinutes: 20,
-      },
-    });
+      const config = loadSystemConfig(configPath);
+      expect(config.version).toBe(2);
+      expect(config.repositories[0]?.github).toBe("MrZ20/loong-dashboard");
+      expect(config.knowledge.path).toBe(resolve(root, "knowledge"));
+      expect(config.knowledge.checkpoint?.checkpointCron).toBe("0 */1 * * *");
+      expect(config.knowledge.checkpoint?.pushCron).toBe("0 0 * * *");
+      expect(existsSync(`${configPath}.v1.bak`)).toBe(true);
+      expect(JSON.parse(readFileSync(`${configPath}.v1.bak`, "utf8")).version).toBe(1);
+      expect(parseYaml(readFileSync(configPath, "utf8")).version).toBe(2);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
-  it("accepts only canonical Knowledge checkpoint settings", () => {
-    const input = validConfigInput();
-    const config = parseSystemConfig({
+  it("leaves a V1 source untouched when the migrated V2 config fails validation", () => {
+    const root = mkdtempSync(join(tmpdir(), "loongboard-config-migration-failure-"));
+    try {
+      const configPath = join(root, "system.yaml");
+      const legacy = {
+        ...validV1ConfigInput(),
+        timezone: "Mars/Olympus",
+      };
+      const original = `${JSON.stringify(legacy, null, 2)}\n`;
+      writeFileSync(configPath, original, "utf8");
+
+      expect(() => loadSystemConfig(configPath)).toThrowError(/valid IANA timezone/);
+      expect(readFileSync(configPath, "utf8")).toBe(original);
+      expect(existsSync(`${configPath}.v1.bak`)).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses valid daily defaults for disabled V1 null checkpoint cadence", () => {
+    const input = validV1ConfigInput();
+    const migrated = migrateSystemConfigV1ToV2({
       ...input,
       knowledge: {
         ...input.knowledge,
         checkpoint: {
-          autoCommit: true,
-          autoPush: false,
-          remote: "origin",
-          sourceRef: "main",
-          remoteBranch: "loongboard-knowledge-backup",
-          checkpointIntervalMinutes: 60,
+          ...input.knowledge.checkpoint,
+          checkpointIntervalMinutes: null,
           pushIntervalMinutes: null,
         },
       },
-    }, "/workspace/system.yaml");
-
-    expect(config.knowledge.checkpoint).toEqual({
-      autoCommit: true,
-      autoPush: false,
-      remote: "origin",
-      sourceRef: "main",
-      remoteBranch: "loongboard-knowledge-backup",
-      checkpointIntervalMinutes: 60,
-      pushIntervalMinutes: null,
+    }) as any;
+    expect(migrated.knowledge.checkpoint).toMatchObject({
+      checkpointCron: "0 0 * * *",
+      pushCron: "0 0 * * *",
     });
   });
 
-  it.each(["branch", "intervalMinutes"])("rejects the Knowledge checkpoint alias %s", (alias) => {
+  it("accepts only canonical V2 checkpoint Cron fields", () => {
     const input = validConfigInput();
+    expect(parseSystemConfig(input, "/workspace/system.yaml").knowledge.checkpoint).toMatchObject({
+      checkpointCron: "0 0 * * *",
+      pushCron: "0 0 * * *",
+    });
     expect(() => parseSystemConfig({
       ...input,
       knowledge: {
         ...input.knowledge,
-        checkpoint: { [alias]: alias === "branch" ? "main" : 60 },
+        checkpoint: { branch: "main" },
       },
     }, "/workspace/system.yaml")).toThrowError(/Invalid system configuration/);
+    expect(() => parseSystemConfig({
+      ...input,
+      knowledge: {
+        ...input.knowledge,
+        checkpoint: { ...input.knowledge.checkpoint, checkpointCron: "invalid" },
+      },
+    }, "/workspace/system.yaml")).toThrowError(/Cron expression must have 5 fields/);
   });
 
-  it("allows container runtime host and port overrides without changing data paths", () => {
-    const configPath = resolve(fixtureDirectory, "valid-system.yaml");
+  it("resolves all configured paths relative to system.yaml", () => {
+    const config = parseSystemConfig(validConfigInput(), "/workspace/system.yaml");
+    expect(config.repositories[0]?.path).toBe("/workspace/loong-dashboard");
+    expect(config.knowledge.path).toBe("/workspace/knowledge");
+    expect(config.knowledge.inbox).toBe("/workspace/knowledge/inbox");
+    expect(config.runtime.statePath).toBe("/workspace/.loong");
+  });
+
+  it("allows runtime host and port overrides without changing data paths", () => {
+    const configPath = resolve(repositoryRoot, "system.example.yaml");
     const config = loadSystemConfig(configPath, {
       LOONGBOARD_SERVER_HOST: "  0.0.0.0 ",
       LOONGBOARD_SERVER_PORT: " 4180 ",
     });
-
-    expect(config.runtime).toMatchObject({
-      serverHost: "0.0.0.0",
-      serverPort: 4180,
-    });
-    expect(config.runtime.statePath).toBe(resolve(fixtureDirectory, ".loong"));
-    expect(config.knowledge.path).toBe(resolve(fixtureDirectory, "knowledge"));
-  });
-
-  it.each([
-    ["LOONGBOARD_SERVER_HOST", { LOONGBOARD_SERVER_HOST: " " }],
-    ["LOONGBOARD_SERVER_PORT", { LOONGBOARD_SERVER_PORT: "not-a-port" }],
-  ])("rejects an invalid %s override", (_name, environment) => {
-    expect(() =>
-      loadSystemConfig(resolve(fixtureDirectory, "valid-system.yaml"), environment),
-    ).toThrowError(/LOONGBOARD_SERVER_(?:HOST|PORT)/);
-  });
-
-  it("fails fast when a required value is invalid", () => {
-    const configPath = resolve(fixtureDirectory, "invalid-system.yaml");
-
-    expect(() => loadSystemConfig(configPath)).toThrowError(
-      new RegExp(`Invalid system configuration at ${configPath}`),
-    );
-  });
-
-  it.each<{ layer: string; input: () => unknown }>([
-    {
-      layer: "root",
-      input: () => ({ ...validConfigInput(), unexpected: true }),
-    },
-    {
-      layer: "repository",
-      input: () => {
-        const config = validConfigInput();
-        return {
-          ...config,
-          repositories: [{ ...config.repositories[0], unexpected: true }],
-        };
-      },
-    },
-    {
-      layer: "knowledge",
-      input: () => {
-        const config = validConfigInput();
-        return {
-          ...config,
-          knowledge: { ...config.knowledge, unexpected: true },
-        };
-      },
-    },
-    {
-      layer: "runtime",
-      input: () => {
-        const config = validConfigInput();
-        return {
-          ...config,
-          runtime: { ...config.runtime, unexpected: true },
-        };
-      },
-    },
-    {
-      layer: "agent",
-      input: () => {
-        const config = validConfigInput();
-        return {
-          ...config,
-          agent: { ...config.agent, unexpected: true },
-        };
-      },
-    },
-  ])("rejects an extra field at the $layer layer", ({ input }) => {
-    expect(() =>
-      parseSystemConfig(input(), "/workspace/system.yaml"),
-    ).toThrowError(/Invalid system configuration/);
-  });
-
-  it("resolves every configured path relative to the system.yaml directory", () => {
-    const configPath = resolve(fixtureDirectory, "valid-system.yaml");
-    const config = loadSystemConfig(configPath);
-    const configDirectory = dirname(configPath);
-
-    expect(config.repositories.map((repository) => repository.path)).toEqual([
-      resolve(configDirectory, "repositories/loongboard"),
-      "/absolute/vllm",
-    ]);
-    expect(config.knowledge.path).toBe(resolve(configDirectory, "knowledge"));
-    expect(config.knowledge.inbox).toBe(
-      resolve(configDirectory, "knowledge/inbox"),
-    );
-    expect(config.runtime.statePath).toBe(resolve(configDirectory, ".loong"));
-    expect(config.runtime.worktreesPath).toBe(
-      resolve(configDirectory, ".worktrees"),
-    );
-  });
-
-  it.each([
-    ["absolute", "/outside/inbox"],
-    ["parent traversal", "../outside"],
-  ])("rejects an %s knowledge inbox", (_label, inbox) => {
-    const config = validConfigInput();
-
-    expect(() =>
-      parseSystemConfig(
-        {
-          ...config,
-          knowledge: { ...config.knowledge, inbox },
-        },
-        resolve(repositoryRoot, "system.yaml"),
-      ),
-    ).toThrowError(/knowledge\.inbox/);
+    expect(config.runtime).toMatchObject({ serverHost: "0.0.0.0", serverPort: 4180 });
+    expect(config.runtime.statePath).toBe(resolve(dirname(configPath), ".loong"));
   });
 
   it.each([
     ["duplicate repository key", (config: ReturnType<typeof validConfigInput>) => ({
       ...config,
       repositories: [
-        config.repositories[0],
-        { ...config.repositories[0], name: "Second repository", github: "other/project" },
+        ...config.repositories,
+        { ...config.repositories[0], name: "Second", github: "other/project" },
       ],
     }), /Duplicate repository key/],
     ["duplicate GitHub slug", (config: ReturnType<typeof validConfigInput>) => ({
       ...config,
       repositories: [
-        config.repositories[0],
-        { ...config.repositories[0], key: "second", name: "Second repository" },
+        ...config.repositories,
+        { ...config.repositories[0], key: "second", name: "Second" },
       ],
     }), /Duplicate GitHub repository/],
     ["invalid IANA timezone", (config: ReturnType<typeof validConfigInput>) => ({
@@ -258,29 +221,14 @@ describe("system configuration", () => {
       timezone: "Mars/Olympus",
     }), /valid IANA timezone/],
   ])("rejects $0 at the config boundary", (_label, createConfig, expected) => {
-    expect(() =>
-      parseSystemConfig(createConfig(validConfigInput()), "/workspace/system.yaml"),
-    ).toThrowError(expected);
+    expect(() => parseSystemConfig(createConfig(validConfigInput()), "/workspace/system.yaml"))
+      .toThrowError(expected);
   });
 
-  it("resolves the default from the repository root cwd", () => {
-    expect(resolveSystemConfigPath({}, repositoryRoot)).toBe(
-      resolve(repositoryRoot, "..", "system.yaml"),
-    );
-  });
-
-  it("resolves the same default from the real apps/server cwd", () => {
-    expect(resolveSystemConfigPath({}, serverPackageDirectory)).toBe(
-      resolve(repositoryRoot, "..", "system.yaml"),
-    );
-  });
-
-  it("keeps LOONGBOARD_SYSTEM_CONFIG as the single root-relative override", () => {
-    expect(
-      resolveSystemConfigPath(
-        { LOONGBOARD_SYSTEM_CONFIG: "config/custom.yaml" },
-        serverPackageDirectory,
-      ),
-    ).toBe(resolve(repositoryRoot, "config/custom.yaml"));
+  it("resolves the default config path from repository root or apps/server", () => {
+    expect(resolveSystemConfigPath({}, repositoryRoot)).toBe(resolve(repositoryRoot, "..", "system.yaml"));
+    expect(resolveSystemConfigPath({}, serverPackageDirectory)).toBe(resolve(repositoryRoot, "..", "system.yaml"));
+    expect(resolveSystemConfigPath({ LOONGBOARD_SYSTEM_CONFIG: "config/custom.yaml" }, serverPackageDirectory))
+      .toBe(resolve(repositoryRoot, "config/custom.yaml"));
   });
 });

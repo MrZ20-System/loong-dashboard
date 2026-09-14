@@ -1,4 +1,4 @@
-version: 1
+version: 2
 timezone: Asia/Shanghai
 
 repositories:
@@ -28,8 +28,8 @@ knowledge:
     remote: origin
     sourceRef: main
     remoteBranch: loongboard-knowledge-backup
-    checkpointIntervalMinutes: null
-    pushIntervalMinutes: null
+    checkpointCron: "0 0 * * *"
+    pushCron: "0 0 * * *"
 
 runtime:
   statePath: ./.loong

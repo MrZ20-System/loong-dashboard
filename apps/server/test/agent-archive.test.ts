@@ -168,7 +168,7 @@ describe("AgentArchiveExporter", () => {
       "utf8",
     );
     const config = parseSystemConfig({
-      version: 1,
+      version: 2,
       timezone: "UTC",
       repositories: [],
       knowledge: { path: join(root, "knowledge"), inbox: "inbox", historyLimit: 10 },
@@ -210,7 +210,7 @@ describe("AgentArchiveExporter", () => {
     mkdirSync(join(root, "knowledge"), { recursive: true });
     mkdirSync(join(root, "worktrees"), { recursive: true });
     const config = parseSystemConfig({
-      version: 1,
+      version: 2,
       timezone: "UTC",
       repositories: [],
       knowledge: { path: join(root, "knowledge"), inbox: "inbox", historyLimit: 10 },

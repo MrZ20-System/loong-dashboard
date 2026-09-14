@@ -39,7 +39,7 @@ export const SYSTEM_TASK_IDS = {
 
 export interface RepositorySchedulePolicy {
   automaticSync: boolean;
-  syncFrequencyMinutes: number;
+  syncCron: string;
   retention: RepositoryRetentionSettings;
 }
 
@@ -49,8 +49,8 @@ export interface KnowledgeSchedulePolicy {
   remote: string;
   sourceRef: string;
   remoteBranch: string;
-  checkpointIntervalMinutes: number | null;
-  pushIntervalMinutes: number | null;
+  checkpointCron: string;
+  pushCron: string;
 }
 
 export interface SystemScheduleProjection {
@@ -71,7 +71,6 @@ export interface SystemScheduleProjector {
   ): ScheduledTaskRow;
   projectKnowledge(
     settings: KnowledgeSchedulePolicy,
-    workspacePath: string,
   ): { checkpoint: ScheduledTaskRow; push: ScheduledTaskRow };
   projectCodeBackup(state: CodeBackupSettings): void;
   projectAgentArchive(state: AgentArchiveSettings): void;
@@ -87,17 +86,6 @@ export interface SystemScheduleProjector {
   ): Partial<KnowledgeCheckpointSettings>;
   codeBackupStatus(state: CodeBackupSettings): Partial<CodeBackupSettings>;
   agentArchiveStatus(state: AgentArchiveSettings): Partial<AgentArchiveSettings>;
-}
-
-/** Convert the Settings minute policy into the single task engine's cron form. */
-export function cronForInterval(minutes: number): string {
-  if (!Number.isInteger(minutes) || minutes <= 0) {
-    throw new Error("Sync frequency must be positive");
-  }
-  if (minutes < 60) return `*/${minutes} * * * *`;
-  if (minutes < 1_440 && minutes % 60 === 0) return `0 */${minutes / 60} * * *`;
-  if (minutes % 1_440 === 0) return "0 0 * * *";
-  throw new Error("Sync frequency must be a whole number of hours or days");
 }
 
 /**
@@ -130,7 +118,7 @@ export function createSystemScheduleProjector(options: {
     ): ScheduledTaskRow {
       const taskId = SYSTEM_TASK_IDS.repositorySync(input.key);
       const existing = getScheduledTask(options.database, taskId);
-      const cronExpression = cronForInterval(policy.syncFrequencyMinutes);
+      const cronExpression = policy.syncCron;
       if (
         existing !== null &&
         (existing.kind !== "system" || existing.action !== "repository.sync")
@@ -143,11 +131,6 @@ export function createSystemScheduleProjector(options: {
             name: `Sync ${repositoryName}`,
             cronExpression,
             timezone: options.config.timezone,
-            prompt: `Synchronize repository metadata for ${repositoryId}.`,
-            workspacePath: repositoryPath,
-            provider: options.config.agent.defaultProvider,
-            model: options.config.agent.defaultModel,
-            reasoningEffort: options.config.agent.defaultReasoningEffort,
             kind: "system",
             action: "repository.sync",
             repositoryId,
@@ -155,7 +138,6 @@ export function createSystemScheduleProjector(options: {
           })
         : updateScheduledTask(options.database, existing.id, {
             cronExpression,
-            workspacePath: repositoryPath,
             timezone: options.config.timezone,
             enabled: policy.automaticSync && checkoutAvailable,
             kind: "system",
@@ -184,11 +166,6 @@ export function createSystemScheduleProjector(options: {
             name: `Maintain metadata ${repositoryName}`,
             cronExpression: "0 3 * * *",
             timezone: options.config.timezone,
-            prompt: `Maintain repository metadata and runtime history for ${repositoryId}.`,
-            workspacePath: repositoryPath,
-            provider: options.config.agent.defaultProvider,
-            model: options.config.agent.defaultModel,
-            reasoningEffort: options.config.agent.defaultReasoningEffort,
             kind: "system",
             action: "repository.metadata-maintenance",
             repositoryId,
@@ -200,11 +177,6 @@ export function createSystemScheduleProjector(options: {
             name: `Maintain metadata ${repositoryName}`,
             cronExpression: "0 3 * * *",
             timezone: options.config.timezone,
-            prompt: `Maintain repository metadata and runtime history for ${repositoryId}.`,
-            workspacePath: repositoryPath,
-            provider: existing.provider,
-            model: existing.model,
-            reasoningEffort: existing.reasoningEffort,
             kind: "system",
             action: "repository.metadata-maintenance",
             repositoryId,
@@ -229,11 +201,6 @@ export function createSystemScheduleProjector(options: {
             name: `Clean worktrees ${repositoryName}`,
             cronExpression: "0 */6 * * *",
             timezone: options.config.timezone,
-            prompt: `Reconcile idle worktrees for repository ${repositoryId}.`,
-            workspacePath: repositoryPath,
-            provider: options.config.agent.defaultProvider,
-            model: options.config.agent.defaultModel,
-            reasoningEffort: options.config.agent.defaultReasoningEffort,
             kind: "system",
             action: "repository.worktrees.cleanup",
             repositoryId,
@@ -244,11 +211,6 @@ export function createSystemScheduleProjector(options: {
             name: `Clean worktrees ${repositoryName}`,
             cronExpression: "0 */6 * * *",
             timezone: options.config.timezone,
-            prompt: `Reconcile idle worktrees for repository ${repositoryId}.`,
-            workspacePath: repositoryPath,
-            provider: existing.provider,
-            model: existing.model,
-            reasoningEffort: existing.reasoningEffort,
             kind: "system",
             action: "repository.worktrees.cleanup",
             repositoryId,
@@ -261,9 +223,7 @@ export function createSystemScheduleProjector(options: {
 
   const projectKnowledge = (
     settings: KnowledgeSchedulePolicy,
-    workspacePath: string,
   ): { checkpoint: ScheduledTaskRow; push: ScheduledTaskRow } => {
-    const checkpointInterval = settings.checkpointIntervalMinutes;
     const checkpointTaskId = SYSTEM_TASK_IDS.knowledgeCheckpoint;
     const existingCheckpoint = getScheduledTask(options.database, checkpointTaskId);
     if (
@@ -276,22 +236,16 @@ export function createSystemScheduleProjector(options: {
       ? createScheduledTask(options.database, {
           id: checkpointTaskId,
           name: "Knowledge checkpoint",
-          cronExpression: cronForInterval(checkpointInterval ?? 1_440),
+          cronExpression: settings.checkpointCron,
           timezone: options.config.timezone,
-          prompt: "Run the Knowledge repository checkpoint.",
-          workspacePath,
-          provider: options.config.agent.defaultProvider,
-          model: options.config.agent.defaultModel,
-          reasoningEffort: options.config.agent.defaultReasoningEffort,
           kind: "system",
           action: "knowledge.checkpoint",
           repositoryId: null,
-          enabled: settings.autoCommit && checkpointInterval !== null,
+          enabled: settings.autoCommit,
         })
-      : updateScheduledTask(options.database, existingCheckpoint.id, {
-          cronExpression: cronForInterval(checkpointInterval ?? 1_440),
-          enabled: settings.autoCommit && checkpointInterval !== null,
-          workspacePath,
+        : updateScheduledTask(options.database, existingCheckpoint.id, {
+          cronExpression: settings.checkpointCron,
+          enabled: settings.autoCommit,
           timezone: options.config.timezone,
           kind: "system",
           action: "knowledge.checkpoint",
@@ -311,22 +265,16 @@ export function createSystemScheduleProjector(options: {
       ? createScheduledTask(options.database, {
           id: pushTaskId,
           name: "Knowledge push",
-          cronExpression: cronForInterval(settings.pushIntervalMinutes ?? 1_440),
+          cronExpression: settings.pushCron,
           timezone: options.config.timezone,
-          prompt: "Push the Knowledge repository checkpoint.",
-          workspacePath,
-          provider: options.config.agent.defaultProvider,
-          model: options.config.agent.defaultModel,
-          reasoningEffort: options.config.agent.defaultReasoningEffort,
           kind: "system",
           action: "knowledge.push",
           repositoryId: null,
-          enabled: settings.autoPush && settings.pushIntervalMinutes !== null,
+          enabled: settings.autoPush,
         })
-      : updateScheduledTask(options.database, existingPush.id, {
-          cronExpression: cronForInterval(settings.pushIntervalMinutes ?? 1_440),
-          enabled: settings.autoPush && settings.pushIntervalMinutes !== null,
-          workspacePath,
+        : updateScheduledTask(options.database, existingPush.id, {
+          cronExpression: settings.pushCron,
+          enabled: settings.autoPush,
           timezone: options.config.timezone,
           kind: "system",
           action: "knowledge.push",
@@ -340,20 +288,19 @@ export function createSystemScheduleProjector(options: {
   };
 
   const projectBackupPair = (
-    workspacePath: string,
     first: {
       taskId: string;
       name: string;
       action: "git.checkpoint" | "git.push" | "agent.archive.checkpoint" | "agent.archive.push";
       enabled: boolean;
-      interval: number | null;
+      cronExpression: string;
     },
     second: {
       taskId: string;
       name: string;
       action: "git.checkpoint" | "git.push" | "agent.archive.checkpoint" | "agent.archive.push";
       enabled: boolean;
-      interval: number | null;
+      cronExpression: string;
     },
   ): void => {
     for (const item of [first, second]) {
@@ -365,23 +312,17 @@ export function createSystemScheduleProjector(options: {
         ? createScheduledTask(options.database, {
             id: item.taskId,
             name: item.name,
-            cronExpression: cronForInterval(item.interval ?? 1_440),
+            cronExpression: item.cronExpression,
             timezone: options.config.timezone,
-            prompt: item.name,
-            workspacePath,
-            provider: options.config.agent.defaultProvider,
-            model: options.config.agent.defaultModel,
-            reasoningEffort: options.config.agent.defaultReasoningEffort,
             kind: "system",
             action: item.action,
             repositoryId: null,
-            enabled: item.enabled && item.interval !== null,
+            enabled: item.enabled,
           })
         : updateScheduledTask(options.database, existing.id, {
-            cronExpression: cronForInterval(item.interval ?? 1_440),
-            workspacePath,
+            cronExpression: item.cronExpression,
             timezone: options.config.timezone,
-            enabled: item.enabled && item.interval !== null,
+            enabled: item.enabled,
             kind: "system",
             action: item.action,
             repositoryId: null,
@@ -392,46 +333,44 @@ export function createSystemScheduleProjector(options: {
 
   const projectCodeBackup = (state: CodeBackupSettings): void => {
     projectBackupPair(
-      state.repositoryPath,
       {
         taskId: SYSTEM_TASK_IDS.codeCheckpoint,
         name: "Code checkpoint",
         action: "git.checkpoint",
         enabled: state.available && state.automaticCheckpoint,
-        interval: state.checkpointIntervalMinutes ?? null,
+        cronExpression: state.checkpointCron,
       },
       {
         taskId: SYSTEM_TASK_IDS.codePush,
         name: "Code push",
         action: "git.push",
         enabled: state.available && state.automaticPush,
-        interval: state.pushIntervalMinutes ?? null,
+        cronExpression: state.pushCron,
       },
     );
   };
 
   const projectAgentArchive = (state: AgentArchiveSettings): void => {
     projectBackupPair(
-      state.archiveRepositoryPath,
       {
         taskId: SYSTEM_TASK_IDS.agentArchiveCheckpoint,
         name: "Agent archive export",
         action: "agent.archive.checkpoint",
         enabled: state.enabled,
-        interval: state.exportIntervalMinutes ?? null,
+        cronExpression: state.exportCron,
       },
       {
         taskId: SYSTEM_TASK_IDS.agentArchivePush,
         name: "Agent archive push",
         action: "agent.archive.push",
         enabled: state.automaticPush,
-        interval: state.pushIntervalMinutes ?? null,
+        cronExpression: state.pushCron,
       },
     );
   };
 
   const projectAll = (input: SystemScheduleProjection): void => {
-    projectKnowledge(input.knowledge, options.config.knowledge.path);
+    projectKnowledge(input.knowledge);
     projectCodeBackup(input.codeBackup);
     projectAgentArchive(input.agentArchive);
     for (const repository of input.repositories) {

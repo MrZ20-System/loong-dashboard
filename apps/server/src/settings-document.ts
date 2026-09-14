@@ -1,7 +1,12 @@
 import {
   settingsDocumentV2Schema,
+  settingsDocumentV3Schema,
   type SettingsDocumentV2,
+  type SettingsDocumentV3,
 } from "@loongboard/contracts";
+import { validateCron } from "@loongboard/scheduler";
+
+import { legacyIntervalToCron } from "./legacy-schedule-migration.js";
 
 export interface SettingsDocumentRepositoryDefaults {
   configuredSlots?: number;
@@ -16,9 +21,20 @@ export interface SettingsDocumentDefaults {
     defaultReasoning?: string | null;
     retentionMinutes?: number;
   };
-  knowledgeBackup?: Partial<SettingsDocumentV2["knowledgeBackup"]>;
-  codeBackup?: Partial<SettingsDocumentV2["codeBackup"]>;
-  agentArchive?: Partial<SettingsDocumentV2["agentArchive"]>;
+  knowledgeBackup?: Partial<SettingsDocumentV3["knowledgeBackup"]>;
+  codeBackup?: Partial<SettingsDocumentV3["codeBackup"]>;
+  agentArchive?: Partial<SettingsDocumentV3["agentArchive"]>;
+}
+
+/** Existing runtime projections used to recover the effective V2 cadence. */
+export interface SettingsDocumentScheduleOverrides {
+  repositorySyncCron?: Readonly<Record<string, string>>;
+  knowledgeCheckpointCron?: string;
+  knowledgePushCron?: string;
+  codeCheckpointCron?: string;
+  codePushCron?: string;
+  agentArchiveExportCron?: string;
+  agentArchivePushCron?: string;
 }
 
 const DEFAULT_RETENTION = {
@@ -30,8 +46,11 @@ const DEFAULT_RETENTION = {
   prunePayloadWhenArchived: true,
 } as const;
 
-const DEFAULTS: SettingsDocumentV2 = {
-  version: 2,
+const DEFAULT_CRON = "0 0 * * *";
+const DEFAULT_SYNC_CRON = "0 */1 * * *";
+
+const DEFAULTS: SettingsDocumentV3 = {
+  version: 3,
   repositories: {},
   github: {
     verifiedSource: null,
@@ -52,14 +71,14 @@ const DEFAULTS: SettingsDocumentV2 = {
     remote: "origin",
     sourceRef: "main",
     remoteBranch: "loongboard-knowledge-backup",
-    checkpointIntervalMinutes: null,
-    pushIntervalMinutes: null,
+    checkpointCron: DEFAULT_CRON,
+    pushCron: DEFAULT_CRON,
   },
   codeBackup: {
     automaticCheckpoint: false,
-    checkpointIntervalMinutes: null,
+    checkpointCron: DEFAULT_CRON,
     automaticPush: false,
-    pushIntervalMinutes: null,
+    pushCron: DEFAULT_CRON,
     sourceRef: "main",
     remote: "origin",
     remoteBranch: "loongboard-backup",
@@ -67,47 +86,72 @@ const DEFAULTS: SettingsDocumentV2 = {
   agentArchive: {
     archiveRepositoryPath: "agent-history",
     enabled: false,
-    exportIntervalMinutes: null,
+    exportCron: DEFAULT_CRON,
     automaticPush: false,
-    pushIntervalMinutes: null,
+    pushCron: DEFAULT_CRON,
     sourceRef: "main",
     remote: "origin",
     remoteBranch: "agent-history-backup",
   },
 };
 
-/**
- * Build a complete V2 document from installation defaults. This is also the
- * missing-file path; callers should write the returned value immediately.
- */
+/** Build a complete V3 document from installation defaults. */
 export function createDefaultSettingsDocument(
   options: SettingsDocumentDefaults = {},
-): SettingsDocumentV2 {
-  return migrateSettingsV1ToV2(undefined, options);
+): SettingsDocumentV3 {
+  return migrateSettingsToV3(undefined, options);
 }
 
 /**
- * Convert the only supported legacy input (V1 or an absent document) into the
- * complete V2 policy document. Compatibility is intentionally confined here:
- * unknown fields and runtime projections are discarded during migration.
+ * Migrate the only supported legacy document versions into the runtime V3
+ * policy. Version conversion is deliberately isolated to this module: the
+ * Settings controller and all runtime adapters only consume V3.
  */
-export function migrateSettingsV1ToV2(
+export function migrateSettingsToV3(
   raw: unknown,
   options: SettingsDocumentDefaults = {},
-): SettingsDocumentV2 {
+  schedules: SettingsDocumentScheduleOverrides = {},
+): SettingsDocumentV3 {
   if (raw !== undefined && !isRecord(raw)) {
     throw new Error("settings.json must contain an object");
   }
   const source = raw ?? {};
   const version = source.version;
-  if (version !== undefined && version !== 1 && version !== 2) {
+  if (version !== undefined && version !== 1 && version !== 2 && version !== 3) {
     throw new Error(`Unsupported settings.json version: ${String(version)}`);
   }
-  if (version === 2) {
-    return settingsDocumentV2Schema.parse(source);
+  if (version === 3) {
+    return validateSettingsDocumentCrons(settingsDocumentV3Schema.parse(source));
   }
+  if (version === 2) {
+    return migrateSettingsV2ToV3(source, options, schedules);
+  }
+  return migrateSettingsV1ToV3(source, options, schedules);
+}
 
-  const repositories = migrateRepositories(source.repositories, options.repositories);
+/** Migrate a strict V2 document, preferring persisted task projections. */
+export function migrateSettingsV2ToV3(
+  raw: unknown,
+  options: SettingsDocumentDefaults = {},
+  schedules: SettingsDocumentScheduleOverrides = {},
+): SettingsDocumentV3 {
+  const source = settingsDocumentV2Schema.parse(raw);
+  return validateSettingsDocumentCrons(
+    migrateLegacyDocument(source, options, schedules),
+  );
+}
+
+/** Migrate an old/absent V1 document while dropping runtime projections. */
+export function migrateSettingsV1ToV3(
+  raw: unknown,
+  options: SettingsDocumentDefaults = {},
+  schedules: SettingsDocumentScheduleOverrides = {},
+): SettingsDocumentV3 {
+  if (raw !== undefined && !isRecord(raw)) {
+    throw new Error("settings.json must contain an object");
+  }
+  const source = raw ?? {};
+  const repositories = migrateRepositories(source.repositories, options.repositories, schedules);
   const github = migrateGithub(source.github);
   const agentSource = asRecord(source.agent);
   const agent = {
@@ -135,45 +179,137 @@ export function migrateSettingsV1ToV2(
   const knowledgeBackup = migrateKnowledgeBackup(
     checkpointSource,
     options.knowledgeBackup,
+    schedules,
   );
   const codeBackup = migrateCodeBackup(
     asRecord(source.codeBackup),
     options.codeBackup,
+    schedules,
   );
   const agentArchive = migrateAgentArchive(
     asRecord(source.agentArchive),
     options.agentArchive,
+    schedules,
   );
 
-  return settingsDocumentV2Schema.parse({
-    version: 2,
-    repositories,
-    github,
-    agent,
-    knowledgeBackup,
-    codeBackup,
-    agentArchive,
+  return validateSettingsDocumentCrons(
+    settingsDocumentV3Schema.parse({
+      version: 3,
+      repositories,
+      github,
+      agent,
+      knowledgeBackup,
+      codeBackup,
+      agentArchive,
+    }),
+  );
+}
+
+function migrateLegacyDocument(
+  source: SettingsDocumentV2,
+  options: SettingsDocumentDefaults,
+  schedules: SettingsDocumentScheduleOverrides,
+): SettingsDocumentV3 {
+  const repositories: SettingsDocumentV3["repositories"] = {};
+  for (const [id, stored] of Object.entries(source.repositories)) {
+    repositories[id] = {
+      automaticSync: stored.automaticSync,
+      syncCron: resolveCron(
+        schedules.repositorySyncCron?.[id],
+        stored.syncFrequencyMinutes,
+        DEFAULT_SYNC_CRON,
+      ),
+      syncLookbackDays: stored.syncLookbackDays,
+      retention: stored.retention,
+      worktrees: stored.worktrees,
+    };
+  }
+
+  return settingsDocumentV3Schema.parse({
+    version: 3,
+    repositories: {
+      ...migrateRepositories({}, options.repositories, schedules),
+      ...repositories,
+    },
+    github: source.github,
+    agent: source.agent,
+    knowledgeBackup: {
+      autoCommit: source.knowledgeBackup.autoCommit,
+      autoPush: source.knowledgeBackup.autoPush,
+      remote: source.knowledgeBackup.remote,
+      sourceRef: source.knowledgeBackup.sourceRef,
+      remoteBranch: source.knowledgeBackup.remoteBranch,
+      checkpointCron: resolveCron(
+        schedules.knowledgeCheckpointCron,
+        source.knowledgeBackup.checkpointIntervalMinutes,
+        options.knowledgeBackup?.checkpointCron ?? DEFAULT_CRON,
+      ),
+      pushCron: resolveCron(
+        schedules.knowledgePushCron,
+        source.knowledgeBackup.pushIntervalMinutes,
+        options.knowledgeBackup?.pushCron ?? DEFAULT_CRON,
+      ),
+    },
+    codeBackup: {
+      automaticCheckpoint: source.codeBackup.automaticCheckpoint,
+      automaticPush: source.codeBackup.automaticPush,
+      sourceRef: source.codeBackup.sourceRef,
+      remote: source.codeBackup.remote,
+      remoteBranch: source.codeBackup.remoteBranch,
+      checkpointCron: resolveCron(
+        schedules.codeCheckpointCron,
+        source.codeBackup.checkpointIntervalMinutes,
+        options.codeBackup?.checkpointCron ?? DEFAULT_CRON,
+      ),
+      pushCron: resolveCron(
+        schedules.codePushCron,
+        source.codeBackup.pushIntervalMinutes,
+        options.codeBackup?.pushCron ?? DEFAULT_CRON,
+      ),
+    },
+    agentArchive: {
+      archiveRepositoryPath: source.agentArchive.archiveRepositoryPath,
+      enabled: source.agentArchive.enabled,
+      automaticPush: source.agentArchive.automaticPush,
+      sourceRef: source.agentArchive.sourceRef,
+      remote: source.agentArchive.remote,
+      remoteBranch: source.agentArchive.remoteBranch,
+      exportCron: resolveCron(
+        schedules.agentArchiveExportCron,
+        source.agentArchive.exportIntervalMinutes,
+        options.agentArchive?.exportCron ?? DEFAULT_CRON,
+      ),
+      pushCron: resolveCron(
+        schedules.agentArchivePushCron,
+        source.agentArchive.pushIntervalMinutes,
+        options.agentArchive?.pushCron ?? DEFAULT_CRON,
+      ),
+    },
   });
 }
 
 function migrateRepositories(
   value: unknown,
   defaults: SettingsDocumentDefaults["repositories"],
-): SettingsDocumentV2["repositories"] {
+  schedules: SettingsDocumentScheduleOverrides,
+): SettingsDocumentV3["repositories"] {
   const source = asRecord(value);
   const ids = new Set([
     ...Object.keys(defaults ?? {}),
     ...Object.keys(source),
   ]);
-  const repositories: SettingsDocumentV2["repositories"] = {};
+  const repositories: SettingsDocumentV3["repositories"] = {};
   for (const id of ids) {
     const stored = asRecord(source[id]);
     const repositoryDefaults = defaults?.[id] ?? {};
+    const legacyMinutes = readPositiveInteger(stored.syncFrequencyMinutes, 60);
     repositories[id] = {
       automaticSync: readBoolean(stored.automaticSync, false),
-      syncFrequencyMinutes: readPositiveInteger(stored.syncFrequencyMinutes, 60),
-      // New repositories bootstrap a small, predictable metadata window.
-      // An explicit legacy value of 30 remains a user choice.
+      syncCron: resolveCron(
+        schedules.repositorySyncCron?.[id],
+        legacyMinutes,
+        DEFAULT_SYNC_CRON,
+      ),
       syncLookbackDays: stored.syncLookbackDays === 30 ? 30 : 7,
       retention: {
         automaticArchiveEnabled: readBoolean(
@@ -222,7 +358,7 @@ function migrateRepositories(
   return repositories;
 }
 
-function migrateGithub(value: unknown): SettingsDocumentV2["github"] {
+function migrateGithub(value: unknown): SettingsDocumentV3["github"] {
   const source = asRecord(value);
   const accountSource = asRecord(source.account);
   const account = typeof accountSource.login === "string" && accountSource.login.trim().length > 0
@@ -244,7 +380,7 @@ function migrateGithub(value: unknown): SettingsDocumentV2["github"] {
   };
 }
 
-function migrateQuota(value: unknown): SettingsDocumentV2["github"]["rest"] {
+function migrateQuota(value: unknown): SettingsDocumentV3["github"]["rest"] {
   const source = asRecord(value);
   if (
     !Number.isInteger(source.remaining) || (source.remaining as number) < 0 ||
@@ -263,7 +399,8 @@ function migrateQuota(value: unknown): SettingsDocumentV2["github"]["rest"] {
 function migrateKnowledgeBackup(
   value: Record<string, unknown>,
   defaults: SettingsDocumentDefaults["knowledgeBackup"],
-): SettingsDocumentV2["knowledgeBackup"] {
+  schedules: SettingsDocumentScheduleOverrides,
+): SettingsDocumentV3["knowledgeBackup"] {
   return {
     autoCommit: readBoolean(value.autoCommit, defaults?.autoCommit ?? DEFAULTS.knowledgeBackup.autoCommit),
     autoPush: readBoolean(value.autoPush, defaults?.autoPush ?? DEFAULTS.knowledgeBackup.autoPush),
@@ -273,13 +410,16 @@ function migrateKnowledgeBackup(
       readString(value.branch, defaults?.sourceRef ?? DEFAULTS.knowledgeBackup.sourceRef),
     ),
     remoteBranch: readString(value.remoteBranch, defaults?.remoteBranch ?? DEFAULTS.knowledgeBackup.remoteBranch),
-    checkpointIntervalMinutes: readNullablePositiveInteger(
-      value.checkpointIntervalMinutes,
-      readNullablePositiveInteger(value.intervalMinutes, defaults?.checkpointIntervalMinutes ?? DEFAULTS.knowledgeBackup.checkpointIntervalMinutes),
+    checkpointCron: resolveCron(
+      schedules.knowledgeCheckpointCron,
+      readNullablePositiveInteger(value.checkpointIntervalMinutes,
+        readNullablePositiveInteger(value.intervalMinutes, null)),
+      defaults?.checkpointCron ?? DEFAULTS.knowledgeBackup.checkpointCron,
     ),
-    pushIntervalMinutes: readNullablePositiveInteger(
-      value.pushIntervalMinutes,
-      defaults?.pushIntervalMinutes ?? DEFAULTS.knowledgeBackup.pushIntervalMinutes,
+    pushCron: resolveCron(
+      schedules.knowledgePushCron,
+      readNullablePositiveInteger(value.pushIntervalMinutes, null),
+      defaults?.pushCron ?? DEFAULTS.knowledgeBackup.pushCron,
     ),
   };
 }
@@ -287,12 +427,21 @@ function migrateKnowledgeBackup(
 function migrateCodeBackup(
   value: Record<string, unknown>,
   defaults: SettingsDocumentDefaults["codeBackup"],
-): SettingsDocumentV2["codeBackup"] {
+  schedules: SettingsDocumentScheduleOverrides,
+): SettingsDocumentV3["codeBackup"] {
   return {
     automaticCheckpoint: readBoolean(value.automaticCheckpoint, defaults?.automaticCheckpoint ?? DEFAULTS.codeBackup.automaticCheckpoint),
-    checkpointIntervalMinutes: readNullablePositiveInteger(value.checkpointIntervalMinutes, defaults?.checkpointIntervalMinutes ?? DEFAULTS.codeBackup.checkpointIntervalMinutes),
+    checkpointCron: resolveCron(
+      schedules.codeCheckpointCron,
+      readNullablePositiveInteger(value.checkpointIntervalMinutes, null),
+      defaults?.checkpointCron ?? DEFAULTS.codeBackup.checkpointCron,
+    ),
     automaticPush: readBoolean(value.automaticPush, defaults?.automaticPush ?? DEFAULTS.codeBackup.automaticPush),
-    pushIntervalMinutes: readNullablePositiveInteger(value.pushIntervalMinutes, defaults?.pushIntervalMinutes ?? DEFAULTS.codeBackup.pushIntervalMinutes),
+    pushCron: resolveCron(
+      schedules.codePushCron,
+      readNullablePositiveInteger(value.pushIntervalMinutes, null),
+      defaults?.pushCron ?? DEFAULTS.codeBackup.pushCron,
+    ),
     sourceRef: readString(value.sourceRef, defaults?.sourceRef ?? DEFAULTS.codeBackup.sourceRef),
     remote: readString(value.remote, defaults?.remote ?? DEFAULTS.codeBackup.remote),
     remoteBranch: readString(value.remoteBranch, defaults?.remoteBranch ?? DEFAULTS.codeBackup.remoteBranch),
@@ -302,20 +451,69 @@ function migrateCodeBackup(
 function migrateAgentArchive(
   value: Record<string, unknown>,
   defaults: SettingsDocumentDefaults["agentArchive"],
-): SettingsDocumentV2["agentArchive"] {
+  schedules: SettingsDocumentScheduleOverrides,
+): SettingsDocumentV3["agentArchive"] {
   return {
     archiveRepositoryPath: readString(
       value.archiveRepositoryPath,
       defaults?.archiveRepositoryPath ?? DEFAULTS.agentArchive.archiveRepositoryPath,
     ),
     enabled: readBoolean(value.enabled, defaults?.enabled ?? DEFAULTS.agentArchive.enabled),
-    exportIntervalMinutes: readNullablePositiveInteger(value.exportIntervalMinutes, defaults?.exportIntervalMinutes ?? DEFAULTS.agentArchive.exportIntervalMinutes),
+    exportCron: resolveCron(
+      schedules.agentArchiveExportCron,
+      readNullablePositiveInteger(value.exportIntervalMinutes, null),
+      defaults?.exportCron ?? DEFAULTS.agentArchive.exportCron,
+    ),
     automaticPush: readBoolean(value.automaticPush, defaults?.automaticPush ?? DEFAULTS.agentArchive.automaticPush),
-    pushIntervalMinutes: readNullablePositiveInteger(value.pushIntervalMinutes, defaults?.pushIntervalMinutes ?? DEFAULTS.agentArchive.pushIntervalMinutes),
+    pushCron: resolveCron(
+      schedules.agentArchivePushCron,
+      readNullablePositiveInteger(value.pushIntervalMinutes, null),
+      defaults?.pushCron ?? DEFAULTS.agentArchive.pushCron,
+    ),
     sourceRef: readString(value.sourceRef, defaults?.sourceRef ?? DEFAULTS.agentArchive.sourceRef),
     remote: readString(value.remote, defaults?.remote ?? DEFAULTS.agentArchive.remote),
     remoteBranch: readString(value.remoteBranch, defaults?.remoteBranch ?? DEFAULTS.agentArchive.remoteBranch),
   };
+}
+
+function resolveCron(
+  persisted: string | undefined,
+  legacyMinutes: number | null,
+  fallback: string,
+): string {
+  if (typeof persisted === "string" && persisted.trim().length > 0) {
+    return persisted.trim();
+  }
+  if (legacyMinutes !== null) return legacyIntervalToCron(legacyMinutes);
+  return fallback;
+}
+
+/** Validate all V3 cron policy values after the schema shape is established. */
+export function validateSettingsDocumentCrons(
+  document: SettingsDocumentV3,
+): SettingsDocumentV3 {
+  const values = [
+    ...Object.entries(document.repositories).map(([id, value]) => [
+      `repositories.${id}.syncCron`,
+      value.syncCron,
+    ] as const),
+    ["knowledgeBackup.checkpointCron", document.knowledgeBackup.checkpointCron],
+    ["knowledgeBackup.pushCron", document.knowledgeBackup.pushCron],
+    ["codeBackup.checkpointCron", document.codeBackup.checkpointCron],
+    ["codeBackup.pushCron", document.codeBackup.pushCron],
+    ["agentArchive.exportCron", document.agentArchive.exportCron],
+    ["agentArchive.pushCron", document.agentArchive.pushCron],
+  ] as const;
+  for (const [path, expression] of values) {
+    try {
+      validateCron(expression);
+    } catch (error) {
+      throw new Error(
+        `Invalid settings cron at ${path}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  return document;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -367,7 +565,7 @@ function readNullablePositiveInteger(
     : fallback;
 }
 
-function isCredentialSource(value: unknown): value is SettingsDocumentV2["github"]["verifiedSource"] {
+function isCredentialSource(value: unknown): value is SettingsDocumentV3["github"]["verifiedSource"] {
   return value === "settings" ||
     value === "GH_TOKEN" ||
     value === "GITHUB_TOKEN" ||

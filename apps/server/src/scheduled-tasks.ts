@@ -20,6 +20,7 @@ import {
   type ScheduledTaskCreate,
   type ScheduledTaskUpdate,
 } from "@loongboard/contracts";
+import { validateCron } from "@loongboard/scheduler";
 import type { FastifyInstance } from "fastify";
 
 import { InvalidRequestError, parseRequest, sendParsed } from "./route-helpers.js";
@@ -56,6 +57,16 @@ function requireRepositoryForSystemAction(
   }
 }
 
+function requireValidCron(expression: string): void {
+  try {
+    validateCron(expression);
+  } catch (error) {
+    throw new InvalidRequestError(
+      `Invalid cronExpression: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
 export interface ScheduledTaskRoutesDependencies {
   database: DatabaseClient;
   engine: SchedulerEngine;
@@ -72,19 +83,31 @@ export function taskInput(
   defaults: ScheduledTaskRoutesDependencies["defaults"],
   existing?: ScheduledTaskRow,
 ): Parameters<typeof createScheduledTask>[1] {
-  return {
+  const kind = body.kind ?? existing?.kind ?? "agent";
+  const shared = {
     name: body.name ?? existing?.name ?? "Untitled task",
     cronExpression: body.cronExpression ?? existing?.cronExpression ?? "0 9 * * *",
     timezone: body.timezone ?? existing?.timezone ?? "Asia/Shanghai",
+    kind,
+    repositoryId: body.repositoryId ?? existing?.repositoryId ?? null,
+    enabled: body.enabled ?? existing?.enabled ?? true,
+  };
+  if (kind === "system") {
+    return {
+      ...shared,
+      kind: "system",
+      action: body.action ?? existing?.action ?? null,
+    };
+  }
+  return {
+    ...shared,
     prompt: body.prompt ?? existing?.prompt ?? "",
     workspacePath: body.workspacePath ?? existing?.workspacePath ?? process.cwd(),
     provider: body.provider ?? existing?.provider ?? defaults.provider,
     model: body.model ?? existing?.model ?? defaults.model,
     reasoningEffort: body.reasoningEffort ?? existing?.reasoningEffort ?? defaults.reasoningEffort,
-    kind: body.kind ?? existing?.kind ?? "agent",
-    action: body.action ?? existing?.action ?? null,
-    repositoryId: body.repositoryId ?? existing?.repositoryId ?? null,
-    enabled: body.enabled ?? existing?.enabled ?? true,
+    kind: "agent",
+    action: null,
   };
 }
 
@@ -103,6 +126,7 @@ export function registerScheduledTaskRoutes(
     const body = parseRequest(scheduledTaskCreateSchema, request.body);
     if (body.kind === "system") requireSupportedSystemAction(body.action);
     const input = taskInput(body, defaults);
+    requireValidCron(input.cronExpression);
     requireRepositoryForSystemAction(input.action, input.repositoryId);
     const task = createScheduledTask(database, input);
     const scheduled = engine.refresh(task.id);
@@ -127,6 +151,7 @@ export function registerScheduledTaskRoutes(
       throw new InvalidRequestError("Agent tasks cannot define a system action");
     }
     const input = taskInput(body as ScheduledTaskCreate, defaults, existing);
+    requireValidCron(input.cronExpression);
     requireRepositoryForSystemAction(input.action, input.repositoryId);
     const nextRun =
       body.enabled === undefined || body.enabled

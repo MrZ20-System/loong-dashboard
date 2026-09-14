@@ -124,8 +124,8 @@ export interface KnowledgeCheckpointOptions {
   remote?: string;
   sourceRef?: string;
   remoteBranch?: string;
-  checkpointIntervalMinutes?: number | null;
-  pushIntervalMinutes?: number | null;
+  checkpointCron?: string;
+  pushCron?: string;
 }
 
 export interface KnowledgeControllerOptions {
@@ -160,8 +160,8 @@ export class KnowledgeController {
     remote: string;
     sourceRef: string;
     remoteBranch: string;
-    checkpointIntervalMinutes: number | null;
-    pushIntervalMinutes: number | null;
+    checkpointCron: string;
+    pushCron: string;
   };
   private watcher: ReturnType<typeof watch> | null = null;
   private rescanTimer: ReturnType<typeof setTimeout> | null = null;
@@ -182,8 +182,8 @@ export class KnowledgeController {
       remote: options.checkpoint?.remote ?? "origin",
       sourceRef: options.checkpoint?.sourceRef ?? "main",
       remoteBranch: options.checkpoint?.remoteBranch ?? "loongboard-knowledge-backup",
-      checkpointIntervalMinutes: options.checkpoint?.checkpointIntervalMinutes ?? null,
-      pushIntervalMinutes: options.checkpoint?.pushIntervalMinutes ?? null,
+      checkpointCron: options.checkpoint?.checkpointCron ?? "0 0 * * *",
+      pushCron: options.checkpoint?.pushCron ?? "0 0 * * *",
     };
   }
 
@@ -206,8 +206,8 @@ export class KnowledgeController {
     if (settings.remote !== undefined) this.checkpoint.remote = settings.remote;
     if (settings.sourceRef !== undefined) this.checkpoint.sourceRef = settings.sourceRef;
     if (settings.remoteBranch !== undefined) this.checkpoint.remoteBranch = settings.remoteBranch;
-    if (settings.checkpointIntervalMinutes !== undefined) this.checkpoint.checkpointIntervalMinutes = settings.checkpointIntervalMinutes;
-    if (settings.pushIntervalMinutes !== undefined) this.checkpoint.pushIntervalMinutes = settings.pushIntervalMinutes;
+    if (settings.checkpointCron !== undefined) this.checkpoint.checkpointCron = settings.checkpointCron;
+    if (settings.pushCron !== undefined) this.checkpoint.pushCron = settings.pushCron;
   }
 
   /** Run the existing Knowledge checkpoint immediately; push is opt-in. */

@@ -40,7 +40,7 @@ function fixture() {
   mkdirSync(worktreesPath, { recursive: true });
   mkdirSync(repositoryPath, { recursive: true });
   const config = parseSystemConfig({
-    version: 1,
+    version: 2,
     timezone: "UTC",
     repositories: [{
       key: "repo",
@@ -94,17 +94,17 @@ const knowledge = {
   remote: "origin",
   sourceRef: "main",
   remoteBranch: "knowledge-backup",
-  checkpointIntervalMinutes: 45,
-  pushIntervalMinutes: 60,
+  checkpointCron: "*/45 * * * *",
+  pushCron: "0 */1 * * *",
 };
 
 const codeBackup = {
   repositoryPath: "/tmp/code",
   available: true,
   automaticCheckpoint: false,
-  checkpointIntervalMinutes: 30,
+  checkpointCron: "*/30 * * * *",
   automaticPush: false,
-  pushIntervalMinutes: 120,
+  pushCron: "0 */2 * * *",
   sourceRef: "main",
   remote: "origin",
   remoteBranch: "code-backup",
@@ -113,9 +113,9 @@ const codeBackup = {
 const archive = {
   archiveRepositoryPath: "/tmp/archive",
   enabled: false,
-  exportIntervalMinutes: 15,
+  exportCron: "*/15 * * * *",
   automaticPush: false,
-  pushIntervalMinutes: 180,
+  pushCron: "0 */3 * * *",
   sourceRef: "main",
   remote: "origin",
   remoteBranch: "archive-backup",
@@ -127,7 +127,7 @@ function projectInput(config: ReturnType<typeof parseSystemConfig>) {
       repository: config.repositories[0],
       settings: {
         automaticSync: false,
-        syncFrequencyMinutes: 30,
+        syncCron: "*/30 * * * *",
         retention,
       },
     }],
@@ -172,6 +172,11 @@ describe("system schedule projector", () => {
       cronExpression: "0 */1 * * *",
       enabled: false,
       action: "knowledge.push",
+      prompt: null,
+      workspacePath: null,
+      provider: null,
+      model: null,
+      reasoningEffort: null,
     });
   });
 
@@ -249,7 +254,7 @@ describe("system schedule projector", () => {
       ...projectInput(config),
       repositories: [{
         repository: config.repositories[0],
-        settings: { automaticSync: true, syncFrequencyMinutes: 30, retention },
+        settings: { automaticSync: true, syncCron: "*/30 * * * *", retention },
       }],
     });
     expect(getScheduledTask(database, SYSTEM_TASK_IDS.repositorySync("repo"))?.enabled).toBe(false);
@@ -266,7 +271,7 @@ describe("system schedule projector", () => {
       ...projectInput(config),
       repositories: [{
         repository: config.repositories[0],
-        settings: { automaticSync: true, syncFrequencyMinutes: 30, retention },
+        settings: { automaticSync: true, syncCron: "*/30 * * * *", retention },
       }],
     });
     expect(getScheduledTask(database, SYSTEM_TASK_IDS.repositorySync("repo"))?.enabled).toBe(true);

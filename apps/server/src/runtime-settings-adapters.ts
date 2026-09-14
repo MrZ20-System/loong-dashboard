@@ -84,8 +84,8 @@ export function createRuntimeSettingsAdapters(
       remoteBranch:
         options.config.knowledge.checkpoint?.remoteBranch ??
         "loongboard-knowledge-backup",
-      checkpointIntervalMinutes: null,
-      pushIntervalMinutes: null,
+      checkpointCron: "0 0 * * *",
+      pushCron: "0 0 * * *",
       nextRunAt: null,
       lastSuccessAt: null,
       lastError: null,
@@ -94,9 +94,9 @@ export function createRuntimeSettingsAdapters(
       repositoryPath: options.codeRepositoryPath,
       available: options.codeBackupAvailable,
       automaticCheckpoint: false,
-      checkpointIntervalMinutes: null,
+      checkpointCron: "0 0 * * *",
       automaticPush: false,
-      pushIntervalMinutes: null,
+      pushCron: "0 0 * * *",
       sourceRef: "main",
       remote: "origin",
       remoteBranch: "loongboard-backup",
@@ -109,9 +109,9 @@ export function createRuntimeSettingsAdapters(
     agentArchive: {
       archiveRepositoryPath: resolve(options.systemRoot, "agent-history"),
       enabled: false,
-      exportIntervalMinutes: null,
+      exportCron: "0 0 * * *",
       automaticPush: false,
-      pushIntervalMinutes: null,
+      pushCron: "0 0 * * *",
       sourceRef: "main",
       remote: "origin",
       remoteBranch: "agent-history-backup",
@@ -252,8 +252,7 @@ export function createRuntimeSettingsAdapters(
         }
         input.projector.projectRepository(repository, {
           automaticSync: patch.automaticSync ?? persistedPolicy.automaticSync,
-          syncFrequencyMinutes:
-            patch.syncFrequencyMinutes ?? persistedPolicy.syncFrequencyMinutes,
+          syncCron: patch.syncCron ?? persistedPolicy.syncCron,
           retention: {
             ...persistedPolicy.retention,
             ...(patch.retention ?? {}),
@@ -303,18 +302,17 @@ export function createRuntimeSettingsAdapters(
           ...(settings.remoteBranch === undefined
             ? {}
             : { remoteBranch: settings.remoteBranch }),
-          ...(settings.checkpointIntervalMinutes === undefined
+          ...(settings.checkpointCron === undefined
             ? {}
-            : { checkpointIntervalMinutes: settings.checkpointIntervalMinutes }),
-          ...(settings.pushIntervalMinutes === undefined
+            : { checkpointCron: settings.checkpointCron }),
+          ...(settings.pushCron === undefined
             ? {}
-            : { pushIntervalMinutes: settings.pushIntervalMinutes }),
+            : { pushCron: settings.pushCron }),
           nextRunAt: null,
         };
         input.knowledge.updateCheckpoint(state.checkpoint);
         const tasks = input.projector.projectKnowledge(
           state.checkpoint,
-          options.config.knowledge.path,
         );
         state.checkpoint.nextRunAt = tasks.checkpoint.nextRunAt;
         const pushTask = getScheduledTask(

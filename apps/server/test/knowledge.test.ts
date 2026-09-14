@@ -42,8 +42,8 @@ describe("Knowledge checkpoint policy", () => {
         remote: "origin",
         sourceRef: "release",
         remoteBranch: "knowledge-backup",
-        checkpointIntervalMinutes: 60,
-        pushIntervalMinutes: 240,
+        checkpointCron: "0 */1 * * *",
+        pushCron: "0 4 * * *",
       },
     });
     cleanups.push(() => controller.close());
@@ -54,14 +54,14 @@ describe("Knowledge checkpoint policy", () => {
       remote: "origin",
       sourceRef: "release",
       remoteBranch: "knowledge-backup",
-      checkpointIntervalMinutes: 60,
-      pushIntervalMinutes: 240,
+      checkpointCron: "0 */1 * * *",
+      pushCron: "0 4 * * *",
     });
 
-    controller.updateCheckpoint({ sourceRef: "main", checkpointIntervalMinutes: null });
+    controller.updateCheckpoint({ sourceRef: "main", checkpointCron: "*/30 * * * *" });
     const updated = controller.checkpointSettings();
     expect(updated.sourceRef).toBe("main");
-    expect(updated.checkpointIntervalMinutes).toBeNull();
+    expect(updated.checkpointCron).toBe("*/30 * * * *");
     expect(updated).not.toHaveProperty("branch");
     expect(updated).not.toHaveProperty("intervalMinutes");
   });

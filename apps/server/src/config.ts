@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs";
+import { copyFileSync, existsSync, lstatSync, readFileSync } from "node:fs";
 import {
   dirname,
   isAbsolute,
@@ -9,8 +9,13 @@ import {
   sep,
 } from "node:path";
 
-import { parse as parseYaml } from "yaml";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
+
+import { atomicWrite } from "@loongboard/knowledge";
+import { validateCron } from "@loongboard/scheduler";
+
+import { legacyIntervalToCron } from "./legacy-schedule-migration.js";
 
 const repositorySchema = z
   .object({
@@ -24,9 +29,66 @@ const repositorySchema = z
   })
   .strict();
 
-const baseSystemConfigSchema = z
+const legacyCheckpointSchema = z
+  .object({
+    autoCommit: z.boolean().optional().default(false),
+    autoPush: z.boolean().optional().default(false),
+    remote: z.string().trim().min(1).optional().default("origin"),
+    sourceRef: z.string().trim().min(1).optional(),
+    remoteBranch: z.string().trim().min(1).optional().default("loongboard-knowledge-backup"),
+    checkpointIntervalMinutes: z.number().int().positive().nullable().optional(),
+    pushIntervalMinutes: z.number().int().positive().nullable().optional(),
+  })
+  .strict();
+
+const baseSystemConfigV1Schema = z
   .object({
     version: z.literal(1),
+    timezone: z.string().trim().min(1),
+    repositories: z.array(repositorySchema),
+    knowledge: z
+      .object({
+        path: z.string().trim().min(1),
+        inbox: z
+          .string()
+          .trim()
+          .min(1)
+          .refine((path) => !isAbsolute(path), {
+            message: "knowledge.inbox must be relative to knowledge.path",
+          }),
+        historyLimit: z.number().int().positive(),
+        // This checkpoint applies only to the Knowledge repository; source
+        // repositories never get an entry and default to off.
+        checkpoint: legacyCheckpointSchema.optional(),
+      })
+      .strict(),
+    runtime: z
+      .object({
+        statePath: z.string().trim().min(1),
+        worktreesPath: z.string().trim().min(1),
+        /** Managed root for repositories added from Settings. */
+        repositoriesPath: z.string().trim().min(1).optional().default("./repositories"),
+        serverHost: z.string().trim().min(1),
+        serverPort: z.number().int().min(1).max(65_535),
+      })
+      .strict(),
+    agent: z
+      .object({
+        defaultProvider: z.string().trim().min(1),
+        defaultModel: z.string().trim().min(1),
+        defaultReasoningEffort: z.string().trim().min(1),
+        // Zero retains an idle runtime until explicit stop or server shutdown.
+        idleProcessMinutes: z.number().int().nonnegative().default(120),
+      })
+      .strict(),
+  })
+  .strict();
+
+const checkpointCronSchema = z.string().trim().min(1);
+
+const baseSystemConfigSchema = z
+  .object({
+    version: z.literal(2),
     timezone: z.string().trim().min(1),
     repositories: z.array(repositorySchema),
     knowledge: z
@@ -47,10 +109,10 @@ const baseSystemConfigSchema = z
             autoCommit: z.boolean().optional().default(false),
             autoPush: z.boolean().optional().default(false),
             remote: z.string().trim().min(1).optional().default("origin"),
-            sourceRef: z.string().trim().min(1).optional(),
+            sourceRef: z.string().trim().min(1).optional().default("main"),
             remoteBranch: z.string().trim().min(1).optional().default("loongboard-knowledge-backup"),
-            checkpointIntervalMinutes: z.number().int().positive().nullable().optional(),
-            pushIntervalMinutes: z.number().int().positive().nullable().optional(),
+            checkpointCron: checkpointCronSchema.optional().default("0 0 * * *"),
+            pushCron: checkpointCronSchema.optional().default("0 0 * * *"),
           })
           .strict()
           .optional(),
@@ -130,6 +192,21 @@ export const systemConfigSchema = baseSystemConfigSchema.superRefine(
         githubRepositories.set(githubKey, index);
       }
     });
+
+    const checkpoint = config.knowledge.checkpoint;
+    if (checkpoint !== undefined) {
+      for (const field of ["checkpointCron", "pushCron"] as const) {
+        try {
+          validateCron(checkpoint[field]);
+        } catch (error) {
+          context.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["knowledge", "checkpoint", field],
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+    }
   },
 );
 
@@ -158,6 +235,54 @@ function resolveKnowledgeInbox(
   }
 
   return inboxPath;
+}
+
+/** Convert a V1 system.yaml object into the complete V2 shape. */
+export function migrateSystemConfigV1ToV2(raw: unknown): unknown {
+  const source = baseSystemConfigV1Schema.parse(raw);
+  const legacy = source.knowledge.checkpoint;
+  if (legacy === undefined) {
+    return { ...source, version: 2 };
+  }
+  return {
+    ...source,
+    version: 2,
+    knowledge: {
+      ...source.knowledge,
+      checkpoint: {
+        autoCommit: legacy.autoCommit,
+        autoPush: legacy.autoPush,
+        remote: legacy.remote,
+        sourceRef: legacy.sourceRef ?? "main",
+        remoteBranch: legacy.remoteBranch,
+        checkpointCron: legacyIntervalToCronOrDefault(
+          legacy.checkpointIntervalMinutes,
+        ),
+        pushCron: legacyIntervalToCronOrDefault(legacy.pushIntervalMinutes),
+      },
+    },
+  };
+}
+
+function legacyIntervalToCronOrDefault(value: number | null | undefined): string {
+  return value === null || value === undefined
+    ? "0 0 * * *"
+    : legacyIntervalToCron(value);
+}
+
+/** Persist a validated V1->V2 migration with a recoverable source backup. */
+function persistSystemConfigMigration(
+  configPath: string,
+  migrated: unknown,
+): void {
+  const absolutePath = resolve(configPath);
+  const stat = lstatSync(absolutePath);
+  if (!stat.isFile()) {
+    throw new Error(`System configuration is not a regular file: ${absolutePath}`);
+  }
+  const backupPath = `${absolutePath}.v1.bak`;
+  copyFileSync(absolutePath, backupPath);
+  atomicWrite(absolutePath, stringifyYaml(migrated, { indent: 2 }));
 }
 
 export function parseSystemConfig(
@@ -227,7 +352,12 @@ export function loadSystemConfig(
     );
   }
 
-  const config = parseSystemConfig(input, absoluteConfigPath);
+  const version = isRecord(input) ? input.version : undefined;
+  const migratedInput = version === 1
+    ? migrateSystemConfigV1ToV2(input)
+    : input;
+  const config = parseSystemConfig(migratedInput, absoluteConfigPath);
+  if (version === 1) persistSystemConfigMigration(absoluteConfigPath, migratedInput);
   return environment === undefined
     ? config
     : applyRuntimeEnvironmentOverrides(config, environment);
@@ -267,6 +397,10 @@ function readEnvironmentPort(value: string | undefined): number | undefined {
     throw new Error("LOONGBOARD_SERVER_PORT must be an integer between 1 and 65535");
   }
   return port;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
 export function resolveSystemConfigPath(

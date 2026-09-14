@@ -119,7 +119,7 @@ function fixture(): {
   mkdirSync(repositoryPath, { recursive: true });
   writeFileSync(join(root, "settings.json"), `${JSON.stringify(settingsDocument(root))}\n`);
   const config = parseSystemConfig({
-    version: 1,
+    version: 2,
     timezone: "UTC",
     repositories: [{
       key: "repo",
@@ -130,7 +130,20 @@ function fixture(): {
       defaultBranch: "main",
       worktreeSlots: 1,
     }],
-    knowledge: { path: knowledgePath, inbox: "inbox", historyLimit: 10 },
+    knowledge: {
+      path: knowledgePath,
+      inbox: "inbox",
+      historyLimit: 10,
+      checkpoint: {
+        autoCommit: false,
+        autoPush: false,
+        remote: "origin",
+        sourceRef: "main",
+        remoteBranch: "knowledge-backup",
+        checkpointCron: "0 0 * * *",
+        pushCron: "0 0 * * *",
+      },
+    },
     runtime: {
       statePath,
       worktreesPath,
@@ -211,32 +224,33 @@ describe("system schedule projection", () => {
     });
     expect(getScheduledTask(runtime.database, "system_knowledge_checkpoint")).toMatchObject({
       enabled: false,
-      cronExpression: "*/45 * * * *",
+      // Existing scheduled-task cron is the V2 migration source of truth.
+      cronExpression: "0 * * * *",
     });
     expect(getScheduledTask(runtime.database, "system_knowledge_push")).toMatchObject({
       enabled: false,
-      cronExpression: "0 */1 * * *",
+      cronExpression: "0 * * * *",
     });
     expect(getScheduledTask(runtime.database, "system_code_checkpoint")).toMatchObject({
       enabled: false,
-      cronExpression: "*/30 * * * *",
+      cronExpression: "0 * * * *",
     });
     expect(getScheduledTask(runtime.database, "system_code_push")).toMatchObject({
       enabled: false,
-      cronExpression: "0 */2 * * *",
+      cronExpression: "0 * * * *",
     });
     expect(getScheduledTask(runtime.database, "system_agent_archive_checkpoint")).toMatchObject({
       enabled: false,
-      cronExpression: "*/15 * * * *",
+      cronExpression: "0 * * * *",
     });
     expect(getScheduledTask(runtime.database, "system_agent_archive_push")).toMatchObject({
       enabled: false,
-      cronExpression: "0 */3 * * *",
+      cronExpression: "0 * * * *",
     });
 
     // A task row is executable projection, not a policy source. Even if an
     // external repair mutates its policy-shaped columns, Settings reads the
-    // V2 document and only accepts runtime facts from the bridge.
+    // migrated V3 document and only accepts runtime facts from the bridge.
     for (const taskId of [
       "system_repository_sync_repo",
       "system_knowledge_checkpoint",
@@ -253,27 +267,27 @@ describe("system schedule projection", () => {
     }
     expect((await runtime.settings.repository("repo"))).toMatchObject({
       automaticSync: false,
-      syncFrequencyMinutes: 30,
+      syncCron: "*/30 * * * *",
     });
     expect((await runtime.settings.checkpointSettings())).toMatchObject({
       autoCommit: false,
       autoPush: false,
-      checkpointIntervalMinutes: 45,
-      pushIntervalMinutes: 60,
+      checkpointCron: "0 * * * *",
+      pushCron: "0 * * * *",
     });
     expect((await runtime.settings.codeBackupSettings())).toMatchObject({
       automaticCheckpoint: false,
-      checkpointIntervalMinutes: 30,
+      checkpointCron: "0 * * * *",
       automaticPush: false,
-      pushIntervalMinutes: 120,
+      pushCron: "0 * * * *",
       repositoryPath: resolve(fileURLToPath(new URL("../../..", import.meta.url))),
       available: true,
     });
     expect((await runtime.settings.agentArchiveSettings())).toMatchObject({
       enabled: false,
-      exportIntervalMinutes: 15,
+      exportCron: "0 * * * *",
       automaticPush: false,
-      pushIntervalMinutes: 180,
+      pushCron: "0 * * * *",
     });
   });
 

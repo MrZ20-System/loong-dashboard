@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   getScheduledTask,
+  listScheduledTasks,
   openDatabase,
   reconcileRepositories,
   type DatabaseClient,
@@ -73,6 +74,54 @@ const baseSystemTask = {
 } as const;
 
 describe("scheduled task repository bindings", () => {
+  it("rejects invalid Cron before creating or updating a task", async () => {
+    const { app, database } = setup();
+    const invalidCreate = await app.inject({
+      method: "POST",
+      url: "/api/scheduled-tasks",
+      payload: {
+        name: "Invalid Cron",
+        cronExpression: "not a cron",
+        timezone: "UTC",
+        kind: "agent",
+        prompt: "Review the repository.",
+        workspacePath: "/workspace/repo",
+        provider: "provider",
+        model: "model",
+        reasoningEffort: "high",
+      },
+    });
+    expect(invalidCreate.statusCode).toBe(400);
+    expect(invalidCreate.json().error.message).toContain("cronExpression");
+    expect(listScheduledTasks(database)).toHaveLength(0);
+
+    const created = await app.inject({
+      method: "POST",
+      url: "/api/scheduled-tasks",
+      payload: {
+        name: "Valid Cron",
+        cronExpression: "0 * * * *",
+        timezone: "UTC",
+        kind: "agent",
+        prompt: "Review the repository.",
+        workspacePath: "/workspace/repo",
+        provider: "provider",
+        model: "model",
+        reasoningEffort: "high",
+      },
+    });
+    expect(created.statusCode).toBe(201);
+    const taskId = created.json().id as string;
+
+    const invalidUpdate = await app.inject({
+      method: "PUT",
+      url: `/api/scheduled-tasks/${taskId}`,
+      payload: { cronExpression: "61 * * * *" },
+    });
+    expect(invalidUpdate.statusCode).toBe(400);
+    expect(getScheduledTask(database, taskId)?.cronExpression).toBe("0 * * * *");
+  });
+
   it("requires repositoryId on create and validates the merged update input", async () => {
     const { app } = setup();
 
@@ -112,6 +161,11 @@ describe("scheduled task repository bindings", () => {
     expect(bound.json()).toMatchObject({
       action: "repository.sync",
       repositoryId: "repo",
+      prompt: null,
+      workspacePath: null,
+      provider: null,
+      model: null,
+      reasoningEffort: null,
     });
   });
 

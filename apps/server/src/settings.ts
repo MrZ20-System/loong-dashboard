@@ -11,6 +11,7 @@ import { join, resolve } from "node:path";
 import {
   getRepositorySyncStatus,
   getRepository,
+  getScheduledTask,
   listRepositories,
   RepositoryNotFoundError,
   type DatabaseClient,
@@ -32,7 +33,7 @@ import {
   repositorySettingsUpdateSchema,
   savedResponseSchema,
   removedResponseSchema,
-  settingsDocumentV2Schema,
+  settingsDocumentV3Schema,
   type AgentRuntimeSettings,
   type AgentRuntimeSettingsUpdate,
   type AgentArchiveSettings,
@@ -45,7 +46,7 @@ import {
   type RepositorySettings,
   type RepositorySettingsUpdate,
   type RepositoryWorktreeSettings,
-  type SettingsDocumentV2,
+  type SettingsDocumentV3,
 } from "@loongboard/contracts";
 import {
   GitHubCredentialService,
@@ -56,9 +57,12 @@ import type { FastifyInstance } from "fastify";
 
 import { InvalidRequestError, parseRequest, sendParsed } from "./route-helpers.js";
 import {
-  migrateSettingsV1ToV2,
+  migrateSettingsToV3,
+  type SettingsDocumentScheduleOverrides,
   type SettingsDocumentDefaults,
 } from "./settings-document.js";
+import { validateCron } from "@loongboard/scheduler";
+import { SYSTEM_TASK_IDS } from "./system-schedules.js";
 
 /**
  * Runtime data needed by the control center. The Server owns this adapter so
@@ -244,8 +248,8 @@ export class SettingsController {
         environment: this.environment,
       });
     // Validate and normalize the durable boundary before the controller can
-    // serve a read or accept a write. Missing and V1 documents are rewritten
-    // atomically by readDocument; invalid V2 input is left untouched.
+    // serve a read or accept a write. Missing and legacy documents are
+    // rewritten atomically by readDocument; invalid input is left untouched.
     this.readDocument();
   }
 
@@ -269,8 +273,8 @@ export class SettingsController {
         remote: checkpoint.remote,
         sourceRef: checkpoint.sourceRef,
         remoteBranch: checkpoint.remoteBranch,
-        checkpointIntervalMinutes: checkpoint.checkpointIntervalMinutes,
-        pushIntervalMinutes: checkpoint.pushIntervalMinutes,
+        checkpointCron: checkpoint.checkpointCron,
+        pushCron: checkpoint.pushCron,
       },
       agentArchive: {
         archiveRepositoryPath: resolve(this.systemRoot, "agent-history"),
@@ -286,7 +290,7 @@ export class SettingsController {
     const persisted: RepositorySettings = {
       repositoryId,
       automaticSync: stored.automaticSync,
-      syncFrequencyMinutes: stored.syncFrequencyMinutes,
+      syncCron: stored.syncCron,
       syncLookbackDays: stored.syncLookbackDays,
       nextSyncAt: null,
       lastSyncAt: latestTimestamp(sync.pullRequests.lastSuccessAt, sync.issues.lastSuccessAt),
@@ -320,7 +324,7 @@ export class SettingsController {
     return repositorySettingsSchema.parse({
       repositoryId,
       automaticSync: stored.automaticSync,
-      syncFrequencyMinutes: stored.syncFrequencyMinutes,
+      syncCron: stored.syncCron,
       syncLookbackDays: stored.syncLookbackDays,
       nextSyncAt: null,
       lastSyncAt: latestTimestamp(sync.pullRequests.lastSuccessAt, sync.issues.lastSuccessAt),
@@ -343,11 +347,14 @@ export class SettingsController {
   ): Promise<RepositorySettings> {
     this.requireRepository(repositoryId);
     const validated = repositorySettingsUpdateSchema.parse(patch);
+    if (validated.syncCron !== undefined) {
+      assertValidCron(validated.syncCron, "syncCron");
+    }
     const current = await this.repository(repositoryId);
     const policy = this.readDocument().repositories[repositoryId];
     const nextPolicy = {
       automaticSync: validated.automaticSync ?? policy.automaticSync,
-      syncFrequencyMinutes: validated.syncFrequencyMinutes ?? policy.syncFrequencyMinutes,
+      syncCron: validated.syncCron ?? policy.syncCron,
       syncLookbackDays: validated.syncLookbackDays ?? policy.syncLookbackDays,
       retention: { ...policy.retention, ...(validated.retention ?? {}) },
       worktrees: { ...policy.worktrees, ...(validated.worktrees ?? {}) },
@@ -357,7 +364,7 @@ export class SettingsController {
     });
     const runtime = await this.repositorySchedules?.update?.(repositoryId, {
       ...(validated.automaticSync === undefined ? {} : { automaticSync: validated.automaticSync }),
-      ...(validated.syncFrequencyMinutes === undefined ? {} : { syncFrequencyMinutes: validated.syncFrequencyMinutes }),
+      ...(validated.syncCron === undefined ? {} : { syncCron: validated.syncCron }),
       ...(validated.syncLookbackDays === undefined ? {} : { syncLookbackDays: validated.syncLookbackDays }),
       ...(validated.retention === undefined
         ? {}
@@ -586,6 +593,12 @@ export class SettingsController {
 
   async updateCodeBackup(patch: CodeBackupSettingsUpdate): Promise<CodeBackupSettings> {
     const validated = codeBackupSettingsUpdateSchema.parse(patch);
+    if (validated.checkpointCron !== undefined) {
+      assertValidCron(validated.checkpointCron, "checkpointCron");
+    }
+    if (validated.pushCron !== undefined) {
+      assertValidCron(validated.pushCron, "pushCron");
+    }
     const availabilityRuntime = await this.codeBackupBridge?.get?.();
     if (
       availabilityRuntime?.available === false &&
@@ -657,6 +670,12 @@ export class SettingsController {
 
   async updateAgentArchive(patch: AgentArchiveSettingsUpdate): Promise<AgentArchiveSettings> {
     const validated = agentArchiveSettingsUpdateSchema.parse(patch);
+    if (validated.exportCron !== undefined) {
+      assertValidCron(validated.exportCron, "exportCron");
+    }
+    if (validated.pushCron !== undefined) {
+      assertValidCron(validated.pushCron, "pushCron");
+    }
     const current = this.readDocument().agentArchive;
     const nextPolicy = { ...current, ...validated };
     this.updateDocument((document) => {
@@ -706,6 +725,12 @@ export class SettingsController {
     patch: KnowledgeCheckpointSettingsUpdate,
   ): Promise<KnowledgeCheckpointSettings> {
     const validated = knowledgeCheckpointSettingsUpdateSchema.parse(patch);
+    if (validated.checkpointCron !== undefined) {
+      assertValidCron(validated.checkpointCron, "checkpointCron");
+    }
+    if (validated.pushCron !== undefined) {
+      assertValidCron(validated.pushCron, "pushCron");
+    }
     const current = this.readDocument().knowledgeBackup;
     const nextPolicy = { ...current, ...validated };
     this.updateDocument((document) => {
@@ -770,9 +795,30 @@ export class SettingsController {
     chmodSync(path, 0o600);
   }
 
-  private readDocument(): SettingsDocumentV2 {
+  private migrationScheduleOverrides(
+    repositoryIds: readonly string[],
+  ): SettingsDocumentScheduleOverrides {
+    const cron = (taskId: string): string | undefined =>
+      getScheduledTask(this.database, taskId)?.cronExpression;
+    const repositorySyncCron: Record<string, string> = {};
+    for (const repositoryId of repositoryIds) {
+      const expression = cron(SYSTEM_TASK_IDS.repositorySync(repositoryId));
+      if (expression !== undefined) repositorySyncCron[repositoryId] = expression;
+    }
+    return {
+      repositorySyncCron,
+      knowledgeCheckpointCron: cron(SYSTEM_TASK_IDS.knowledgeCheckpoint),
+      knowledgePushCron: cron(SYSTEM_TASK_IDS.knowledgePush),
+      codeCheckpointCron: cron(SYSTEM_TASK_IDS.codeCheckpoint),
+      codePushCron: cron(SYSTEM_TASK_IDS.codePush),
+      agentArchiveExportCron: cron(SYSTEM_TASK_IDS.agentArchiveCheckpoint),
+      agentArchivePushCron: cron(SYSTEM_TASK_IDS.agentArchivePush),
+    };
+  }
+
+  private readDocument(): SettingsDocumentV3 {
     if (!existsSync(this.settingsPath)) {
-      const document = migrateSettingsV1ToV2(undefined, this.documentDefaults());
+      const document = migrateSettingsToV3(undefined, this.documentDefaults());
       ensureRegularTarget(this.settingsPath);
       atomicWrite(this.settingsPath, `${JSON.stringify(document, null, 2)}\n`);
       return document;
@@ -791,8 +837,13 @@ export class SettingsController {
       throw new Error("settings.json is invalid JSON");
     }
     if (!isRecord(decoded)) throw new Error("settings.json must contain an object");
-    let document = migrateSettingsV1ToV2(decoded, this.documentDefaults());
-    const migrated = decoded.version !== 2;
+    const schedules = decoded.version === 2
+      ? this.migrationScheduleOverrides(
+          Object.keys(isRecord(decoded.repositories) ? decoded.repositories : {}),
+        )
+      : {};
+    let document = migrateSettingsToV3(decoded, this.documentDefaults(), schedules);
+    const migrated = decoded.version !== 3;
     if (migrated) {
       ensureRegularTarget(this.settingsPath);
       atomicWrite(this.settingsPath, `${JSON.stringify(document, null, 2)}\n`);
@@ -802,7 +853,7 @@ export class SettingsController {
     let addedRepository = false;
     for (const repository of Object.keys(defaults.repositories ?? {})) {
       if (document.repositories[repository] !== undefined) continue;
-      const repositoryDocument = migrateSettingsV1ToV2(
+      const repositoryDocument = migrateSettingsToV3(
         { version: 1, repositories: { [repository]: {} } },
         { repositories: { [repository]: defaults.repositories?.[repository] ?? {} } },
       );
@@ -816,17 +867,17 @@ export class SettingsController {
       addedRepository = true;
     }
     if (addedRepository) {
-      document = settingsDocumentV2Schema.parse(document);
+      document = settingsDocumentV3Schema.parse(document);
       ensureRegularTarget(this.settingsPath);
       atomicWrite(this.settingsPath, `${JSON.stringify(document, null, 2)}\n`);
     }
     return document;
   }
 
-  private updateDocument(mutator: (document: SettingsDocumentV2) => void): void {
+  private updateDocument(mutator: (document: SettingsDocumentV3) => void): void {
     const document = this.readDocument();
     mutator(document);
-    const validated = settingsDocumentV2Schema.parse(document);
+    const validated = settingsDocumentV3Schema.parse(document);
     ensureRegularTarget(this.settingsPath);
     atomicWrite(this.settingsPath, `${JSON.stringify(validated, null, 2)}\n`);
   }
@@ -945,6 +996,16 @@ export function registerSettingsRoutes(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function assertValidCron(expression: string, field: string): void {
+  try {
+    validateCron(expression);
+  } catch (error) {
+    throw new InvalidRequestError(
+      `Invalid ${field}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
 }
 
 function latestTimestamp(...timestamps: Array<string | null>): string | null {

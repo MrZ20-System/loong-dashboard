@@ -40,8 +40,8 @@ export interface SystemActionState {
     remote: string;
     sourceRef: string;
     remoteBranch: string;
-    checkpointIntervalMinutes: number | null;
-    pushIntervalMinutes: number | null;
+    checkpointCron: string;
+    pushCron: string;
     nextRunAt: string | null;
     lastSuccessAt: string | null;
     lastError: string | null;
