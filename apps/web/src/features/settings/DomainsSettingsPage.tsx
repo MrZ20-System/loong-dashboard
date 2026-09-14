@@ -325,7 +325,6 @@ export function DomainsSettingsPage() {
               aria-label={t({ en: "Rule name", "zh-CN": "规则名称" })}
               value={form.name}
               placeholder={t({ en: "Documentation", "zh-CN": "文档" })}
-              maxLength={40}
               onChange={(event) => setForm({ ...form, name: event.target.value })}
             />
           </label>

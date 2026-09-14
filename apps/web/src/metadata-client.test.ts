@@ -86,6 +86,13 @@ describe("metadata client", () => {
     expect(buildListUrl("repo", "pulls", { domains: ["dom_a", "dom_b"] })).toBe("/api/repositories/repo/pulls?domain=dom_a&domain=dom_b");
   });
 
+  it("preserves every valid selected Domain without a hidden count cap", () => {
+    const domains = Array.from({ length: 30 }, (_, index) => `dom_${index}`);
+    const params = new URLSearchParams();
+    for (const domain of [...domains, domains[0]!]) params.append("domain", domain);
+    expect(readMetadataFilters("pulls", params).domains).toEqual(domains);
+  });
+
   it("rejects reversed formal date ranges", () => {
     expect(readDateRange(new URLSearchParams("from=2026-09-10&to=2026-09-03"), { from: "2026-09-01", to: "2026-09-30" })).toEqual({ from: "2026-09-01", to: "2026-09-30" });
   });

@@ -61,6 +61,12 @@ describe("metadata page pagination contracts", () => {
     expect(issuesQuerySchema.safeParse({ status: ["open", "closed", "draft"] }).success).toBe(false);
   });
 
+  it("does not silently cap selected Domain filters", () => {
+    const domains = Array.from({ length: 30 }, (_, index) => `dom_${index}`);
+    expect(pullRequestsQuerySchema.parse({ domain: [...domains, domains[0]] }).domain).toEqual(domains);
+    expect(mergedPullRequestsQuerySchema.parse({ domain: domains }).domain).toEqual(domains);
+  });
+
   it("rejects invalid page controls and cursor fields", () => {
     expect(pullRequestsQuerySchema.safeParse({ page: "0" }).success).toBe(false);
     expect(pullRequestsQuerySchema.safeParse({ limit: "101" }).success).toBe(false);

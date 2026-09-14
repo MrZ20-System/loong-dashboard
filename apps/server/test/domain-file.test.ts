@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -12,11 +12,14 @@ import {
 import { DEFAULT_DOMAIN_UPDATE_PROMPT } from "@loongboard/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { buildTestApp } from "../src/app.js";
 import {
   DomainFileService,
   type DomainFileServiceOptions,
   DomainSourceInvalidError,
 } from "../src/domain-file.js";
+import type { DomainReclassification } from "../src/reclassification-service.js";
+import { createSyncCoordinatorStub } from "./support/sync-coordinator.js";
 
 type TestWatcher = EventEmitter & { closeCalls: number; close(): void };
 
@@ -30,8 +33,10 @@ function testWatcher(): TestWatcher {
 }
 
 const resources: Array<{ database: DatabaseClient; root: string }> = [];
+const apps: Array<ReturnType<typeof buildTestApp>> = [];
 
-afterEach(() => {
+afterEach(async () => {
+  await Promise.all(apps.splice(0).map((app) => app.close()));
   for (const resource of resources.splice(0)) {
     if (resource.database.open) resource.database.close();
     rmSync(resource.root, { recursive: true, force: true });
@@ -40,7 +45,13 @@ afterEach(() => {
 
 function fixture(
   watchFactory?: NonNullable<DomainFileServiceOptions["watch"]>,
-): { service: DomainFileService; database: DatabaseClient; root: string } {
+): {
+  service: DomainFileService;
+  database: DatabaseClient;
+  root: string;
+  reclassification: DomainReclassification;
+  triggers: string[];
+} {
   const root = mkdtempSync(join(tmpdir(), "loongboard-domain-file-"));
   const statePath = join(root, ".loong");
   mkdirSync(statePath, { recursive: true });
@@ -56,19 +67,33 @@ function fixture(
       defaultBranch: "main",
       worktreeSlots: 1,
     },
+    {
+      key: "other",
+      name: "Other",
+      github: "openai/other",
+      path: join(root, "other"),
+      remote: "origin",
+      defaultBranch: "main",
+      worktreeSlots: 1,
+    },
   ]);
+  const triggers: string[] = [];
+  const reclassification: DomainReclassification = {
+    trigger: (repositoryId) => {
+      triggers.push(repositoryId);
+      return { running: false, pendingCount: null };
+    },
+    status: () => ({ running: false, pendingCount: null }),
+    close: async () => undefined,
+  };
   const service = new DomainFileService({
     database,
     systemRoot: root,
     statePath,
-    reclassification: {
-      trigger: () => ({ running: false, pendingCount: null }),
-      status: () => ({ running: false, pendingCount: null }),
-      close: async () => undefined,
-    },
+    reclassification,
     ...(watchFactory === undefined ? {} : { watch: watchFactory }),
   });
-  return { service, database, root };
+  return { service, database, root, reclassification, triggers };
 }
 
 describe("DomainFileService", () => {
@@ -153,6 +178,136 @@ Keep the definitions useful for deterministic changed-file classification. Edit 
       '"name": "Docs"',
     );
     expect(root).toContain("loongboard-domain-file-");
+  });
+
+  it("saves large Domain pattern sets without truncating source or projection", () => {
+    const { service, database } = fixture();
+    const includePatterns = Array.from({ length: 200 }, (_, index) => `src/path-${index}/**`);
+    const excludePatterns = Array.from({ length: 200 }, (_, index) => `src/path-${index}/generated/**`);
+    includePatterns.push(`${"nested/".repeat(50)}**`);
+
+    const saved = service.saveSource("vllm.json", JSON.stringify({
+      version: 1,
+      repositoryId: "vllm.json",
+      metadata: { retained: true },
+      domains: [{
+        id: `dom_${"stable-identifier-".repeat(5)}`,
+        name: "A domain name that is intentionally longer than forty characters",
+        includePatterns,
+        excludePatterns,
+        custom: { retained: true },
+      }],
+    }));
+
+    expect(JSON.parse(saved.content)).toMatchObject({
+      metadata: { retained: true },
+      domains: [{ custom: { retained: true }, includePatterns, excludePatterns }],
+    });
+    expect(listDomainRules(database, "vllm.json")[0]).toMatchObject({
+      includePatterns,
+      excludePatterns,
+    });
+  });
+
+  it("keeps legacy array-only sources compatible by normalizing their root", () => {
+    const { service, database } = fixture();
+    const saved = service.saveSource("vllm.json", JSON.stringify([
+      { name: "Docs", includePatterns: ["docs/**"] },
+    ]));
+
+    expect(JSON.parse(saved.content)).toMatchObject({
+      version: 1,
+      repositoryId: "vllm.json",
+      domains: [{ name: "Docs", includePatterns: ["docs/**"] }],
+    });
+    expect(listDomainRules(database, "vllm.json")).toHaveLength(1);
+  });
+
+  it("rejects invalid sources before changing the file, projection, or reclassification", () => {
+    const { service, database, triggers } = fixture();
+    service.saveSource("vllm.json", JSON.stringify({
+      version: 1,
+      repositoryId: "vllm.json",
+      domains: [{ id: "dom_docs", name: "Docs", includePatterns: ["docs/**"] }],
+    }));
+    const originalContent = readFileSync(service.filePath("vllm.json"), "utf8");
+    const originalRules = listDomainRules(database, "vllm.json");
+    const originalTriggerCount = triggers.length;
+    const invalidSources = [
+      { domains: [{ name: "Docs" }] },
+      { domains: [{ name: "Docs", includePatterns: [] }] },
+      { domains: [{ name: "Docs", includePatterns: [""] }] },
+      { domains: [{ name: "Docs", color: "blue", includePatterns: ["docs/**"] }] },
+      { domains: [{ name: "Docs", enabled: "yes", includePatterns: ["docs/**"] }] },
+      { domains: [{ name: "Docs", position: -1, includePatterns: ["docs/**"] }] },
+      { repositoryId: "other", domains: [{ name: "Docs", includePatterns: ["docs/**"] }] },
+      { domains: [
+        { id: "dom_a", name: "Duplicate", includePatterns: ["a/**"] },
+        { id: "dom_b", name: "Duplicate", includePatterns: ["b/**"] },
+      ] },
+    ];
+
+    for (const invalid of invalidSources) {
+      expect(() => service.saveSource("vllm.json", JSON.stringify(invalid))).toThrow(DomainSourceInvalidError);
+      expect(readFileSync(service.filePath("vllm.json"), "utf8")).toBe(originalContent);
+      expect(listDomainRules(database, "vllm.json")).toEqual(originalRules);
+      expect(triggers).toHaveLength(originalTriggerCount);
+    }
+  });
+
+  it("rejects an id owned by another repository before creating its source file", () => {
+    const { service, database } = fixture();
+    service.saveSource("vllm.json", JSON.stringify({
+      domains: [{ id: "dom_shared", name: "Docs", includePatterns: ["docs/**"] }],
+    }));
+
+    expect(() => service.saveSource("other", JSON.stringify({
+      domains: [{ id: "dom_shared", name: "Other docs", includePatterns: ["docs/**"] }],
+    }))).toThrowError(/already belongs to repository vllm\.json/);
+    expect(existsSync(service.filePath("other"))).toBe(false);
+    expect(listDomainRules(database, "other")).toEqual([]);
+  });
+
+  it("returns 200 for large source PUT and GET, while invalid input returns 400 without mutation", async () => {
+    const { service, database, reclassification } = fixture();
+    const app = buildTestApp({
+      database,
+      timezone: "UTC",
+      syncCoordinator: createSyncCoordinatorStub(),
+      domainFiles: service,
+      reclassification,
+    }, { logger: false });
+    apps.push(app);
+    const includePatterns = Array.from({ length: 80 }, (_, index) => `src/include-${index}/**`);
+    const excludePatterns = Array.from({ length: 80 }, (_, index) => `src/exclude-${index}/**`);
+
+    const saved = await app.inject({
+      method: "PUT",
+      url: "/api/repositories/vllm.json/domains/source",
+      payload: { content: JSON.stringify({
+        version: 1,
+        repositoryId: "vllm.json",
+        domains: [{ id: "dom_large", name: "Large", includePatterns, excludePatterns }],
+      }) },
+    });
+    expect(saved.statusCode).toBe(200);
+    const listed = await app.inject({ method: "GET", url: "/api/repositories/vllm.json/domains" });
+    expect(listed.statusCode).toBe(200);
+    expect(listed.json().items[0]).toMatchObject({ includePatterns, excludePatterns });
+    const originalContent = readFileSync(service.filePath("vllm.json"), "utf8");
+
+    const invalid = await app.inject({
+      method: "PUT",
+      url: "/api/repositories/vllm.json/domains/source",
+      payload: { content: JSON.stringify({
+        repositoryId: "other",
+        domains: [{ name: "Broken", includePatterns: [""] }],
+      }) },
+    });
+    expect(invalid.statusCode).toBe(400);
+    expect(invalid.json()).toMatchObject({ error: { code: "INVALID_REQUEST" } });
+    expect(readFileSync(service.filePath("vllm.json"), "utf8")).toBe(originalContent);
+    expect(listDomainRules(database, "vllm.json")[0]).toMatchObject({ includePatterns, excludePatterns });
   });
 
   it("uses readable names for normal keys and encoded names for unusual keys", () => {

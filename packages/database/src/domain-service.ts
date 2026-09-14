@@ -50,6 +50,11 @@ export interface DomainRuleProjectionInput {
   updatedAt?: string;
 }
 
+export interface DomainRuleIdConflict {
+  id: string;
+  repositoryId: string;
+}
+
 /** Rotating palette assigned when the caller does not pick a color. */
 const COLOR_PALETTE = [
   "#2563eb",
@@ -147,6 +152,32 @@ export function getDomainRule(
   requireRepository(database, repositoryId);
   const row = getRuleRow(database, repositoryId, domainId);
   return row === null ? null : mapRule(row);
+}
+
+/**
+ * Find source ids already owned by another repository. Domain ids are a
+ * database-wide primary key, so file-backed saves must check ownership before
+ * replacing the durable source file.
+ */
+export function findDomainRuleIdConflicts(
+  database: DatabaseClient,
+  repositoryId: string,
+  domainIds: readonly string[],
+): DomainRuleIdConflict[] {
+  requireRepository(database, repositoryId);
+  if (domainIds.length === 0) return [];
+  const requested = new Set(domainIds);
+  const rows = database
+    .prepare(
+      `SELECT id, repository_id
+       FROM domain_rules
+       WHERE repository_id <> ?
+       ORDER BY repository_id ASC, id ASC`,
+    )
+    .all(repositoryId) as Array<{ id: string; repository_id: string }>;
+  return rows
+    .filter((row) => requested.has(row.id))
+    .map((row) => ({ id: row.id, repositoryId: row.repository_id }));
 }
 
 export function createDomainRule(

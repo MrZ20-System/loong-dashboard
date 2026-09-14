@@ -51,7 +51,7 @@ provider 的 [files.ts](../packages/github/src/files.ts) 管理批次、分页�
 
 [domain-classifier.ts](../apps/server/src/domain-classifier.ts) 使用 picomatch 编译 include/exclude 规则：任意路径匹配 include 且不匹配 exclude 即命中该规则，可以命中多个 Domain。规则编辑经 [reclassification-service](../apps/server/src/reclassification-service.ts) 在进程内使用已存文件重算，不重新请求 GitHub。数据写入 `domain_rules`、`pull_request_domains` 及分类状态。
 
-Domain 源文件位于 system workspace 的 `domains/<repository-key>.json`，JSON 是唯一编辑来源，SQLite 是渲染与分类投影。创建、编辑和删除 Domain 都先更新该文件再重投影；外部编辑和 Agent 文件工具的修改在 watcher 或读取时吸收。程序只做 JSON 解析及分类所需字段的机械校验，不限制 Domain 数量，也不施加 AI 类别、confidence 等上限。源文件暂时是非法 JSON 时，source API 仍返回原文和 `parseError`，最近一次有效投影继续可见；直接保存非法内容返回 400 并保留原文件。
+Domain 源文件位于 system workspace 的 `domains/<repository-key>.json`，JSON 是唯一编辑来源，SQLite 是渲染与分类投影。创建、编辑和删除 Domain 都先更新该文件再重投影；外部编辑和 Agent 文件工具的修改在 watcher 或读取时吸收。程序只做 JSON 解析及分类所需字段的机械校验，不限制 Domain 数量、名称/ID 长度、单条 glob 长度或 include/exclude pattern 数量，也不施加 AI 类别、confidence 等上限。Source、CRUD 与响应复用同一套 canonical schema；URL 中的 repository ID 是 authority，JSON 若提供不同 `repositoryId` 会返回 400。源文件暂时是非法 JSON 时，source API 仍返回原文和 `parseError`，最近一次有效投影继续可见；直接保存非法内容返回 400，并且不会覆盖原文件、改变 SQLite 投影或触发重分类。Domain ID 是数据库级主键，因此显式 ID 应包含 repository key；跨仓库 ID 冲突同样在写文件前返回 400。
 
 每次有效 Domain/prompt 内容变化都会生成 content hash 版本，来源记录为 `manual`、`agent`、`external` 或 `restore`，短期历史位于 `runtime.statePath/domain-file-versions/`，可通过 history/restore API 修复文件。更新 prompt 是 system workspace 中可编辑的 `prompts/update-domains.md`；页面默认只读，进入 Edit 后可 Save 或 Restore canonical bilingual prompt。提示词包含用户输入占位符和 JSON 输出格式约束，不再提供内置模板选择器；Agent 更新通过普通持久 conversation 读取该 prompt、仓库代码并直接编辑 Domain JSON。
 

@@ -12,6 +12,7 @@ import { extname, join, relative, resolve } from "node:path";
 
 import {
   getDomainRule,
+  findDomainRuleIdConflicts,
   listDomainRules,
   replaceDomainRulesFromFile,
   type DatabaseClient,
@@ -20,6 +21,7 @@ import {
 } from "@loongboard/database";
 import type {
   DomainRuleCreate,
+  DomainSourceEntry,
   DomainRuleUpdate,
   JsonSource,
   JsonSourceVersion,
@@ -27,11 +29,11 @@ import type {
 } from "@loongboard/contracts";
 import {
   DEFAULT_DOMAIN_UPDATE_PROMPT,
-  domainColorSchema,
+  domainSourceDocumentSchema,
 } from "@loongboard/contracts";
 import { atomicWrite, isWithinRoot } from "@loongboard/knowledge";
 
-import { InvalidRequestError } from "./route-helpers.js";
+import { formatZodError, InvalidRequestError } from "./route-helpers.js";
 import type { DomainReclassification } from "./reclassification-service.js";
 
 const COLOR_PALETTE = [
@@ -196,18 +198,16 @@ export class DomainFileService {
   }
 
   source(repositoryId: string): JsonSource {
-    this.refresh(repositoryId);
+    const refreshed = this.refresh(repositoryId).source;
     const path = this.filePath(repositoryId);
     const content = readUtf8(path);
-    const hash = sha256(content);
-    const parsed = tryParseSource(content, repositoryId);
     return this.toSource(
       "domain",
       repositoryId,
       path,
       content,
-      hash,
-      parsed.success ? null : parsed.error,
+      sha256(content),
+      refreshed.parseError ?? null,
     );
   }
 
@@ -245,6 +245,7 @@ export class DomainFileService {
   ): JsonSource {
     const path = this.filePath(repositoryId);
     const parsed = parseSource(content, repositoryId);
+    this.assertDomainIdOwnership(repositoryId, parsed);
     const normalized = `${JSON.stringify(parsed.root, null, 2)}\n`;
     ensureRegularTarget(path);
     // Parse and validate before touching the existing file. A malformed save
@@ -261,15 +262,25 @@ export class DomainFileService {
     const content = readUtf8(path);
     const hash = sha256(content);
     const parsed = tryParseSource(content, repositoryId);
+    let parseError = parsed.success ? null : parsed.error;
+    if (parsed.success) {
+      try {
+        this.assertDomainIdOwnership(repositoryId, parsed.value);
+      } catch (error) {
+        parseError = error instanceof Error ? error.message : String(error);
+      }
+    }
     const source: JsonSource = this.toSource(
       "domain",
       repositoryId,
       path,
       content,
       hash,
-      parsed.success ? null : parsed.error,
+      parseError,
     );
-    if (!parsed.success) return { source, projected: false, rules: null };
+    if (!parsed.success || parseError !== null) {
+      return { source, projected: false, rules: null };
+    }
     const projected = this.project(repositoryId, content, parsed.value, hash, "external");
     return {
       source,
@@ -462,7 +473,24 @@ export class DomainFileService {
     this.ensureSource(repositoryId, path);
     const content = readUtf8(path);
     const parsed = parseSource(content, repositoryId);
+    this.assertDomainIdOwnership(repositoryId, parsed);
     return parsed;
+  }
+
+  private assertDomainIdOwnership(
+    repositoryId: string,
+    parsed: ParsedDomainFile,
+  ): void {
+    const conflict = findDomainRuleIdConflicts(
+      this.database,
+      repositoryId,
+      parsed.entries.map((entry) => entry.projection.id),
+    )[0];
+    if (conflict !== undefined) {
+      throw new DomainSourceInvalidError(
+        `domain id ${conflict.id} already belongs to repository ${conflict.repositoryId}`,
+      );
+    }
   }
 
   private writeEntries(
@@ -599,24 +627,23 @@ function parseSource(content: string, repositoryId: string): ParsedDomainFile {
   } catch {
     throw new DomainSourceInvalidError("JSON syntax is invalid");
   }
-  const root: DomainSourceObject =
-    Array.isArray(decoded)
-      ? { version: 1, repositoryId, domains: decoded }
-      : isRecord(decoded) && Array.isArray(decoded.domains)
-        ? { ...decoded, domains: decoded.domains }
-        : (() => {
-            throw new DomainSourceInvalidError("expected an object with a domains array");
-          })();
-  const entries: ParsedDomainEntry[] = [];
-  for (const [index, value] of root.domains.entries()) {
-    if (!isRecord(value)) {
-      throw new DomainSourceInvalidError(`domains[${index}] must be an object`);
-    }
-    entries.push({
-      source: value,
-      projection: toProjection(value, repositoryId, index),
-    });
+  const normalized = Array.isArray(decoded)
+    ? { version: 1, repositoryId, domains: decoded }
+    : decoded;
+  const validated = domainSourceDocumentSchema.safeParse(normalized);
+  if (!validated.success) {
+    throw new DomainSourceInvalidError(formatZodError(validated.error));
   }
+  const root: DomainSourceObject = validated.data;
+  if (root.repositoryId !== undefined && root.repositoryId !== repositoryId) {
+    throw new DomainSourceInvalidError(
+      "repositoryId does not match route repository",
+    );
+  }
+  const entries = validated.data.domains.map((value, index) => ({
+    source: value,
+    projection: toProjection(value, repositoryId, index),
+  }));
   const ids = new Set<string>();
   const names = new Set<string>();
   for (const entry of entries) {
@@ -649,42 +676,21 @@ function tryParseSource(
 }
 
 function toProjection(
-  value: Record<string, unknown>,
+  value: DomainSourceEntry,
   repositoryId: string,
   index: number,
 ): DomainRuleProjectionInput {
-  const name = requiredString(value.name, `domains[${index}].name`);
-  const includePatterns = stringArray(value.includePatterns, `domains[${index}].includePatterns`);
-  const excludePatterns =
-    value.excludePatterns === undefined
-      ? []
-      : stringArray(value.excludePatterns, `domains[${index}].excludePatterns`);
-  const id =
-    typeof value.id === "string" && value.id.trim().length > 0
-      ? value.id.trim()
-      : `dom_${sha256(`${repositoryId}:${name}:${index}`).slice(0, 16)}`;
-  const color =
-    typeof value.color === "string" && domainColorSchema.safeParse(value.color).success
-      ? value.color
-      : COLOR_PALETTE[index % COLOR_PALETTE.length]!;
-  const position =
-    Number.isInteger(value.position) && Number(value.position) >= 0
-      ? Number(value.position)
-      : index;
-  const enabled = value.enabled === undefined ? true : value.enabled;
-  if (typeof enabled !== "boolean") {
-    throw new DomainSourceInvalidError(`domains[${index}].enabled must be boolean`);
-  }
+  const id = value.id ?? `dom_${sha256(`${repositoryId}:${value.name}:${index}`).slice(0, 16)}`;
   return {
     id,
-    name,
-    color,
-    position,
-    enabled,
-    includePatterns,
-    excludePatterns,
-    ...(typeof value.createdAt === "string" ? { createdAt: value.createdAt } : {}),
-    ...(typeof value.updatedAt === "string" ? { updatedAt: value.updatedAt } : {}),
+    name: value.name,
+    color: value.color ?? COLOR_PALETTE[index % COLOR_PALETTE.length]!,
+    position: value.position ?? index,
+    enabled: value.enabled ?? true,
+    includePatterns: value.includePatterns,
+    excludePatterns: value.excludePatterns ?? [],
+    ...(value.createdAt === undefined ? {} : { createdAt: value.createdAt }),
+    ...(value.updatedAt === undefined ? {} : { updatedAt: value.updatedAt }),
   };
 }
 
@@ -708,24 +714,6 @@ function toSourceRule(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function requiredString(value: unknown, field: string): string {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    throw new DomainSourceInvalidError(`${field} must be a non-empty string`);
-  }
-  return value.trim();
-}
-
-function stringArray(value: unknown, field: string): string[] {
-  if (!Array.isArray(value)) throw new DomainSourceInvalidError(`${field} must be an array`);
-  const values = value.map((item, index) => {
-    if (typeof item !== "string" || item.trim().length === 0) {
-      throw new DomainSourceInvalidError(`${field}[${index}] must be a non-empty string`);
-    }
-    return item.trim();
-  });
-  return values;
 }
 
 function ensureRegularTarget(path: string): void {

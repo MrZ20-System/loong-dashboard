@@ -28,7 +28,7 @@ When finished, write the complete Domain JSON using this structure. 完成后按
   "repositoryId": "<repository-id>",
   "domains": [
     {
-      "id": "dom_<stable-id>",
+      "id": "dom_<repository-key>-<stable-id>",
       "name": "Documentation",
       "color": "#5b8def",
       "position": 0,
@@ -40,17 +40,44 @@ When finished, write the complete Domain JSON using this structure. 完成后按
 }
 `;
 
-/** Domain rule ids are server-generated (`dom_<random>`). */
-export const domainRuleIdSchema = z.string().trim().min(1).max(64);
+/** Domain rule ids are server-generated (`dom_<random>`) or stable source ids. */
+export const domainRuleIdSchema = z.string().trim().min(1);
 
 export const domainColorSchema = z
   .string()
   .regex(/^#[0-9a-fA-F]{6}$/, "Expected #rrggbb");
 
-const patternSchema = z.string().trim().min(1).max(200);
-const includePatternsSchema = z.array(patternSchema).min(1).max(50);
-const excludePatternsSchema = z.array(patternSchema).max(50);
-const domainNameSchema = z.string().trim().min(1).max(40);
+const patternSchema = z.string().trim().min(1);
+const includePatternsSchema = z.array(patternSchema).min(1);
+const excludePatternsSchema = z.array(patternSchema);
+const domainNameSchema = z.string().trim().min(1);
+
+/**
+ * Canonical validation for entries persisted in a repository Domain source.
+ * Unknown metadata remains round-trippable while all projected fields share
+ * the same constraints as CRUD requests and HTTP responses.
+ */
+export const domainSourceEntrySchema = z
+  .object({
+    id: domainRuleIdSchema.optional(),
+    name: domainNameSchema,
+    color: domainColorSchema.optional(),
+    position: z.number().int().nonnegative().optional(),
+    enabled: z.boolean().optional(),
+    includePatterns: includePatternsSchema,
+    excludePatterns: excludePatternsSchema.optional(),
+    createdAt: utcDateTimeSchema.optional(),
+    updatedAt: utcDateTimeSchema.optional(),
+  })
+  .passthrough();
+
+export const domainSourceDocumentSchema = z
+  .object({
+    version: z.number().int().positive().optional(),
+    repositoryId: repositoryIdSchema.optional(),
+    domains: z.array(domainSourceEntrySchema),
+  })
+  .passthrough();
 
 /** The small domain projection attached to pull request list rows. */
 export const domainTagSchema = z
@@ -166,6 +193,8 @@ export const pullRequestParamsSchema = z
   .strict();
 
 export type DomainRuleId = z.infer<typeof domainRuleIdSchema>;
+export type DomainSourceEntry = z.infer<typeof domainSourceEntrySchema>;
+export type DomainSourceDocument = z.infer<typeof domainSourceDocumentSchema>;
 export type DomainTag = z.infer<typeof domainTagSchema>;
 export type DomainRule = z.infer<typeof domainRuleSchema>;
 export type ReclassificationStatus = z.infer<typeof reclassificationStatusSchema>;

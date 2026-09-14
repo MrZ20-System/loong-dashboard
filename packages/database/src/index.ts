@@ -91,6 +91,7 @@ export {
   deleteDomainRule,
   DomainNameConflictError,
   DomainNotFoundError,
+  findDomainRuleIdConflicts,
   getDomainRule,
   listDomainRules,
   updateDomainRule,
@@ -98,6 +99,7 @@ export {
 } from "./domain-service.js";
 export type {
   DomainRuleCreateInput,
+  DomainRuleIdConflict,
   DomainRuleProjectionInput,
   DomainRuleUpdateInput,
 } from "./domain-service.js";

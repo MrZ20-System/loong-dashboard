@@ -52,7 +52,7 @@ Maintenance run kind 是 canonical 的 `archive` 或 `purge_runtime_history`；`
 PR 与 Merged 列表的 `page` 默认为 1，`limit` 默认为 100 且最大为 100；响应统一包含 `page`、`pageSize`、`totalCount`、`totalPages` 和 `calendarTimeZone`。这些总数对应当前日期、状态、搜索和 Domain 过滤后的完整结果集（Merged 使用其支持的搜索和 Domain 过滤）。Issue 列表仍返回 `nextCursor` 并接受 cursor。
 请求页超过 `totalPages` 时，服务返回最后一页的有效 `page`；过滤结果为空时返回 `page=1`、`totalPages=0` 和空 `items`。
 
-Domain source 的 GET/PUT 读写仓库中的 JSON 文件，versions 提供历史列表、版本内容和 restore；prompt 使用同一文件读写边界。页面通过普通 Agent session 发送更新请求，成功后重新读取 source 与 rendered projection。GitHub token、provider secret 和其他凭据只接受写入或返回摘要，任何响应都不包含 secret。
+Domain source 的 GET/PUT 读写仓库中的 JSON 文件，versions 提供历史列表、版本内容和 restore；prompt 使用同一文件读写边界。Domain source 与 CRUD/response 共用 canonical validation，合法的 pattern 数量和长度不设业务上限；非法字段、重复 ID/名称、跨仓库 ID 冲突或 JSON `repositoryId` 与 URL 不一致均在写入前返回 `400 INVALID_REQUEST`。页面通过普通 Agent session 发送更新请求，成功后重新读取 source 与 rendered projection。GitHub token、provider secret 和其他凭据只接受写入或返回摘要，任何响应都不包含 secret。
 
 ## 边界和错误
 

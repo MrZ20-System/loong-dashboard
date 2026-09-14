@@ -134,9 +134,8 @@ export const mergedPullRequestsQuerySchema = z
     search: listSearchSchema,
     limit: pageSizeQuerySchema,
     domain: z.preprocess(
-      (value) =>
-        value === undefined ? undefined : typeof value === "string" ? [value] : value,
-      z.array(domainRuleIdSchema).max(20).optional(),
+      normalizeRepeatedValues,
+      z.array(domainRuleIdSchema).optional(),
     ),
   })
   .strict();
@@ -184,9 +183,8 @@ export const pullRequestsQuerySchema = z
     // normalized so `?domain=a` and `?domain=a&domain=b` share one code path.
     // Semantics: a pull request matches when it carries ANY selected domain.
     domain: z.preprocess(
-      (value) =>
-        value === undefined ? undefined : typeof value === "string" ? [value] : value,
-      z.array(domainRuleIdSchema).max(20).optional(),
+      normalizeRepeatedValues,
+      z.array(domainRuleIdSchema).optional(),
     ),
     /** Current and archived are independent selections; both means all. */
     archive: archiveQuerySchema,

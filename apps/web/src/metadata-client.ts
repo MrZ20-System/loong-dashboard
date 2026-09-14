@@ -130,9 +130,9 @@ export function readMetadataFilters(
     to: validOrder ? to : null,
     status: [...new Set(status)],
     search: parsedSearch.success ? ((parsedSearch.data as { search?: string }).search ?? "") : "",
-    domains: rawDomainValues
-      .filter((value) => domainRuleIdSchema.safeParse(value).success)
-      .slice(0, 20),
+    domains: [...new Set(
+      rawDomainValues.filter((value) => domainRuleIdSchema.safeParse(value).success),
+    )],
     archive: [...new Set(archive)].filter((value): value is ArchiveFilter => value === "current" || value === "archived"),
   };
 }
