@@ -118,7 +118,9 @@ export {
   repositoryOnboardingCreateSchema,
   repositoryOnboardingErrorSchema,
   repositoryOnboardingInputSchema,
+  repositoryOnboardingListResponseSchema,
   repositoryOnboardingParamsSchema,
+  repositoryOnboardingRetrySchema,
   repositoryOnboardingSchema,
   repositoryOnboardingStatusSchema,
   type RepositoryOnboarding,
@@ -126,7 +128,9 @@ export {
   type RepositoryOnboardingCreate,
   type RepositoryOnboardingError,
   type RepositoryOnboardingInput,
+  type RepositoryOnboardingListResponse,
   type RepositoryOnboardingParams,
+  type RepositoryOnboardingRetry,
   type RepositoryOnboardingStatus,
 } from "./repository-onboarding.js";
 export {
@@ -341,6 +345,11 @@ export {
   settingsDocumentRepositorySchema,
   settingsDocumentRepositoryWorktreeSchema,
   settingsDocumentV2Schema,
+  settingsDocumentV3AgentArchiveSchema,
+  settingsDocumentV3CodeBackupSchema,
+  settingsDocumentV3KnowledgeBackupSchema,
+  settingsDocumentV3RepositorySchema,
+  settingsDocumentV3Schema,
   worktreeMaintenanceErrorSchema,
   savedResponseSchema,
   settingsResponseSchema,
@@ -367,6 +376,11 @@ export {
   type SettingsDocumentKnowledgeBackup,
   type SettingsDocumentRepository,
   type SettingsDocumentV2,
+  type SettingsDocumentV3,
+  type SettingsDocumentV3AgentArchive,
+  type SettingsDocumentV3CodeBackup,
+  type SettingsDocumentV3KnowledgeBackup,
+  type SettingsDocumentV3Repository,
 } from "./settings.js";
 export {
   calendarDateSchema,

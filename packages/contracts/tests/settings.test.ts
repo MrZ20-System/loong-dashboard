@@ -4,29 +4,29 @@ import {
   codeBackupSettingsSchema,
   knowledgeCheckpointSettingsSchema,
   settingsDocumentV2Schema,
+  settingsDocumentV3Schema,
 } from "../src/index.js";
 
-const repository = {
-  automaticSync: false,
-  syncFrequencyMinutes: 60,
-  syncLookbackDays: 30 as const,
-  retention: {
-    automaticArchiveEnabled: false,
-    archiveAfterDays: 7,
-    includeMergedPrs: true,
-    includeClosedPrs: true,
-    includeClosedIssues: true,
-    prunePayloadWhenArchived: true,
-  },
-  worktrees: {
-    configuredSlots: 1,
-    idleCleanupTtlHours: 24,
-  },
+const retention = {
+  automaticArchiveEnabled: false,
+  archiveAfterDays: 7,
+  includeMergedPrs: true,
+  includeClosedPrs: true,
+  includeClosedIssues: true,
+  prunePayloadWhenArchived: true,
 };
 
-const document = {
+const v2Document = {
   version: 2 as const,
-  repositories: { vllm: repository },
+  repositories: {
+    vllm: {
+      automaticSync: false,
+      syncFrequencyMinutes: 60,
+      syncLookbackDays: 30 as const,
+      retention,
+      worktrees: { configuredSlots: 1, idleCleanupTtlHours: 24 },
+    },
+  },
   github: {
     verifiedSource: null,
     account: null,
@@ -70,44 +70,83 @@ const document = {
   },
 };
 
+const v3Document = {
+  version: 3 as const,
+  repositories: {
+    vllm: {
+      automaticSync: false,
+      syncCron: "0 */1 * * *",
+      syncLookbackDays: 30 as const,
+      retention,
+      worktrees: { configuredSlots: 1, idleCleanupTtlHours: 24 },
+    },
+  },
+  github: v2Document.github,
+  agent: v2Document.agent,
+  knowledgeBackup: {
+    autoCommit: false,
+    autoPush: false,
+    remote: "origin",
+    sourceRef: "main",
+    remoteBranch: "loongboard-knowledge-backup",
+    checkpointCron: "0 0 * * *",
+    pushCron: "0 0 * * *",
+  },
+  codeBackup: {
+    automaticCheckpoint: false,
+    checkpointCron: "0 0 * * *",
+    automaticPush: false,
+    pushCron: "0 0 * * *",
+    sourceRef: "main",
+    remote: "origin",
+    remoteBranch: "loongboard-backup",
+  },
+  agentArchive: {
+    archiveRepositoryPath: "agent-archive",
+    enabled: false,
+    exportCron: "0 0 * * *",
+    automaticPush: false,
+    pushCron: "0 0 * * *",
+    sourceRef: "main",
+    remote: "origin",
+    remoteBranch: "agent-history-backup",
+  },
+};
+
 describe("settings contracts", () => {
-  it("accepts the complete strict V2 policy document", () => {
-    expect(settingsDocumentV2Schema.parse(document)).toEqual(document);
+  it("accepts strict V2 migration input and strict V3 runtime policy", () => {
+    expect(settingsDocumentV2Schema.parse(v2Document)).toEqual(v2Document);
+    expect(settingsDocumentV3Schema.parse(v3Document)).toEqual(v3Document);
   });
 
-  it("rejects V2 unknown, missing, and malformed fields", () => {
-    expect(settingsDocumentV2Schema.safeParse({ ...document, opaque: true }).success).toBe(false);
-    const { agent: _agent, ...withoutAgent } = document;
-    expect(settingsDocumentV2Schema.safeParse(withoutAgent).success).toBe(false);
-    expect(settingsDocumentV2Schema.safeParse({
-      ...document,
-      repositories: { vllm: { ...repository, worktrees: { ...repository.worktrees, active: 1 } } },
-    }).success).toBe(false);
-    const { archiveRepositoryPath: _archiveRepositoryPath, ...withoutArchivePath } = document.agentArchive;
-    expect(settingsDocumentV2Schema.safeParse({
-      ...document,
-      agentArchive: withoutArchivePath,
+  it("rejects legacy cadence fields from V3 policy", () => {
+    expect(settingsDocumentV3Schema.safeParse({
+      ...v3Document,
+      knowledgeBackup: {
+        ...v3Document.knowledgeBackup,
+        checkpointIntervalMinutes: 30,
+      },
     }).success).toBe(false);
   });
 
-  it("exposes only canonical Knowledge fields and rejects legacy aliases", () => {
-    const canonical = {
+  it("requires valid-looking non-empty Cron strings even when schedules are disabled", () => {
+    expect(knowledgeCheckpointSettingsSchema.parse({
       autoCommit: false,
       autoPush: false,
       remote: "origin",
       sourceRef: "main",
       remoteBranch: "loongboard-knowledge-backup",
-      checkpointIntervalMinutes: null,
-      pushIntervalMinutes: null,
-    };
-    expect(knowledgeCheckpointSettingsSchema.parse(canonical)).toEqual(canonical);
+      checkpointCron: "0 0 * * *",
+      pushCron: "0 0 * * *",
+    })).toMatchObject({ checkpointCron: "0 0 * * *", pushCron: "0 0 * * *" });
     expect(knowledgeCheckpointSettingsSchema.safeParse({
-      ...canonical,
-      branch: "main",
-    }).success).toBe(false);
-    expect(knowledgeCheckpointSettingsSchema.safeParse({
-      ...canonical,
-      intervalMinutes: null,
+      autoCommit: false,
+      autoPush: false,
+      remote: "origin",
+      sourceRef: "main",
+      remoteBranch: "loongboard-knowledge-backup",
+      checkpointCron: null,
+      pushCron: "0 0 * * *",
     }).success).toBe(false);
   });
 
@@ -115,7 +154,7 @@ describe("settings contracts", () => {
     const projection = codeBackupSettingsSchema.parse({
       repositoryPath: "/checkout",
       available: false,
-      ...document.codeBackup,
+      ...v3Document.codeBackup,
       lastCheckpointAt: null,
       nextCheckpointAt: null,
       lastPushAt: null,
@@ -123,9 +162,9 @@ describe("settings contracts", () => {
       lastError: null,
     });
     expect(projection.available).toBe(false);
-    expect(settingsDocumentV2Schema.safeParse({
-      ...document,
-      codeBackup: { ...document.codeBackup, available: false },
+    expect(settingsDocumentV3Schema.safeParse({
+      ...v3Document,
+      codeBackup: { ...v3Document.codeBackup, available: false },
     }).success).toBe(false);
   });
 });

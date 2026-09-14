@@ -58,6 +58,13 @@ export const repositoryOnboardingAcceptedSchema = z
   })
   .strict();
 
+/** Optional branch override accepted by the durable retry endpoint. */
+export const repositoryOnboardingRetrySchema = z
+  .object({
+    defaultBranch: z.string().trim().min(1).max(255).optional(),
+  })
+  .strict();
+
 export const repositoryOnboardingSchema = z
   .object({
     jobId: z.string().trim().min(1),
@@ -75,6 +82,13 @@ export const repositoryOnboardingSchema = z
     startedAt: utcDateTimeSchema.nullable(),
     finishedAt: utcDateTimeSchema.nullable(),
     updatedAt: utcDateTimeSchema,
+  })
+  .strict();
+
+/** Bounded onboarding rows shown by the Settings status list. */
+export const repositoryOnboardingListResponseSchema = z
+  .object({
+    items: z.array(repositoryOnboardingSchema).max(10),
   })
   .strict();
 
@@ -97,7 +111,13 @@ export type RepositoryOnboardingError = z.infer<
 export type RepositoryOnboardingAccepted = z.infer<
   typeof repositoryOnboardingAcceptedSchema
 >;
+export type RepositoryOnboardingRetry = z.infer<
+  typeof repositoryOnboardingRetrySchema
+>;
 export type RepositoryOnboarding = z.infer<typeof repositoryOnboardingSchema>;
+export type RepositoryOnboardingListResponse = z.infer<
+  typeof repositoryOnboardingListResponseSchema
+>;
 export type RepositoryOnboardingParams = z.infer<
   typeof repositoryOnboardingParamsSchema
 >;

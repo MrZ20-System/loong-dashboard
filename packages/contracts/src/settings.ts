@@ -7,6 +7,14 @@ import {
   repositoryRetentionSettingsUpdateSchema,
 } from "./retention.js";
 
+/** A non-empty LoongBoard five-field cron expression.
+ *
+ * Syntax validation belongs to the Server boundary so this package remains
+ * independent from the scheduler implementation. Contracts only describe
+ * the wire shape; callers must validate before persisting or scheduling.
+ */
+const cronExpressionSchema = z.string().trim().min(1);
+
 export const worktreeMaintenanceErrorSchema = z
   .object({
     slotPath: z.string().trim().min(1),
@@ -46,7 +54,7 @@ export const repositorySettingsSchema = z
   .object({
     repositoryId: repositoryIdSchema,
     automaticSync: z.boolean(),
-    syncFrequencyMinutes: z.number().int().positive(),
+    syncCron: cronExpressionSchema,
     /** Initial/bootstrap metadata window measured by GitHub updated_at. */
     syncLookbackDays: z.union([z.literal(7), z.literal(30)]),
     nextSyncAt: utcDateTimeSchema.nullable().optional(),
@@ -75,7 +83,7 @@ export const repositorySettingsSchema = z
 export const repositorySettingsUpdateSchema = z
   .object({
     automaticSync: z.boolean().optional(),
-    syncFrequencyMinutes: z.number().int().positive().optional(),
+    syncCron: cronExpressionSchema.optional(),
     syncLookbackDays: z.union([z.literal(7), z.literal(30)]).optional(),
     worktrees: repositoryWorktreeSettingsUpdateSchema.optional(),
     retention: repositoryRetentionSettingsUpdateSchema.optional(),
@@ -214,8 +222,8 @@ export const knowledgeCheckpointSettingsSchema = z
     remote: z.string().trim().min(1),
     sourceRef: z.string().trim().min(1),
     remoteBranch: z.string().trim().min(1),
-    checkpointIntervalMinutes: z.number().int().positive().nullable(),
-    pushIntervalMinutes: z.number().int().positive().nullable(),
+    checkpointCron: cronExpressionSchema,
+    pushCron: cronExpressionSchema,
     nextRunAt: utcDateTimeSchema.nullable().optional(),
     lastSuccessAt: utcDateTimeSchema.nullable().optional(),
     lastError: z.string().nullable().optional(),
@@ -229,8 +237,8 @@ export const knowledgeCheckpointSettingsUpdateSchema = z
     remote: z.string().trim().min(1).optional(),
     sourceRef: z.string().trim().min(1).optional(),
     remoteBranch: z.string().trim().min(1).optional(),
-    checkpointIntervalMinutes: z.number().int().positive().nullable().optional(),
-    pushIntervalMinutes: z.number().int().positive().nullable().optional(),
+    checkpointCron: cronExpressionSchema.optional(),
+    pushCron: cronExpressionSchema.optional(),
   })
   .strict()
   .refine((value) => Object.values(value).some((field) => field !== undefined), {
@@ -240,12 +248,12 @@ export const knowledgeCheckpointSettingsUpdateSchema = z
 export const codeBackupSettingsSchema = z
   .object({
     repositoryPath: z.string().trim().min(1),
-    /** Runtime-only probe result; never persisted in Settings V2. */
+    /** Runtime-only probe result; never persisted in Settings V3. */
     available: z.boolean(),
     automaticCheckpoint: z.boolean(),
-    checkpointIntervalMinutes: z.number().int().positive().nullable().optional(),
+    checkpointCron: cronExpressionSchema,
     automaticPush: z.boolean(),
-    pushIntervalMinutes: z.number().int().positive().nullable().optional(),
+    pushCron: cronExpressionSchema,
     sourceRef: z.string().trim().min(1),
     remote: z.string().trim().min(1),
     remoteBranch: z.string().trim().min(1),
@@ -260,9 +268,9 @@ export const codeBackupSettingsSchema = z
 export const codeBackupSettingsUpdateSchema = z
   .object({
     automaticCheckpoint: z.boolean().optional(),
-    checkpointIntervalMinutes: z.number().int().positive().nullable().optional(),
+    checkpointCron: cronExpressionSchema.optional(),
     automaticPush: z.boolean().optional(),
-    pushIntervalMinutes: z.number().int().positive().nullable().optional(),
+    pushCron: cronExpressionSchema.optional(),
     sourceRef: z.string().trim().min(1).optional(),
     remote: z.string().trim().min(1).optional(),
     remoteBranch: z.string().trim().min(1).optional(),
@@ -277,9 +285,9 @@ export const agentArchiveSettingsSchema = z
   .object({
     archiveRepositoryPath: z.string().trim().min(1),
     enabled: z.boolean(),
-    exportIntervalMinutes: z.number().int().positive().nullable().optional(),
+    exportCron: cronExpressionSchema,
     automaticPush: z.boolean(),
-    pushIntervalMinutes: z.number().int().positive().nullable().optional(),
+    pushCron: cronExpressionSchema,
     sourceRef: z.string().trim().min(1),
     remote: z.string().trim().min(1),
     remoteBranch: z.string().trim().min(1),
@@ -295,9 +303,9 @@ export const agentArchiveSettingsUpdateSchema = z
   .object({
     archiveRepositoryPath: z.string().trim().min(1).optional(),
     enabled: z.boolean().optional(),
-    exportIntervalMinutes: z.number().int().positive().nullable().optional(),
+    exportCron: cronExpressionSchema.optional(),
     automaticPush: z.boolean().optional(),
-    pushIntervalMinutes: z.number().int().positive().nullable().optional(),
+    pushCron: cronExpressionSchema.optional(),
     sourceRef: z.string().trim().min(1).optional(),
     remote: z.string().trim().min(1).optional(),
     remoteBranch: z.string().trim().min(1).optional(),
@@ -417,6 +425,70 @@ export const settingsDocumentV2Schema = z
   })
   .strict();
 
+/**
+ * Durable Settings V3. Cron is the only persisted representation of a user
+ * configurable cadence. The V2 schema above is intentionally retained as a
+ * migration input contract; runtime code must consume this schema instead.
+ */
+export const settingsDocumentV3RepositorySchema = z
+  .object({
+    automaticSync: z.boolean(),
+    syncCron: cronExpressionSchema,
+    syncLookbackDays: z.union([z.literal(7), z.literal(30)]),
+    retention: repositoryRetentionSettingsSchema,
+    worktrees: settingsDocumentRepositoryWorktreeSchema,
+  })
+  .strict();
+
+export const settingsDocumentV3KnowledgeBackupSchema = z
+  .object({
+    autoCommit: z.boolean(),
+    autoPush: z.boolean(),
+    remote: z.string().trim().min(1),
+    sourceRef: z.string().trim().min(1),
+    remoteBranch: z.string().trim().min(1),
+    checkpointCron: cronExpressionSchema,
+    pushCron: cronExpressionSchema,
+  })
+  .strict();
+
+export const settingsDocumentV3CodeBackupSchema = z
+  .object({
+    automaticCheckpoint: z.boolean(),
+    checkpointCron: cronExpressionSchema,
+    automaticPush: z.boolean(),
+    pushCron: cronExpressionSchema,
+    sourceRef: z.string().trim().min(1),
+    remote: z.string().trim().min(1),
+    remoteBranch: z.string().trim().min(1),
+  })
+  .strict();
+
+export const settingsDocumentV3AgentArchiveSchema = z
+  .object({
+    archiveRepositoryPath: z.string().trim().min(1),
+    enabled: z.boolean(),
+    exportCron: cronExpressionSchema,
+    automaticPush: z.boolean(),
+    pushCron: cronExpressionSchema,
+    sourceRef: z.string().trim().min(1),
+    remote: z.string().trim().min(1),
+    remoteBranch: z.string().trim().min(1),
+  })
+  .strict();
+
+export const settingsDocumentV3Schema = z
+  .object({
+    version: z.literal(3),
+    repositories: z.record(z.string(), settingsDocumentV3RepositorySchema),
+    github: settingsDocumentGithubSchema,
+    agent: settingsDocumentAgentSchema,
+    knowledgeBackup: settingsDocumentV3KnowledgeBackupSchema,
+    codeBackup: settingsDocumentV3CodeBackupSchema,
+    agentArchive: settingsDocumentV3AgentArchiveSchema,
+  })
+  .strict();
+
 export const savedResponseSchema = z.object({ saved: z.literal(true) }).strict();
 export const removedResponseSchema = z.object({ removed: z.literal(true) }).strict();
 
@@ -443,17 +515,30 @@ export type KnowledgeCheckpointSettingsUpdate = z.infer<
   typeof knowledgeCheckpointSettingsUpdateSchema
 >;
 export type SettingsDocumentV2 = z.infer<typeof settingsDocumentV2Schema>;
+export type SettingsDocumentV3 = z.infer<typeof settingsDocumentV3Schema>;
 export type SettingsDocumentRepository = z.infer<
   typeof settingsDocumentRepositorySchema
+>;
+export type SettingsDocumentV3Repository = z.infer<
+  typeof settingsDocumentV3RepositorySchema
 >;
 export type SettingsDocumentKnowledgeBackup = z.infer<
   typeof settingsDocumentKnowledgeBackupSchema
 >;
+export type SettingsDocumentV3KnowledgeBackup = z.infer<
+  typeof settingsDocumentV3KnowledgeBackupSchema
+>;
 export type SettingsDocumentCodeBackup = z.infer<
   typeof settingsDocumentCodeBackupSchema
 >;
+export type SettingsDocumentV3CodeBackup = z.infer<
+  typeof settingsDocumentV3CodeBackupSchema
+>;
 export type SettingsDocumentAgentArchive = z.infer<
   typeof settingsDocumentAgentArchiveSchema
+>;
+export type SettingsDocumentV3AgentArchive = z.infer<
+  typeof settingsDocumentV3AgentArchiveSchema
 >;
 export type CodeBackupSettings = z.infer<typeof codeBackupSettingsSchema>;
 export type CodeBackupSettingsUpdate = z.infer<typeof codeBackupSettingsUpdateSchema>;

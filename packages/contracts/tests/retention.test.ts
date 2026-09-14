@@ -14,7 +14,7 @@ describe("retention contracts", () => {
     const settings = repositorySettingsSchema.parse({
       repositoryId: "repo",
       automaticSync: false,
-      syncFrequencyMinutes: 60,
+      syncCron: "0 */1 * * *",
       syncLookbackDays: 30,
     });
 
