@@ -296,9 +296,8 @@ export class SettingsController {
         automaticPush: checkpoint.autoPush,
         remote: checkpoint.remote,
         sourceRef: checkpoint.sourceRef,
-        // A newly materialized V4 document starts on the Personal Data branch;
-        // an existing V3 document is migrated separately and keeps its branch.
-        remoteBranch: "loongboard-personal-data-backup",
+        remoteBranch:
+          checkpoint.remoteBranch ?? "loongboard-personal-data-backup",
         checkpointCron: checkpoint.checkpointCron,
         pushCron: checkpoint.pushCron,
       },

@@ -171,7 +171,7 @@ const baseSystemConfigSchema = z
             autoPush: z.boolean().optional().default(false),
             remote: z.string().trim().min(1).optional().default("origin"),
             sourceRef: z.string().trim().min(1).optional().default("main"),
-            remoteBranch: z.string().trim().min(1).optional().default("loongboard-knowledge-backup"),
+            remoteBranch: z.string().trim().min(1).optional().default("loongboard-personal-data-backup"),
             checkpointCron: checkpointCronSchema.optional().default("0 0 * * *"),
             pushCron: checkpointCronSchema.optional().default("0 0 * * *"),
           })

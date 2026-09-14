@@ -89,11 +89,13 @@ function serviceFixture(options: { gitWorkspace?: RepositoryOnboardingGit; retur
   roots.push(root);
   const configPath = join(root, "system.yaml");
   writeFileSync(configPath, [
-    "version: 2",
+    "version: 3",
     "timezone: UTC",
     "repositories: []",
+    "personalData:",
+    "  path: ./personal-data",
     "knowledge:",
-    "  path: ./knowledge",
+    "  path: ./personal-data/knowledge",
     "  inbox: inbox",
     "  historyLimit: 10",
     "runtime:",
@@ -108,10 +110,11 @@ function serviceFixture(options: { gitWorkspace?: RepositoryOnboardingGit; retur
     "  defaultReasoningEffort: high",
   ].join("\n") + "\n", "utf8");
   const config = parseSystemConfig(JSON.parse(JSON.stringify({
-    version: 2,
+    version: 3,
     timezone: "UTC",
     repositories: [],
-    knowledge: { path: "./knowledge", inbox: "inbox", historyLimit: 10 },
+    personalData: { path: "./personal-data" },
+    knowledge: { path: "./personal-data/knowledge", inbox: "inbox", historyLimit: 10 },
     runtime: {
       statePath: "./.loong",
       repositoriesPath: "./repositories",

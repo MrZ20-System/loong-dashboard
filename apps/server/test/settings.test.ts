@@ -187,6 +187,26 @@ describe("SettingsController", () => {
     });
   });
 
+  it("preserves an explicitly configured Personal Data backup branch", () => {
+    const { root, statePath, database } = fixture();
+    new SettingsController({
+      database,
+      systemRoot: root,
+      statePath,
+      environment: {},
+      credential: credential(statePath),
+      defaults: {
+        checkpoint: {
+          remoteBranch: "configured-personal-data-backup",
+        },
+      },
+    });
+
+    expect(readSettings(root).personalDataBackup.remoteBranch).toBe(
+      "configured-personal-data-backup",
+    );
+  });
+
   it("migrates V2 cadence with persisted scheduled-task cron taking priority", () => {
     const { root, statePath, database } = fixture();
     writeFileSync(join(root, "settings.json"), JSON.stringify(legacyV2Document()), "utf8");

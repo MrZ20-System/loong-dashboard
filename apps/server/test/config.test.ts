@@ -125,6 +125,22 @@ describe("system configuration", () => {
     expect(parseSystemConfig(input, "/workspace/system.yaml").knowledge.checkpoint?.checkpointCron).toBe("0 0 * * *");
   });
 
+  it("uses the canonical Personal Data backup branch for a new V3 config", () => {
+    const input = validConfigInput();
+    const { remoteBranch: _remoteBranch, ...checkpoint } = input.knowledge.checkpoint;
+    const parsed = parseSystemConfig({
+      ...input,
+      knowledge: {
+        ...input.knowledge,
+        checkpoint,
+      },
+    }, "/workspace/system.yaml");
+
+    expect(parsed.knowledge.checkpoint?.remoteBranch).toBe(
+      "loongboard-personal-data-backup",
+    );
+  });
+
   it("migrates V1 schedules directly to V3, preserves topology, and atomically backs up the source", () => {
     const root = mkdtempSync(join(tmpdir(), "loongboard-config-migration-"));
     try {
