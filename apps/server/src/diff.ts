@@ -104,7 +104,7 @@ export function registerDiffRoutes(
       const prepared = await gitWorkspace.preparePull({
         repositoryPath: repository.localPath,
         remote: repository.remoteName,
-        baseBranch: repository.defaultBranch,
+        baseBranch: detail.baseRefName,
         prNumber: number,
         headSha: detail.headSha,
       });
