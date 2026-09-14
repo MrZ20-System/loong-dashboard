@@ -2,6 +2,44 @@ import { z } from "zod";
 
 import { repositoryIdSchema, utcDateTimeSchema } from "./validation.js";
 
+/**
+ * Product-owned instruction used when a user restores the Domain Agent
+ * prompt. Keep this in the shared contracts package so the Web and Server
+ * agree on the exact persisted default.
+ */
+export const DEFAULT_DOMAIN_UPDATE_PROMPT = `# Update domains / 更新领域
+
+Analyze this repository and update its Domain definitions in the repository's Domain JSON file.
+分析此仓库，并更新仓库 Domain JSON 文件中的领域定义。
+
+User request / 用户要求：
+
+<我输入的内容>
+
+Keep the definitions useful for deterministic changed-file classification. Preserve useful existing metadata, edit the JSON file directly, and explain the changes in the conversation.
+保持定义适合对变更文件进行确定性分类。保留有用的现有元数据，直接编辑 JSON 文件，并在对话中说明修改。
+
+Output format / 输出格式：
+
+When finished, write the complete Domain JSON using this structure. 完成后按以下结构写入完整的 Domain JSON：
+
+{
+  "version": 1,
+  "repositoryId": "<repository-id>",
+  "domains": [
+    {
+      "id": "dom_<stable-id>",
+      "name": "Documentation",
+      "color": "#5b8def",
+      "position": 0,
+      "enabled": true,
+      "includePatterns": ["docs/**"],
+      "excludePatterns": []
+    }
+  ]
+}
+`;
+
 /** Domain rule ids are server-generated (`dom_<random>`). */
 export const domainRuleIdSchema = z.string().trim().min(1).max(64);
 

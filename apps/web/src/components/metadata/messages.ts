@@ -11,17 +11,17 @@ export const metadataMessages = {
     "Issue number, author, or title",
     "Issue 编号、作者或标题",
   ),
-  pullRequestFeed: message("Pull request feed", "拉取请求列表"),
-  issueFeed: message("Issue feed", "议题列表"),
-  pullRequest: message("Pull request", "拉取请求"),
-  issue: message("Issue", "议题"),
+  pullRequestFeed: message("Pull request feed", "PR 列表"),
+  issueFeed: message("Issue feed", "Issue 列表"),
+  pullRequest: message("Pull request", "PR"),
+  issue: message("Issue", "Issue"),
   openPullRequestOnGitHub: message(
     "Open pull request #{number} on GitHub",
-    "在 GitHub 上打开拉取请求 #{number}",
+    "在 GitHub 上打开 PR #{number}",
   ),
   openIssueOnGitHub: message(
     "Open issue #{number} on GitHub",
-    "在 GitHub 上打开议题 #{number}",
+    "在 GitHub 上打开 Issue #{number}",
   ),
   itemAria: message(
     "{kind} #{number}: {title}",
@@ -29,7 +29,7 @@ export const metadataMessages = {
   ),
   unknown: message("Unknown", "未知"),
   updated: message("updated {value}", "更新于 {value}"),
-  mergedAt: message("merged {value}", "合并于 {value}"),
+  mergedAt: message("Merged {value}", "Merged {value}"),
   pullStats: message(
     "+{additions} −{deletions} in {files} files",
     "+{additions} −{deletions}，共 {files} 个文件",

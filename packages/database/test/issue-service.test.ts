@@ -226,4 +226,28 @@ describe("Issue metadata queries", () => {
       ).toThrowError(InvalidCursorError);
     });
   });
+
+  it("matches any selected Issue status and treats both archive values as all", () => {
+    withDatabase((database) => {
+      reconcileRepositories(database, [repository("repo")]);
+      upsertIssuePage(database, "repo", [
+        issue(1, "2026-09-01T00:00:00.000Z", { status: "open" }),
+        issue(2, "2026-09-02T00:00:00.000Z", { status: "closed", closedAt: "2026-09-02T00:00:00.000Z" }),
+      ]);
+      database.prepare(
+        "UPDATE issues SET archived_at = ? WHERE repository_id = ? AND number = ?",
+      ).run("2026-09-11T00:00:00.000Z", "repo", 2);
+
+      expect(listIssues(database, "repo", {
+        calendarTimeZone: "UTC",
+        status: ["open", "closed"],
+        archive: ["current", "archived"],
+      }).items.map((item) => item.number)).toEqual([2, 1]);
+      expect(listIssues(database, "repo", {
+        calendarTimeZone: "UTC",
+        status: ["closed"],
+        archive: ["archived"],
+      }).items.map((item) => item.number)).toEqual([2]);
+    });
+  });
 });

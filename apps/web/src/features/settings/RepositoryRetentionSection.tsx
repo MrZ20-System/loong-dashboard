@@ -134,9 +134,23 @@ export function RepositoryRetentionSection({ repositoryId }: { repositoryId: str
       </div>
       <fieldset className="settings-retention-scopes">
         <legend>{t({ en: "Archive scopes", "zh-CN": "归档范围" })}</legend>
-        <label><input type="checkbox" checked={retention.includeMergedPrs} onChange={(event) => update("includeMergedPrs", event.target.checked)} /> {t({ en: "Merged PRs", "zh-CN": "已合并 PR" })}</label>
-        <label><input type="checkbox" checked={retention.includeClosedPrs} onChange={(event) => update("includeClosedPrs", event.target.checked)} /> {t({ en: "Closed PRs", "zh-CN": "已关闭 PR" })}</label>
-        <label><input type="checkbox" checked={retention.includeClosedIssues} onChange={(event) => update("includeClosedIssues", event.target.checked)} /> {t({ en: "Closed issues", "zh-CN": "已关闭 Issue" })}</label>
+        <div className="settings-retention-scope-grid">
+          <label className={`settings-retention-tile${retention.includeMergedPrs ? " is-selected" : ""}`}>
+            <input type="checkbox" checked={retention.includeMergedPrs} onChange={(event) => update("includeMergedPrs", event.target.checked)} />
+            <span className="settings-retention-tile__indicator" aria-hidden="true">{retention.includeMergedPrs ? "✓" : ""}</span>
+            <span className="settings-retention-tile__copy"><strong>{t({ en: "Merged PRs", "zh-CN": "Merged PR" })}</strong><small>{t({ en: "Pull requests merged into the default branch.", "zh-CN": "已合并到默认分支的 PR。" })}</small></span>
+          </label>
+          <label className={`settings-retention-tile${retention.includeClosedPrs ? " is-selected" : ""}`}>
+            <input type="checkbox" checked={retention.includeClosedPrs} onChange={(event) => update("includeClosedPrs", event.target.checked)} />
+            <span className="settings-retention-tile__indicator" aria-hidden="true">{retention.includeClosedPrs ? "✓" : ""}</span>
+            <span className="settings-retention-tile__copy"><strong>{t({ en: "Closed PRs", "zh-CN": "Closed PR" })}</strong><small>{t({ en: "Pull requests closed without being merged.", "zh-CN": "未合并但已关闭的 PR。" })}</small></span>
+          </label>
+          <label className={`settings-retention-tile${retention.includeClosedIssues ? " is-selected" : ""}`}>
+            <input type="checkbox" checked={retention.includeClosedIssues} onChange={(event) => update("includeClosedIssues", event.target.checked)} />
+            <span className="settings-retention-tile__indicator" aria-hidden="true">{retention.includeClosedIssues ? "✓" : ""}</span>
+            <span className="settings-retention-tile__copy"><strong>{t({ en: "Closed issues", "zh-CN": "Closed Issue" })}</strong><small>{t({ en: "Issues that are no longer active.", "zh-CN": "不再活跃的 Issue。" })}</small></span>
+          </label>
+        </div>
       </fieldset>
       <div className="settings-form-row">
         <button type="button" className="button-primary" onClick={() => save.mutate()} disabled={save.isPending}>{save.isPending ? t({ en: "Saving…", "zh-CN": "保存中…" }) : t({ en: "Save retention", "zh-CN": "保存保留设置" })}</button>
@@ -149,7 +163,7 @@ export function RepositoryRetentionSection({ repositoryId }: { repositoryId: str
           <button type="button" onClick={() => previewRun.mutate()} disabled={!date || previewRun.isPending}>{previewRun.isPending ? t({ en: "Previewing…", "zh-CN": "预览中…" }) : t({ en: "Preview", "zh-CN": "预览" })}</button>
           <button type="button" className="button-primary" onClick={start} disabled={run.isPending || preview === null}>{run.isPending ? t({ en: "Queueing…", "zh-CN": "排队中…" }) : t({ en: "Archive & clean", "zh-CN": "归档并清理" })}</button>
         </div>
-        {preview && <dl className="settings-details retention-preview-counts"><div><dt>{t({ en: "Merged PRs", "zh-CN": "已合并 PR" })}</dt><dd>{formatNumber(preview.mergedPrCount)}</dd></div><div><dt>{t({ en: "Closed PRs", "zh-CN": "已关闭 PR" })}</dt><dd>{formatNumber(preview.closedPrCount)}</dd></div><div><dt>{t({ en: "Closed issues", "zh-CN": "已关闭 Issue" })}</dt><dd>{formatNumber(preview.closedIssueCount)}</dd></div><div><dt>{t({ en: "Files", "zh-CN": "文件" })}</dt><dd>{formatNumber(preview.prFileRows)}</dd></div><div><dt>{t({ en: "Comments", "zh-CN": "评论" })}</dt><dd>{formatNumber(preview.issueCommentRows)}</dd></div><div><dt>{t({ en: "Payloads", "zh-CN": "载荷" })}</dt><dd>{formatNumber(preview.prPayloadCount + preview.issuePayloadCount)}</dd></div></dl>}
+        {preview && <dl className="settings-details retention-preview-counts"><div><dt>{t({ en: "Merged PRs", "zh-CN": "Merged PR" })}</dt><dd>{formatNumber(preview.mergedPrCount)}</dd></div><div><dt>{t({ en: "Closed PRs", "zh-CN": "Closed PR" })}</dt><dd>{formatNumber(preview.closedPrCount)}</dd></div><div><dt>{t({ en: "Closed issues", "zh-CN": "Closed Issue" })}</dt><dd>{formatNumber(preview.closedIssueCount)}</dd></div><div><dt>{t({ en: "Files", "zh-CN": "文件" })}</dt><dd>{formatNumber(preview.prFileRows)}</dd></div><div><dt>{t({ en: "Comments", "zh-CN": "评论" })}</dt><dd>{formatNumber(preview.issueCommentRows)}</dd></div><div><dt>{t({ en: "Payloads", "zh-CN": "载荷" })}</dt><dd>{formatNumber(preview.prPayloadCount + preview.issuePayloadCount)}</dd></div></dl>}
       </section>
       <section className="settings-maintenance-storage" aria-labelledby={`storage-maintenance-${repositoryId}`}>
         <h5 id={`storage-maintenance-${repositoryId}`}>{t({ en: "Storage maintenance", "zh-CN": "存储维护" })}</h5>

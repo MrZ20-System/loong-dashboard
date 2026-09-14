@@ -345,4 +345,33 @@ describe("pull request query service", () => {
       })).toMatchObject({ items: [expect.objectContaining({ number: 2 })], totalCount: 1, totalPages: 1 });
     });
   });
+
+  it("matches any selected status and combines independent archive selections", () => {
+    withDatabase((database) => {
+      reconcileRepositories(database, [repository("repo")]);
+      upsertPullRequestPage(database, "repo", [
+        pullRequest(1, "2026-09-01T00:00:00.000Z", { status: "open" }),
+        pullRequest(2, "2026-09-02T00:00:00.000Z", { status: "closed", stateRaw: "CLOSED", closedAt: "2026-09-02T00:00:00.000Z" }),
+        pullRequest(3, "2026-09-03T00:00:00.000Z", { status: "draft", stateRaw: "OPEN", isDraft: true }),
+        pullRequest(4, "2026-09-04T00:00:00.000Z", { status: "merged", stateRaw: "MERGED", mergedAt: "2026-09-04T00:00:00.000Z" }),
+      ]);
+      database.prepare(
+        "UPDATE pull_requests SET archived_at = ? WHERE repository_id = ? AND number IN (?, ?)",
+      ).run("2026-09-11T00:00:00.000Z", "repo", 2, 4);
+
+      expect(listPullRequests(database, "repo", {
+        calendarTimeZone: "UTC",
+        status: ["open", "closed"],
+      }).items.map((item) => item.number)).toEqual([1]);
+      expect(listPullRequests(database, "repo", {
+        calendarTimeZone: "UTC",
+        status: ["closed", "merged"],
+        archive: ["current", "archived"],
+      }).items.map((item) => item.number)).toEqual([4, 2]);
+      expect(listPullRequests(database, "repo", {
+        calendarTimeZone: "UTC",
+        archive: [],
+      }).totalCount).toBe(4);
+    });
+  });
 });

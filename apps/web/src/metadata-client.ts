@@ -37,12 +37,13 @@ export type DateRange = {
 export type MetadataFilters = {
   from: string | null;
   to: string | null;
-  status: string | null;
+  /** Repeated `?status=` values; an empty list means all statuses. */
+  status: string[];
   search: string;
   /** Repeated `?domain=` values; pull request lists only. */
   domains: string[];
-  /** Omitted means the default current projection. */
-  archive?: ArchiveFilter;
+  /** Current and archived are independent; an empty list means all. */
+  archive: ArchiveFilter[];
 };
 
 export class ApiRequestError extends Error {
@@ -83,28 +84,30 @@ export function readMetadataFilters(
 ): MetadataFilters {
   const fromValue = params.get("from");
   const toValue = params.get("to");
-  const statusValue = params.get("status");
-  const archiveValue = params.get("archive");
+  const rawStatusValues = params.getAll("status");
+  const rawArchiveValues = params.getAll("archive");
   const searchValue = params.get("search") ?? "";
   const rawDomainValues = kind === "pulls" ? params.getAll("domain") : [];
   const querySchema = kind === "pulls" ? pullRequestsQuerySchema : issuesQuerySchema;
   const candidate: Record<string, unknown> = {};
   if (fromValue !== null) candidate.from = fromValue;
   if (toValue !== null) candidate.to = toValue;
-  if (statusValue !== null) candidate.status = statusValue;
-  if (archiveValue !== null) candidate.archive = archiveValue;
+  if (rawStatusValues.length > 0) candidate.status = rawStatusValues;
+  if (rawArchiveValues.length > 0) candidate.archive = rawArchiveValues;
   if (searchValue !== "") candidate.search = searchValue;
   if (rawDomainValues.length > 0) candidate.domain = rawDomainValues;
   const parsed = querySchema.safeParse(candidate);
   if (parsed.success) {
-    const data = parsed.data as { from?: string; to?: string; status?: string; search?: string; domain?: string[]; archive?: ArchiveFilter };
+    const data = parsed.data as { from?: string; to?: string; status?: string[]; search?: string; domain?: string[]; archive?: ArchiveFilter[] };
     return {
       from: data.from ?? null,
       to: data.to ?? null,
-      status: data.status ?? null,
+      status: data.status ?? [],
       search: data.search ?? "",
       domains: kind === "pulls" ? (data.domain ?? []) : [],
-      ...(data.archive === undefined || data.archive === "current" ? {} : { archive: data.archive }),
+      archive: data.archive?.length === 0
+        ? ["current", "archived"]
+        : (data.archive ?? ["current"]),
     };
   }
   const statusSchema = kind === "pulls" ? pullRequestStatusSchema : issueStatusSchema;
@@ -112,17 +115,25 @@ export function readMetadataFilters(
   const from = fromValue !== null && isValidDate(fromValue) ? fromValue : null;
   const to = toValue !== null && isValidDate(toValue) ? toValue : null;
   const validOrder = from === null || to === null || from <= to;
+  const status = rawStatusValues
+    .filter((value) => statusSchema.safeParse(value).success)
+    .slice(0, kind === "pulls" ? 4 : 2);
+  const archive = rawArchiveValues.length === 0
+    ? ["current" as const]
+    : rawArchiveValues.includes("all")
+      ? ["current" as const, "archived" as const]
+      : rawArchiveValues
+          .filter((value): value is ArchiveFilter => archiveFilterSchema.safeParse(value).success)
+          .slice(0, 2);
   return {
     from: validOrder ? from : null,
     to: validOrder ? to : null,
-    status: statusSchema.safeParse(statusValue).success ? statusValue : null,
+    status: [...new Set(status)],
     search: parsedSearch.success ? ((parsedSearch.data as { search?: string }).search ?? "") : "",
     domains: rawDomainValues
       .filter((value) => domainRuleIdSchema.safeParse(value).success)
       .slice(0, 20),
-    ...(archiveFilterSchema.safeParse(archiveValue).success && archiveValue !== "current"
-      ? { archive: archiveValue as ArchiveFilter }
-      : {}),
+    archive: [...new Set(archive)].filter((value): value is ArchiveFilter => value === "current" || value === "archived"),
   };
 }
 
@@ -132,14 +143,14 @@ export function buildListUrl(
   filters: {
     from?: string | null;
     to?: string | null;
-    status?: string | null;
+    status?: string | string[] | null;
     search?: string | null;
     sort?: "updated" | "number" | null;
     limit?: number | null;
     page?: number | null;
     cursor?: string | null;
     domains?: string[] | null;
-    archive?: ArchiveFilter | null;
+    archive?: ArchiveFilter | ArchiveFilter[] | null;
   },
 ): string {
   const query = new URLSearchParams();
@@ -147,8 +158,22 @@ export function buildListUrl(
   const to = filters.to ?? null;
   if (from) query.set("from", from);
   if (to) query.set("to", to);
-  if (filters.status) query.set("status", filters.status);
-  if (filters.archive && filters.archive !== "current") query.set("archive", filters.archive);
+  const statuses = Array.isArray(filters.status)
+    ? filters.status
+    : filters.status
+      ? [filters.status]
+      : [];
+  for (const status of statuses) query.append("status", status);
+  const archives = Array.isArray(filters.archive)
+    ? filters.archive
+    : filters.archive
+      ? [filters.archive]
+      : [];
+  if (archives.length === 0 && Array.isArray(filters.archive)) {
+    query.set("archive", "all");
+  } else if (!(archives.length === 0 || (archives.length === 1 && archives[0] === "current"))) {
+    for (const archive of archives) query.append("archive", archive);
+  }
   if (filters.search) query.set("search", filters.search);
   if (kind === "pulls" && filters.sort) query.set("sort", filters.sort);
   if (filters.limit) query.set("limit", String(filters.limit));
@@ -222,14 +247,14 @@ export function fetchList(
   filters: {
     from?: string | null;
     to?: string | null;
-    status?: string | null;
+    status?: string | string[] | null;
     search?: string | null;
     sort?: "updated" | "number" | null;
     limit?: number | null;
     page?: number | null;
     cursor?: string | null;
     domains?: string[] | null;
-    archive?: ArchiveFilter | null;
+    archive?: ArchiveFilter | ArchiveFilter[] | null;
   },
   signal?: AbortSignal,
   fetchImpl: typeof fetch = globalThis.fetch,

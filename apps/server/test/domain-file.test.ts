@@ -9,6 +9,7 @@ import {
   reconcileRepositories,
   type DatabaseClient,
 } from "@loongboard/database";
+import { DEFAULT_DOMAIN_UPDATE_PROMPT } from "@loongboard/contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -71,6 +72,32 @@ function fixture(
 }
 
 describe("DomainFileService", () => {
+  it("materializes the shared default Domain Agent prompt", () => {
+    const { service } = fixture();
+    const prompt = service.prompt();
+    expect(prompt.content).toBe(DEFAULT_DOMAIN_UPDATE_PROMPT);
+    expect(prompt.content).toContain("<我输入的内容>");
+    expect(prompt.content).toContain('"domains": [');
+  });
+
+  it("upgrades an untouched legacy prompt without overwriting customized prompts", () => {
+    const { service } = fixture();
+    const legacyPrompt = `# Update domains
+
+Analyze the repository and update the Domain definitions in the JSON file for this repository.
+
+Keep the definitions useful for deterministic changed-file classification. Edit the JSON file directly, preserve useful existing metadata, and explain the changes in this conversation.`;
+    mkdirSync(join(service.promptPath(), ".."), { recursive: true });
+    writeFileSync(service.promptPath(), legacyPrompt, "utf8");
+
+    expect(service.prompt().content).toBe(DEFAULT_DOMAIN_UPDATE_PROMPT);
+    expect(readFileSync(service.promptPath(), "utf8")).toBe(DEFAULT_DOMAIN_UPDATE_PROMPT);
+
+    const customPrompt = `${legacyPrompt}\n\nKeep my custom note.`;
+    writeFileSync(service.promptPath(), customPrompt, "utf8");
+    expect(service.prompt().content).toBe(customPrompt);
+  });
+
   it("migrates the DB projection, preserves malformed source, and records restoreable history", () => {
     const { service, database, root } = fixture();
     const created = service.create("vllm.json", {

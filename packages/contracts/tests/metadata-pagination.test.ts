@@ -42,6 +42,25 @@ describe("metadata page pagination contracts", () => {
     expect(mergedPullRequestsQuerySchema.parse({})).not.toHaveProperty("cursor");
   });
 
+  it("normalizes repeated status and archive filters while keeping legacy values valid", () => {
+    expect(pullRequestsQuerySchema.parse({ status: "open", archive: "archived" })).toMatchObject({
+      status: ["open"],
+      archive: ["archived"],
+    });
+    expect(pullRequestsQuerySchema.parse({
+      status: ["merged", "open", "merged"],
+      archive: ["archived", "current"],
+    })).toMatchObject({
+      status: ["merged", "open"],
+      archive: ["archived", "current"],
+    });
+    expect(pullRequestsQuerySchema.parse({ archive: "all" })).toMatchObject({ archive: [] });
+    expect(issuesQuerySchema.parse({ status: ["open", "closed"] })).toMatchObject({
+      status: ["open", "closed"],
+    });
+    expect(issuesQuerySchema.safeParse({ status: ["open", "closed", "draft"] }).success).toBe(false);
+  });
+
   it("rejects invalid page controls and cursor fields", () => {
     expect(pullRequestsQuerySchema.safeParse({ page: "0" }).success).toBe(false);
     expect(pullRequestsQuerySchema.safeParse({ limit: "101" }).success).toBe(false);

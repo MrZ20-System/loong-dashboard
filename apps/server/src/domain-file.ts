@@ -25,18 +25,14 @@ import type {
   JsonSourceVersion,
   JsonSourceVersionDetail,
 } from "@loongboard/contracts";
-import { domainColorSchema } from "@loongboard/contracts";
+import {
+  DEFAULT_DOMAIN_UPDATE_PROMPT,
+  domainColorSchema,
+} from "@loongboard/contracts";
 import { atomicWrite, isWithinRoot } from "@loongboard/knowledge";
 
 import { InvalidRequestError } from "./route-helpers.js";
 import type { DomainReclassification } from "./reclassification-service.js";
-
-const DEFAULT_PROMPT = `# Update domains
-
-Analyze the repository and update the Domain definitions in the JSON file for this repository.
-
-Keep the definitions useful for deterministic changed-file classification. Edit the JSON file directly, preserve useful existing metadata, and explain the changes in this conversation.
-`;
 
 const COLOR_PALETTE = [
   "#2563eb",
@@ -48,6 +44,19 @@ const COLOR_PALETTE = [
   "#be185d",
   "#65a30d",
 ] as const;
+
+const LEGACY_DOMAIN_UPDATE_PROMPTS = new Set([
+  `# Update domains
+
+Analyze the repository and update the Domain definitions in the JSON file for this repository.
+
+Keep the definitions useful for deterministic changed-file classification. Edit the JSON file directly, preserve useful existing metadata, and explain the changes in this conversation.`,
+  `# 更新领域
+
+分析此仓库，并更新该仓库 JSON 文件中的领域定义。
+
+保持这些定义适合对变更文件进行确定性分类。直接编辑 JSON 文件，保留有用的现有元数据，并在本次对话中说明所做的变更。`,
+]);
 
 export interface DomainFileServiceOptions {
   database: DatabaseClient;
@@ -205,8 +214,13 @@ export class DomainFileService {
   prompt(): JsonSource {
     const path = this.promptPath();
     ensureRegularTarget(path);
-    if (!existsSync(path)) atomicWrite(path, DEFAULT_PROMPT);
-    const content = readUtf8(path);
+    if (!existsSync(path)) atomicWrite(path, DEFAULT_DOMAIN_UPDATE_PROMPT);
+    let content = readUtf8(path);
+    if (LEGACY_DOMAIN_UPDATE_PROMPTS.has(content.trim())) {
+      this.recordVersion("prompt", "prompt", path, content, "external");
+      atomicWrite(path, DEFAULT_DOMAIN_UPDATE_PROMPT);
+      content = DEFAULT_DOMAIN_UPDATE_PROMPT;
+    }
     const hash = sha256(content);
     this.recordVersion("prompt", "prompt", path, content, "external");
     return this.toSource("prompt", "prompt", path, content, hash);

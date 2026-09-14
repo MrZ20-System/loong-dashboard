@@ -16,17 +16,21 @@ function ThemeToggle({
         type="button"
         className={theme === "light" ? "theme-toggle__item theme-toggle__item--active" : "theme-toggle__item"}
         aria-pressed={theme === "light"}
+        aria-label={t(shellMessages.light)}
+        title={t(shellMessages.light)}
         onClick={() => onChange("light")}
       >
-        {t(shellMessages.light)}
+        <span className="theme-toggle__icon" aria-hidden="true">☀</span>
       </button>
       <button
         type="button"
         className={theme === "dark" ? "theme-toggle__item theme-toggle__item--active" : "theme-toggle__item"}
         aria-pressed={theme === "dark"}
+        aria-label={t(shellMessages.dark)}
+        title={t(shellMessages.dark)}
         onClick={() => onChange("dark")}
       >
-        {t(shellMessages.dark)}
+        <span className="theme-toggle__icon" aria-hidden="true">☾</span>
       </button>
     </div>
   );

@@ -109,4 +109,23 @@ describe("FilterDropdown", () => {
     fireEvent.mouseDown(document.body);
     expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
   });
+
+  it("uses a dedicated summary when every option is selected", () => {
+    render(
+      <FilterDropdown
+        label="Archive"
+        emptyLabel="All"
+        fullSelectionLabel="All"
+        multiple
+        options={[
+          { value: "current", label: "Current" },
+          { value: "archived", label: "Archived" },
+        ]}
+        selected={["current", "archived"]}
+        onChange={() => undefined}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: /Archive All/ })).toBeInTheDocument();
+  });
 });

@@ -87,7 +87,7 @@ export const agentMessages = {
   error: message("Error", "错误"),
   allOrigins: message("All origins", "全部来源"),
   general: message("General", "通用"),
-  pullRequests: message("Pull requests", "Pull Request"),
+  pullRequests: message("Pull requests", "PR"),
   issues: message("Issues", "Issue"),
   knowledge: message("Knowledge", "知识库"),
   domains: message("Domains", "领域"),

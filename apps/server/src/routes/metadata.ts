@@ -79,7 +79,7 @@ export function registerMetadataRoutes(
       page: query.page,
       limit: query.limit,
       domainIds: query.domain,
-      archive: query.archive ?? "current",
+      archive: query.archive ?? ["current"],
     });
     return sendParsed(reply, 200, pullRequestsResponseSchema, page);
   });
@@ -125,7 +125,7 @@ export function registerMetadataRoutes(
       search: query.search,
       limit: query.limit,
       cursor: query.cursor,
-      archive: query.archive ?? "current",
+      archive: query.archive ?? ["current"],
     });
     return sendParsed(reply, 200, issuesResponseSchema, page);
   });

@@ -445,18 +445,40 @@ function appendArchiveFilter(
   filter: PullRequestListOptions["archive"] | IssueListOptions["archive"],
   column: string,
 ): void {
-  switch (filter ?? "current") {
-    case "current":
-      clauses.push(`${column} IS NULL`);
-      return;
-    case "archived":
-      clauses.push(`${column} IS NOT NULL`);
-      return;
-    case "all":
-      return;
-    default:
-      throw new Error(`Unknown archive filter: ${String(filter)}`);
+  // Omitted filters retain the historical safe default of current metadata.
+  // An explicit empty array is the URL/API representation of the legacy
+  // `archive=all` shortcut, while selecting both named values is equivalent.
+  const values = filter === undefined || filter === null
+    ? ["current"]
+    : Array.isArray(filter)
+      ? [...filter]
+      : [filter];
+  if (values.includes("all")) return;
+  if (values.length === 0 || (values.includes("current") && values.includes("archived"))) return;
+  if (values.length === 1 && values[0] === "current") {
+    clauses.push(`${column} IS NULL`);
+    return;
   }
+  if (values.length === 1 && values[0] === "archived") {
+    clauses.push(`${column} IS NOT NULL`);
+    return;
+  }
+  throw new Error(`Unknown archive filter: ${String(filter)}`);
+}
+
+function appendStatusFilter(
+  clauses: string[],
+  parameters: unknown[],
+  filter: PullRequestListOptions["status"] | IssueListOptions["status"],
+  column: string,
+): void {
+  if (filter === undefined || filter === null) return;
+  const values = Array.isArray(filter) ? [...filter] : [filter];
+  const uniqueValues = [...new Set(values)];
+  if (uniqueValues.length === 0) return;
+  const placeholders = uniqueValues.map(() => "?").join(", ");
+  clauses.push(`${column} IN (${placeholders})`);
+  parameters.push(...uniqueValues);
 }
 
 export function listPullRequests(
@@ -479,10 +501,7 @@ export function listPullRequests(
     options.to,
     calendarTimeZone,
   );
-  if (options.status) {
-    clauses.push("status = ?");
-    parameters.push(options.status);
-  }
+  appendStatusFilter(clauses, parameters, options.status, "status");
   searchPredicate(
     clauses,
     parameters,
@@ -688,10 +707,7 @@ export function listIssues(
     options.to,
     calendarTimeZone,
   );
-  if (options.status) {
-    clauses.push("state = ?");
-    parameters.push(options.status);
-  }
+  appendStatusFilter(clauses, parameters, options.status, "state");
   searchPredicate(
     clauses,
     parameters,

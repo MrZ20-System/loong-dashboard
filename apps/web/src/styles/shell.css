@@ -381,14 +381,23 @@
 }
 
 .theme-toggle__item {
+  display: inline-grid;
+  width: 30px;
   min-height: 28px;
-  padding: 0 10px;
+  place-items: center;
+  padding: 0;
   border: 0;
   border-radius: 7px;
   background: transparent;
   color: var(--text-tertiary);
   font-size: 11px;
   font-weight: 620;
+}
+
+.theme-toggle__icon {
+  display: block;
+  font-size: 17px;
+  line-height: 1;
 }
 
 .theme-toggle__item:hover {

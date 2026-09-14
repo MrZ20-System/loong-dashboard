@@ -1,13 +1,10 @@
 import { useId } from "react";
-import { useI18n } from "../../i18n";
+import { message, useI18n } from "../../i18n";
 
-export const CRON_EXAMPLE_VALUES = [
-  "*/30 * * * *",
-  "0 */6 * * *",
-  "0 3 * * *",
-  "0 3 * * 1",
-  "0 3 1 * *",
-] as const;
+export const CRON_HELP_MESSAGE = message(
+  "The five fields are minute, hour, day of month, month, and day of week. * means every value; */30 means every 30 units (every 30 minutes in the minute field). The switch controls whether the schedule runs.",
+  "五个字段依次为分钟、小时、日、月、星期。* 表示任意值；*/30 表示每 30 个单位执行一次（用于分钟字段时即每 30 分钟）。开关决定是否运行此计划。",
+);
 
 interface CronFieldProps {
   id?: string;
@@ -42,13 +39,7 @@ export function CronField({ id, label, value, onChange, defaultValue, disabled =
         />
       </label>
       <p id={helpId} className="settings-muted">
-        {t(
-          {
-            en: "Five-field Cron. Examples: {examples}. The enabled switch controls whether this schedule runs.",
-            "zh-CN": "五字段 Cron。示例：{examples}。启用开关独立控制是否运行此计划。",
-          },
-          { examples: CRON_EXAMPLE_VALUES.join(", ") },
-        )}
+        {t(CRON_HELP_MESSAGE)}
       </p>
     </div>
   );

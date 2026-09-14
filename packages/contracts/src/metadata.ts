@@ -16,6 +16,40 @@ const nonNegativeIntegerSchema = z.number().int().nonnegative();
 const listSearchSchema = z.string().trim().max(200).optional();
 export const pullRequestListSortSchema = z.enum(["updated", "number"]);
 
+const repeatedQueryValues = (value: unknown): unknown => {
+  if (value === undefined) return undefined;
+  return typeof value === "string" ? [value] : value;
+};
+
+function normalizeRepeatedValues(value: unknown): unknown {
+  const values = repeatedQueryValues(value);
+  if (!Array.isArray(values)) return values;
+  return [...new Set(values)];
+}
+
+function normalizeArchiveValues(value: unknown): unknown {
+  const values = repeatedQueryValues(value);
+  if (!Array.isArray(values)) return values;
+  // `all` is a compatibility shortcut. The canonical multi-select form is
+  // `archive=current&archive=archived`; an explicit `all` is represented by
+  // the empty selection so the two independent options remain authoritative.
+  if (values.includes("all")) return [];
+  return [...new Set(values)];
+}
+
+const pullRequestStatusQuerySchema = z.preprocess(
+  normalizeRepeatedValues,
+  z.array(pullRequestStatusSchema).max(4).optional(),
+);
+const issueStatusQuerySchema = z.preprocess(
+  normalizeRepeatedValues,
+  z.array(issueStatusSchema).max(2).optional(),
+);
+const archiveQuerySchema = z.preprocess(
+  normalizeArchiveValues,
+  z.array(archiveFilterSchema).max(2).optional(),
+);
+
 /** Page-based list controls used by Pull Requests and Merged projections. */
 const pageQuerySchema = z.preprocess(
   (value) => (value === undefined ? undefined : Number(value)),
@@ -140,7 +174,8 @@ export const pullRequestsQuerySchema = z
   .object({
     from: calendarDateSchema.optional(),
     to: calendarDateSchema.optional(),
-    status: pullRequestStatusSchema.optional(),
+    /** Repeated status keys are an ANY-match multi-select; a single legacy key is accepted. */
+    status: pullRequestStatusQuerySchema,
     sort: pullRequestListSortSchema.optional(),
     search: listSearchSchema,
     page: pageQuerySchema,
@@ -153,7 +188,8 @@ export const pullRequestsQuerySchema = z
         value === undefined ? undefined : typeof value === "string" ? [value] : value,
       z.array(domainRuleIdSchema).max(20).optional(),
     ),
-    archive: archiveFilterSchema.optional(),
+    /** Current and archived are independent selections; both means all. */
+    archive: archiveQuerySchema,
   })
   .strict()
   .refine(validDateRange, {
@@ -165,14 +201,16 @@ export const issuesQuerySchema = z
   .object({
     from: calendarDateSchema.optional(),
     to: calendarDateSchema.optional(),
-    status: issueStatusSchema.optional(),
+    /** Repeated status keys are an ANY-match multi-select; a single legacy key is accepted. */
+    status: issueStatusQuerySchema,
     search: listSearchSchema,
     limit: z.preprocess(
       (value) => (value === undefined ? undefined : Number(value)),
       z.number().int().positive().max(100).optional(),
     ),
     cursor: opaqueCursorSchema.optional(),
-    archive: archiveFilterSchema.optional(),
+    /** Current and archived are independent selections; both means all. */
+    archive: archiveQuerySchema,
   })
   .strict()
   .refine(validDateRange, {

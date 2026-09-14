@@ -69,7 +69,7 @@ describe("metadata list controls", () => {
           kind="pulls"
           from={null}
           to={null}
-          status={null}
+          status={[]}
           search=""
           onDateRange={() => undefined}
           onStatus={() => undefined}
@@ -167,8 +167,8 @@ describe("metadata list controls", () => {
       </LocaleProvider>,
     );
 
-    expect(screen.getByRole("list", { name: "拉取请求列表" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "拉取请求 #53906：Add scheduler observability" })).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "PR 列表" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "PR #53906：Add scheduler observability" })).toBeInTheDocument();
     expect(screen.getByText("Add scheduler observability")).toBeInTheDocument();
     expect(screen.getByText("AliceBuilder")).toBeInTheDocument();
   });

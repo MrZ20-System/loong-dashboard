@@ -14,8 +14,8 @@ import { AUTH_REQUIRED_EVENT } from "./auth-required-event";
 
 describe("metadata client", () => {
   it("constructs encoded local list queries without hidden GitHub calls", () => {
-    expect(buildListUrl("acme/project", "pulls", { from: "2026-09-03", to: "2026-09-10", status: "open", page: 2, limit: 100 })).toBe(
-      "/api/repositories/acme%2Fproject/pulls?from=2026-09-03&to=2026-09-10&status=open&limit=100&page=2",
+    expect(buildListUrl("acme/project", "pulls", { from: "2026-09-03", to: "2026-09-10", status: ["open", "closed"], page: 2, limit: 100 })).toBe(
+      "/api/repositories/acme%2Fproject/pulls?from=2026-09-03&to=2026-09-10&status=open&status=closed&limit=100&page=2",
     );
   });
 
@@ -30,10 +30,35 @@ describe("metadata client", () => {
     expect(readMetadataFilters("pulls", new URLSearchParams("archive=archived"))).toEqual({
       from: null,
       to: null,
-      status: null,
+      status: [],
       search: "",
       domains: [],
-      archive: "archived",
+      archive: ["archived"],
+    });
+  });
+
+  it("round-trips the independent archive selection and legacy all shortcut", () => {
+    expect(buildListUrl("repo", "pulls", { archive: ["current", "archived"] })).toBe(
+      "/api/repositories/repo/pulls?archive=current&archive=archived",
+    );
+    expect(buildListUrl("repo", "pulls", { archive: [] })).toBe(
+      "/api/repositories/repo/pulls?archive=all",
+    );
+    expect(readMetadataFilters("pulls", new URLSearchParams("archive=current&archive=archived"))).toEqual({
+      from: null,
+      to: null,
+      status: [],
+      search: "",
+      domains: [],
+      archive: ["current", "archived"],
+    });
+    expect(readMetadataFilters("pulls", new URLSearchParams("archive=all"))).toEqual({
+      from: null,
+      to: null,
+      status: [],
+      search: "",
+      domains: [],
+      archive: ["current", "archived"],
     });
   });
 
@@ -54,10 +79,10 @@ describe("metadata client", () => {
 
   it("uses the shared query/status schemas while ignoring invalid formal filters", () => {
     const params = new URLSearchParams("status=unknown");
-    expect(readMetadataFilters("pulls", params)).toEqual({ from: null, to: null, status: null, search: "", domains: [] });
-    expect(readMetadataFilters("issues", new URLSearchParams("from=2026-09-03&status=closed"))).toEqual({ from: "2026-09-03", to: null, status: "closed", search: "", domains: [] });
+    expect(readMetadataFilters("pulls", params)).toEqual({ from: null, to: null, status: [], search: "", domains: [], archive: ["current"] });
+    expect(readMetadataFilters("issues", new URLSearchParams("from=2026-09-03&status=closed"))).toEqual({ from: "2026-09-03", to: null, status: ["closed"], search: "", domains: [], archive: ["current"] });
     const domainParams = new URLSearchParams("from=2026-09-03&to=2026-09-10&domain=dom_a&domain=dom_b&domain=");
-    expect(readMetadataFilters("pulls", domainParams)).toEqual({ from: "2026-09-03", to: "2026-09-10", status: null, search: "", domains: ["dom_a", "dom_b"] });
+    expect(readMetadataFilters("pulls", domainParams)).toEqual({ from: "2026-09-03", to: "2026-09-10", status: [], search: "", domains: ["dom_a", "dom_b"], archive: ["current"] });
     expect(buildListUrl("repo", "pulls", { domains: ["dom_a", "dom_b"] })).toBe("/api/repositories/repo/pulls?domain=dom_a&domain=dom_b");
   });
 

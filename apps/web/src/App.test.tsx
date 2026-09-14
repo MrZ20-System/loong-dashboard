@@ -210,9 +210,17 @@ describe("App shell", () => {
 
     const shell = document.querySelector(".app-shell");
     expect(shell).toHaveAttribute("data-theme", "light");
-    fireEvent.click(screen.getByRole("button", { name: "Dark" }));
+    const lightThemeButton = screen.getByRole("button", { name: "Light theme" });
+    const darkThemeButton = screen.getByRole("button", { name: "Dark theme" });
+    expect(lightThemeButton).toHaveAttribute("title", "Light theme");
+    expect(lightThemeButton).toHaveAttribute("aria-pressed", "true");
+    expect(darkThemeButton).toHaveAttribute("title", "Dark theme");
+    expect(darkThemeButton).toHaveAttribute("aria-pressed", "false");
+    expect(lightThemeButton).toHaveTextContent("☀");
+    expect(darkThemeButton).toHaveTextContent("☾");
+    fireEvent.click(darkThemeButton);
     expect(shell).toHaveAttribute("data-theme", "dark");
-    expect(screen.getByRole("button", { name: "Dark" })).toHaveAttribute("aria-pressed", "true");
+    expect(darkThemeButton).toHaveAttribute("aria-pressed", "true");
   });
 
   it("localizes the shared footer while keeping the product name unchanged", async () => {
@@ -260,12 +268,12 @@ describe("App shell", () => {
     expect(screen.getByRole("group", { name: "Color theme" })).toBeInTheDocument();
     expect(screen.getByRole("group", { name: "Language" })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "Dark" }));
+    fireEvent.click(screen.getByRole("button", { name: "Dark theme" }));
     expect(document.querySelector(".app-shell")).toHaveAttribute("data-theme", "dark");
     fireEvent.click(screen.getByRole("button", { name: "Chinese" }));
     expect(screen.getByTestId("location-path")).toHaveTextContent(path);
     expect(screen.getByRole("group", { name: "配色主题" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "深色" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "深色主题" })).toHaveAttribute("aria-pressed", "true");
   });
 });
 

@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_DOMAIN_UPDATE_PROMPT } from "@loongboard/contracts";
 import { App, appQueryClient } from "./App";
 import { LOCALE_STORAGE_KEY } from "./i18n";
 
@@ -38,14 +39,14 @@ function installStorage() {
 }
 
 function mockApi(options: { pulls?: unknown[]; domains?: unknown[]; reclassification?: { running: boolean; pendingCount: number | null }; domainMutationError?: string } = {}) {
+  let promptContent = "User-authored prompt Ω";
   const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
     const url = new URL(String(input), "http://localhost");
     if (url.pathname === "/api/auth/status") return json({ enabled: false, unlocked: true });
     if (url.pathname === "/api/repositories") return json({ items: [repository] });
     if (url.pathname.endsWith("/domains/prompt")) {
-      return init?.method === "PUT"
-        ? json({ path: "prompts/update-domains.md", content: JSON.parse(String(init.body)).content, version: 2, hash: "prompt-hash" })
-        : json({ path: "prompts/update-domains.md", content: "User-authored prompt Ω", version: 1, hash: "prompt-hash" });
+      if (init?.method === "PUT") promptContent = JSON.parse(String(init.body)).content as string;
+      return json({ path: "prompts/update-domains.md", content: promptContent, version: init?.method === "PUT" ? 2 : 1, hash: "prompt-hash" });
     }
     if (url.pathname.endsWith("/domains/source")) return json({ path: "domains.json", content: '{"domains":[]}', version: 1, hash: "source-hash" });
     if (url.pathname.endsWith("/domains/source/versions")) return json({ items: [] });
@@ -161,34 +162,54 @@ describe("domain classification UI", () => {
     expect(alert).toHaveTextContent("raw domain mutation detail");
   });
 
-  it("keeps the prompt draft and raw repository data on locale changes, and only explicit templates replace it", async () => {
+  it("keeps the prompt read-only until editing, persists saves, and restores the canonical default", async () => {
     const fetchMock = mockApi();
     renderApp("/settings/domains");
     await screen.findByRole("heading", { name: "Domain rules" });
     fireEvent.click(screen.getByRole("tab", { name: "Agent update" }));
     const prompt = await screen.findByRole("textbox", { name: "Domain update prompt" });
-    expect(screen.getByRole("button", { name: "Use English built-in template" }).parentElement).toHaveClass("domain-form-actions");
     await waitFor(() => expect(prompt).toHaveValue("User-authored prompt Ω"));
-    fireEvent.change(prompt, { target: { value: "用户草稿 KEEP 原文" } });
+    expect(prompt).toHaveAttribute("readonly");
+    expect(screen.queryByRole("button", { name: "Use English built-in template" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Use Chinese built-in template" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(prompt).not.toHaveAttribute("readonly");
+    fireEvent.change(prompt, { target: { value: "User-edited prompt" } });
     const putCount = () => fetchMock.mock.calls.filter(([input, init]) => String(input).endsWith("/domains/prompt") && init?.method === "PUT").length;
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
-    fireEvent.click(screen.getByRole("button", { name: "Use English built-in template" }));
-    expect((prompt as HTMLTextAreaElement).value).toContain("# Update domains");
-    expect(putCount()).toBe(0);
-    fireEvent.change(prompt, { target: { value: "用户草稿 KEEP 原文" } });
-    fireEvent.click(screen.getByRole("button", { name: "Chinese" }));
-    expect(prompt).toHaveValue("用户草稿 KEEP 原文");
-    expect(screen.getByRole("heading", { name: "领域规则" })).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: "智能代理更新" })).toBeInTheDocument();
-    confirm.mockReturnValue(false);
-    fireEvent.click(screen.getByRole("button", { name: "使用中文内置模板" }));
-    expect(confirm).toHaveBeenCalled();
-    expect(prompt).toHaveValue("用户草稿 KEEP 原文");
-    confirm.mockReturnValue(true);
-    fireEvent.click(screen.getByRole("button", { name: "使用中文内置模板" }));
-    expect((prompt as HTMLTextAreaElement).value).toContain("# 更新领域");
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    await waitFor(() => expect(putCount()).toBe(1));
+    expect(prompt).toHaveValue("User-edited prompt");
+    expect(prompt).toHaveAttribute("readonly");
+    fireEvent.click(screen.getByRole("button", { name: "Restore" }));
+    await waitFor(() => expect(putCount()).toBe(2));
+    expect(prompt).toHaveValue(DEFAULT_DOMAIN_UPDATE_PROMPT);
+    expect(prompt).toHaveAttribute("readonly");
+    expect(screen.getByText("Default update prompt restored and saved.")).toBeInTheDocument();
     expect(screen.getByText("LoongBoard (acme/project)")).toBeInTheDocument();
     expect(screen.getByText(/prompts\/update-domains\.md/)).toBeInTheDocument();
-    expect(putCount()).toBe(0);
+  });
+
+  it("keeps the color swatch and hex input aligned and rejects invalid colors", async () => {
+    const fetchMock = mockApi({ domains: [] });
+    renderApp("/settings/domains");
+    await screen.findByRole("heading", { name: "Domain rules" });
+    const picker = screen.getByLabelText("Rule color");
+    const hex = screen.getByLabelText("Rule color hex value");
+    expect(picker).toHaveValue("#5b8def");
+    fireEvent.change(hex, { target: { value: "#12" } });
+    expect(hex).toHaveAttribute("aria-invalid", "true");
+    expect(picker).toHaveValue("#5b8def");
+    fireEvent.change(screen.getByLabelText("Rule name"), { target: { value: "CI" } });
+    fireEvent.change(screen.getByLabelText("Include patterns"), { target: { value: ".github/**" } });
+    fireEvent.click(screen.getByRole("button", { name: "Create rule" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("six-digit hexadecimal");
+    fireEvent.change(hex, { target: { value: "#aabbcc" } });
+    fireEvent.change(picker, { target: { value: "#123456" } });
+    expect(hex).toHaveValue("#123456");
+    fireEvent.click(screen.getByRole("button", { name: "Create rule" }));
+    await waitFor(() => {
+      const call = fetchMock.mock.calls.find(([input, init]) => String(input).endsWith("/domains") && init?.method === "POST");
+      expect(JSON.parse(String(call?.[1]?.body)).color).toBe("#123456");
+    });
   });
 });

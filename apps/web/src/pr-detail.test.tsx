@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChangedFileEntry } from "@loongboard/contracts";
 import { App, appQueryClient } from "./App";
 import { diffAnchorId } from "./components/pr/ContinuousChanges";
+import { LOCALE_STORAGE_KEY } from "./i18n";
 
 vi.mock("./diff-viewer", () => ({
   DiffViewer: ({
@@ -90,6 +91,7 @@ function json(value: unknown, status = 200) {
 
 let savedScrollIntoView: PropertyDescriptor | undefined;
 let savedInnerWidth: PropertyDescriptor | undefined;
+let savedLocalStorage: PropertyDescriptor | undefined;
 
 function stubInnerWidth(width: number) {
   savedInnerWidth = Object.getOwnPropertyDescriptor(window, "innerWidth");
@@ -106,6 +108,28 @@ function restoreInnerWidth() {
     Object.defineProperty(window, "innerWidth", savedInnerWidth);
   }
   savedInnerWidth = undefined;
+}
+
+function installLocaleStorage(locale: string) {
+  savedLocalStorage = Object.getOwnPropertyDescriptor(window, "localStorage");
+  const values = new Map([[LOCALE_STORAGE_KEY, locale]]);
+  Object.defineProperty(window, "localStorage", {
+    configurable: true,
+    value: {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => { values.set(key, value); },
+      removeItem: (key: string) => { values.delete(key); },
+      clear: () => values.clear(),
+      key: (index: number) => [...values.keys()][index] ?? null,
+      get length() { return values.size; },
+    } satisfies Storage,
+  });
+}
+
+function restoreLocaleStorage() {
+  if (savedLocalStorage === undefined) Reflect.deleteProperty(window, "localStorage");
+  else Object.defineProperty(window, "localStorage", savedLocalStorage);
+  savedLocalStorage = undefined;
 }
 
 function stubScrollIntoView() {
@@ -353,6 +377,24 @@ describe("PR detail workbench", () => {
     expect(screen.getAllByRole("button", { name: /^Collapse diff for / })).toHaveLength(
       files.length,
     );
+  });
+
+  it("keeps GitHub PR metadata wording in English in the Chinese locale", async () => {
+    installLocaleStorage("zh-CN");
+    try {
+      mockApi();
+      renderDetail();
+
+      const metadata = await screen.findByText("wants to merge into");
+      expect(metadata).toBeInTheDocument();
+      expect(screen.getByText("from")).toBeInTheDocument();
+      expect(screen.getByText(/Updated/)).toBeInTheDocument();
+      expect(screen.queryByText("希望合并到")).not.toBeInTheDocument();
+      expect(screen.queryByText("来自")).not.toBeInTheDocument();
+      expect(screen.queryByText(/更新于/)).not.toBeInTheDocument();
+    } finally {
+      restoreLocaleStorage();
+    }
   });
 
   it("renders archive and cleaned-payload markers independently", async () => {

@@ -17,6 +17,7 @@ function summaryLabel(
   options: FilterDropdownOption[],
   multiple: boolean,
   emptyLabel: string,
+  fullSelectionLabel: string | undefined,
   localize: (value: LocalizedText) => string,
   formatNumber: (value: number) => string,
 ) {
@@ -25,9 +26,19 @@ function summaryLabel(
     const option = options.find((item) => item.value === selected[0]);
     return option === undefined ? selected[0] : localize(option.label);
   }
+  if (fullSelectionLabel !== undefined && selected.length === options.length) {
+    return fullSelectionLabel;
+  }
   if (selected.length === 1) {
     const option = options.find((item) => item.value === selected[0]);
     return option === undefined ? selected[0] : localize(option.label);
+  }
+  if (selected.length <= 2) {
+    return selected
+      .map((value) => options.find((item) => item.value === value))
+      .map((option, index) => option === undefined ? selected[index] ?? "" : localize(option.label))
+      .filter((value) => value.length > 0)
+      .join(", ");
   }
   return localize(filterMessages.selected).replace(
     "{count}",
@@ -42,6 +53,7 @@ export function FilterDropdown({
   selected,
   onChange,
   multiple = false,
+  fullSelectionLabel,
 }: {
   label: LocalizedText;
   emptyLabel: LocalizedText;
@@ -49,6 +61,7 @@ export function FilterDropdown({
   selected: string[];
   onChange: (values: string[]) => void;
   multiple?: boolean;
+  fullSelectionLabel?: LocalizedText;
 }) {
   const { t, formatNumber } = useI18n();
   const localize = (value: LocalizedText) => typeof value === "string" ? value : t(value);
@@ -67,6 +80,7 @@ export function FilterDropdown({
     options,
     multiple,
     emptyLabelText,
+    fullSelectionLabel === undefined ? undefined : localize(fullSelectionLabel),
     localize,
     formatNumber,
   );

@@ -290,14 +290,16 @@ export interface ListQueryOptions {
 
 export interface PullRequestListOptions extends ListQueryOptions {
   page?: number;
-  status?: PullRequestStatus | null;
+  /** ANY-match status filter; the scalar form remains for direct API compatibility. */
+  status?: PullRequestStatus | readonly PullRequestStatus[] | null;
   sort?: PullRequestListSort | null;
   /** Case-insensitive contiguous title/author or PR-number search. */
   search?: string | null;
   /** Match pull requests carrying ANY of these domain rules. */
   domainIds?: readonly string[] | null;
   /** Retention projection to read; current is the safe default. */
-  archive?: ArchiveFilter | null;
+  /** Select current/archived independently; both selections mean all. */
+  archive?: ArchiveFilter | readonly ArchiveFilter[] | null;
 }
 
 /** Stored domain rule row; identical in shape to the shared contract. */
@@ -315,11 +317,13 @@ export interface PullRequestFileSet {
 
 export interface IssueListOptions extends ListQueryOptions {
   cursor?: string | null;
-  status?: IssueStatus | null;
+  /** ANY-match status filter; the scalar form remains for direct API compatibility. */
+  status?: IssueStatus | readonly IssueStatus[] | null;
   /** Case-insensitive contiguous title/author or issue-number search. */
   search?: string | null;
   /** Retention projection to read; current is the safe default. */
-  archive?: ArchiveFilter | null;
+  /** Select current/archived independently; both selections mean all. */
+  archive?: ArchiveFilter | readonly ArchiveFilter[] | null;
 }
 
 export interface MergedPullRequestListOptions {

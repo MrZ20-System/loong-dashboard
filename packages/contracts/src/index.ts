@@ -247,6 +247,7 @@ export {
   type ApiErrorCode,
 } from "./errors.js";
 export {
+  DEFAULT_DOMAIN_UPDATE_PROMPT,
   domainColorSchema,
   domainDeleteResponseSchema,
   domainMutationResponseSchema,
