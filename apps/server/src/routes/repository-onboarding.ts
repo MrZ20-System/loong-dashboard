@@ -5,7 +5,9 @@ import {
 } from "../route-helpers.js";
 import {
   repositoryOnboardingAcceptedSchema,
+  repositoryOnboardingListResponseSchema,
   repositoryOnboardingParamsSchema,
+  repositoryOnboardingRetrySchema,
   repositoryOnboardingSchema,
 } from "@loongboard/contracts";
 import type { FastifyInstance } from "fastify";
@@ -21,6 +23,15 @@ export function registerRepositoryOnboardingRoutes(
   app: FastifyInstance,
   dependencies: RepositoryOnboardingRoutesDependencies,
 ): void {
+  app.get("/api/repository-onboarding", async (_request, reply) => {
+    return sendParsed(
+      reply,
+      200,
+      repositoryOnboardingListResponseSchema,
+      { items: dependencies.onboarding.list() },
+    );
+  });
+
   app.get("/api/repository-onboarding/:jobId", async (request, reply) => {
     const { jobId } = parseRequest(repositoryOnboardingParamsSchema, request.params);
     return sendParsed(
@@ -32,9 +43,9 @@ export function registerRepositoryOnboardingRoutes(
   });
 
   app.post("/api/repository-onboarding/:jobId/retry", async (request, reply) => {
-    assertEmptyRequestBody(request.body);
     const { jobId } = parseRequest(repositoryOnboardingParamsSchema, request.params);
-    const job = dependencies.onboarding.retry(jobId);
+    const body = request.body === undefined ? {} : parseRequest(repositoryOnboardingRetrySchema, request.body);
+    const job = dependencies.onboarding.retry(jobId, body);
     return sendParsed(
       reply,
       202,

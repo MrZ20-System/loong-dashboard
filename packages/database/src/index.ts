@@ -18,6 +18,7 @@ export {
   createRepositoryOnboardingJob,
   getRepositoryOnboardingJob,
   listRepositoryOnboardingJobs,
+  listRepositoryOnboardingJobsForDisplay,
   recoverInterruptedRepositoryOnboardingJobs,
   requireRepositoryOnboardingJob,
   RepositoryOnboardingNotFoundError,
@@ -27,6 +28,7 @@ export {
 } from "./repository-onboarding-service.js";
 export type {
   CreateRepositoryOnboardingJobInput,
+  RetryRepositoryOnboardingJobOptions,
   UpdateRepositoryOnboardingJobInput,
 } from "./repository-onboarding-service.js";
 export {

@@ -48,6 +48,8 @@ export interface UpdateRepositoryOnboardingJobInput {
   startedAt?: string | null;
   finishedAt?: string | null;
   configHash?: string;
+  /** Retry-only branch patch; persisted in both the indexed column and input JSON. */
+  defaultBranch?: string;
   updatedAt?: string;
 }
 
@@ -56,6 +58,8 @@ export interface RetryRepositoryOnboardingJobOptions {
   allowReady?: boolean;
   /** Refresh the optimistic system.yaml guard after the caller validates current config. */
   configHash?: string;
+  /** Optional branch patch accepted only before repository registration. */
+  defaultBranch?: string;
 }
 
 export class RepositoryOnboardingNotFoundError extends Error {
@@ -86,14 +90,14 @@ const TRANSITIONS: Record<RepositoryOnboardingStatus, readonly RepositoryOnboard
   queued: ["validating", "cancelled", "failed"],
   validating: ["cloning", "registering", "failed", "cancelled"],
   cloning: ["registering", "failed", "cancelled"],
-  registering: ["initializing", "failed", "cancelled"],
-  initializing: ["syncing", "ready", "failed", "cancelled"],
-  syncing: ["ready", "failed", "cancelled"],
+  registering: ["initializing", "failed"],
+  initializing: ["syncing", "ready", "failed"],
+  syncing: ["ready", "failed"],
   // A source checkout can be ready while its GitHub metadata credential is
   // pending; retrying that durable row continues initialization/sync after a
   // credential is configured.
   ready: ["queued"],
-  failed: ["queued", "validating", "cancelled"],
+  failed: ["queued", "validating"],
   cancelled: ["queued"],
 };
 
@@ -275,6 +279,16 @@ export function updateRepositoryOnboardingJob(
   if (patch.startedAt !== undefined) add("started_at", patch.startedAt);
   if (patch.finishedAt !== undefined) add("finished_at", patch.finishedAt);
   if (patch.configHash !== undefined) add("config_hash", patch.configHash);
+  if (patch.defaultBranch !== undefined) {
+    if (existing.repositoryId !== null) {
+      throw new RepositoryOnboardingTransitionError(jobId, existing.status, "queued");
+    }
+    if (patch.defaultBranch.trim().length === 0) {
+      throw new Error(`Invalid repository onboarding default branch for ${jobId}`);
+    }
+    add("default_branch", patch.defaultBranch);
+    add("input_json", JSON.stringify({ ...existing.input, defaultBranch: patch.defaultBranch }));
+  }
   const now = patch.updatedAt ?? new Date().toISOString();
   add("updated_at", now);
   if (sets.length === 1 && sets[0] === "updated_at = ?") return existing;
@@ -309,7 +323,10 @@ export function cancelRepositoryOnboardingJob(
   jobId: string,
 ): RepositoryOnboardingJob {
   const job = requireRepositoryOnboardingJob(database, jobId);
-  if (TERMINAL_STATES.has(job.status)) return job;
+  if (job.status === "cancelled") return job;
+  if (job.status !== "queued" && job.status !== "validating" && job.status !== "cloning") {
+    throw new RepositoryOnboardingTransitionError(jobId, job.status, "cancelled");
+  }
   return updateRepositoryOnboardingJob(database, jobId, {
     status: "cancelled",
     step: "cancelled",
@@ -333,6 +350,9 @@ export function retryRepositoryOnboardingJob(
   ) {
     throw new RepositoryOnboardingTransitionError(jobId, job.status, "queued");
   }
+  if (options.defaultBranch !== undefined && job.repositoryId !== null) {
+    throw new RepositoryOnboardingTransitionError(jobId, job.status, "queued");
+  }
   return updateRepositoryOnboardingJob(database, jobId, {
     status: "queued",
     step: "queued",
@@ -343,6 +363,57 @@ export function retryRepositoryOnboardingJob(
     startedAt: null,
     finishedAt: null,
     ...(options.configHash === undefined ? {} : { configHash: options.configHash }),
+    ...(options.defaultBranch === undefined ? {} : { defaultBranch: options.defaultBranch }),
     updatedAt: now,
   });
+}
+
+const ACTIVE_ONBOARDING_STATUSES = [
+  "queued",
+  "validating",
+  "cloning",
+  "registering",
+  "initializing",
+  "syncing",
+] as const;
+
+/**
+ * Return the bounded Settings status projection. Active attempts are shown
+ * together with only the newest failed attempt and newest ready attempt that
+ * still awaits GitHub credentials; ordinary ready history is intentionally
+ * omitted.
+ */
+export function listRepositoryOnboardingJobsForDisplay(
+  database: DatabaseClient,
+  limit = 10,
+): RepositoryOnboardingJob[] {
+  if (!Number.isInteger(limit) || limit < 1 || limit > 10) {
+    throw new Error("Repository onboarding display limit must be between 1 and 10");
+  }
+  const rows = listRepositoryOnboardingJobs(database, [
+    ...ACTIVE_ONBOARDING_STATUSES,
+    "failed",
+    "ready",
+  ]);
+  const active = rows.filter((job) => ACTIVE_ONBOARDING_STATUSES.includes(job.status as typeof ACTIVE_ONBOARDING_STATUSES[number]));
+  const latestFailed = rows
+    .filter((job) => job.status === "failed")
+    .sort(compareOnboardingJobs)[0];
+  const latestPendingReady = rows
+    .filter((job) => job.status === "ready" && job.githubMetadataPending)
+    .sort(compareOnboardingJobs)[0];
+  const selected = [
+    ...active,
+    ...(latestFailed === undefined ? [] : [latestFailed]),
+    ...(latestPendingReady === undefined ? [] : [latestPendingReady]),
+  ];
+  return selected
+    .filter((job, index, all) => all.findIndex((candidate) => candidate.jobId === job.jobId) === index)
+    .sort(compareOnboardingJobs)
+    .slice(0, limit);
+}
+
+function compareOnboardingJobs(left: RepositoryOnboardingJob, right: RepositoryOnboardingJob): number {
+  const updated = right.updatedAt.localeCompare(left.updatedAt);
+  return updated !== 0 ? updated : right.createdAt.localeCompare(left.createdAt);
 }

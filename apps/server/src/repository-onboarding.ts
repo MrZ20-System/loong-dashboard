@@ -20,6 +20,7 @@ import {
   getRepository,
   getRepositoryOnboardingJob,
   listRepositoryOnboardingJobs,
+  listRepositoryOnboardingJobsForDisplay,
   recoverInterruptedRepositoryOnboardingJobs,
   reconcileRepositories,
   requireRepositoryOnboardingJob,
@@ -32,9 +33,11 @@ import {
   repositoryOnboardingCreateSchema,
   repositoryOnboardingInputSchema,
   repositoryOnboardingSchema,
+  type RepositoryRetentionSettings,
   type RepositoryOnboardingCreate,
   type RepositoryOnboardingInput,
   type RepositoryOnboarding,
+  type RepositoryOnboardingRetry,
 } from "@loongboard/contracts";
 import {
   RepositoryOnboardingGit as GitWorkspaceOnboarding,
@@ -53,13 +56,18 @@ import {
 } from "./config.js";
 import type { DomainFileService } from "./domain-file.js";
 import type { RepositorySyncCoordinator } from "./sync-coordinator.js";
-import type { SettingsController } from "./settings.js";
 import type { SystemScheduleProjector } from "./system-schedules.js";
 import { InvalidRequestError } from "./route-helpers.js";
 
 const DEFAULT_REMOTE = "upstream";
 const DEFAULT_BRANCH = "main";
 const DEFAULT_WORKTREE_SLOTS = 10;
+
+interface RepositoryOnboardingSettings {
+  automaticSync: boolean;
+  syncCron: string;
+  retention: RepositoryRetentionSettings;
+}
 
 export interface RepositoryOnboardingCredentialSummary {
   configured: boolean;
@@ -70,7 +78,9 @@ export interface RepositoryOnboardingServiceOptions {
   config: SystemConfig;
   configPath: string;
   gitWorkspace: GitWorkspaceOnboarding;
-  settings?: Pick<SettingsController, "repositorySettingsSync">;
+  settings?: {
+    repositorySettingsSync(repositoryId: string): RepositoryOnboardingSettings;
+  };
   domainFiles?: Pick<DomainFileService, "refresh">;
   projector?: Pick<SystemScheduleProjector, "projectRepository">;
   syncCoordinator?: Pick<RepositorySyncCoordinator, "start" | "waitForRun">;
@@ -150,23 +160,39 @@ export class RepositoryOnboardingService {
     return this.publicJob(requireRepositoryOnboardingJob(this.database, jobId));
   }
 
-  retry(jobId: string): RepositoryOnboarding {
+  list(): RepositoryOnboarding[] {
+    return listRepositoryOnboardingJobsForDisplay(this.database, 10).map((job) => this.publicJob(job));
+  }
+
+  retry(jobId: string, patch: RepositoryOnboardingRetry = {}): RepositoryOnboarding {
     const current = requireRepositoryOnboardingJob(this.database, jobId);
+    const defaultBranch = patch.defaultBranch?.trim();
+    if (defaultBranch !== undefined && current.repositoryId !== null) {
+      throw new RepositoryOnboardingConflictError(
+        "A registered repository cannot change its default branch through onboarding retry",
+      );
+    }
     const configHash = this.refreshConfigForRetry(current);
     const job = retryRepositoryOnboardingJob(
       this.database,
       jobId,
       this.timestamp(),
-      { configHash },
+      {
+        configHash,
+        ...(defaultBranch === undefined ? {} : { defaultBranch }),
+      },
     );
     this.schedule(job.jobId);
     return this.publicJob(job);
   }
 
   cancel(jobId: string): RepositoryOnboarding {
-    const active = this.active.get(jobId);
-    active?.abort.abort();
-    return this.publicJob(cancelRepositoryOnboardingJob(this.database, jobId));
+    // Persist cancellation before signaling the worker. If registration has
+    // already won the race, the typed DB service rejects this as an invalid
+    // state and no rollback is attempted.
+    const cancelled = cancelRepositoryOnboardingJob(this.database, jobId);
+    this.active.get(jobId)?.abort.abort();
+    return this.publicJob(cancelled);
   }
 
   /**
@@ -175,8 +201,27 @@ export class RepositoryOnboardingService {
    */
   start(): void {
     if (this.closed || this.scanStarted) return;
-    this.scanStarted = true;
     recoverInterruptedRepositoryOnboardingJobs(this.database, this.timestamp());
+    this.scanStarted = true;
+    // Recovery intentionally records an interrupted attempt as failed first,
+    // then immediately requeues only that machine-generated failure. This
+    // lets a pre-registration crash resume even when system.yaml has not yet
+    // gained the repository entry; user-declared failures remain manual.
+    for (const job of listRepositoryOnboardingJobs(this.database, ["failed"])) {
+      if (job.error?.code !== "REPOSITORY_ONBOARDING_INTERRUPTED") continue;
+      try {
+        const configHash = this.refreshConfigForRetry(job);
+        const resumed = retryRepositoryOnboardingJob(
+          this.database,
+          job.jobId,
+          this.timestamp(),
+          { configHash },
+        );
+        this.schedule(resumed.jobId);
+      } catch (error) {
+        this.logger.error("Unable to resume interrupted repository onboarding", error);
+      }
+    }
     for (const job of listRepositoryOnboardingJobs(this.database, ["queued"])) {
       this.schedule(job.jobId);
     }
@@ -279,7 +324,10 @@ export class RepositoryOnboardingService {
       if (signal.aborted) throw new RepositoryOnboardingCancelledError();
 
       job = this.updateStep(jobId, "registering", 55, "Registering repository in system.yaml and SQLite");
-      const registration = await this.register(job, verified.defaultBranch ?? input.defaultBranch);
+      // The requested branch is durable user input. Git verification may
+      // report the same branch, but it must never replace the requested value
+      // with an adapter-inferred remote default.
+      const registration = await this.register(job, input.defaultBranch);
       this.updateRepositoryId(jobId, registration.repositoryId);
 
       this.updateStep(jobId, "initializing", 70, "Initializing settings, Domain source, and scheduler tasks");
@@ -301,7 +349,15 @@ export class RepositoryOnboardingService {
       if (isAbortLike(error) || signal.aborted) {
         const current = getRepositoryOnboardingJob(this.database, jobId);
         if (current !== null && current.status !== "cancelled") {
-          cancelRepositoryOnboardingJob(this.database, jobId);
+          try {
+            cancelRepositoryOnboardingJob(this.database, jobId);
+          } catch (cancelError) {
+            // Registration may have advanced the durable state while the
+            // cancellation signal was in flight. The cancel route reports
+            // that invalid state; the worker must not roll back registration
+            // or leave an unhandled rejection here.
+            this.logger.error("Repository onboarding cancellation lost a state race", cancelError);
+          }
         }
         return;
       }
@@ -488,29 +544,45 @@ export class RepositoryOnboardingService {
   /** Refresh a retry's optimistic YAML guard only after validating its identity. */
   private refreshConfigForRetry(job: RepositoryOnboardingJob): string {
     const raw = readFileSync(this.configPath, "utf8");
-    const latest = parseSystemConfig(parseYaml(raw) as unknown, this.configPath);
-    const key = job.input.key.toLocaleLowerCase("en-US");
-    const github = job.input.github.toLocaleLowerCase("en-US");
-    const configured = latest.repositories.find(
-      (repository) =>
-        repository.key.toLocaleLowerCase("en-US") === key ||
-        repository.github.toLocaleLowerCase("en-US") === github,
-    );
-    if (
-      configured !== undefined &&
-      (
-        configured.key.toLocaleLowerCase("en-US") !== key ||
-        configured.github.toLocaleLowerCase("en-US") !== github ||
-        resolve(configured.path) !== resolve(job.input.targetPath) ||
-        configured.remote !== job.input.remoteName ||
-        configured.defaultBranch !== job.input.defaultBranch
-      )
-    ) {
+    let latest: SystemConfig;
+    try {
+      latest = parseSystemConfig(parseYaml(raw) as unknown, this.configPath);
+    } catch (error) {
       throw new RepositoryOnboardingConflictError(
-        "system.yaml repository definition changed and no longer matches this onboarding job",
+        error instanceof Error && error.message.trim().length > 0
+          ? `Current system.yaml is invalid: ${error.message}`
+          : "Current system.yaml is invalid; retry after fixing it",
       );
     }
-    this.config.repositories = latest.repositories;
+    const key = job.input.key.toLocaleLowerCase("en-US");
+    const github = job.input.github.toLocaleLowerCase("en-US");
+    const targetPath = resolve(job.input.targetPath);
+    for (const repository of latest.repositories) {
+      const sameKey = repository.key.toLocaleLowerCase("en-US") === key;
+      const sameGithub = repository.github.toLocaleLowerCase("en-US") === github;
+      const samePath = resolve(repository.path) === targetPath;
+      if (!sameKey && !sameGithub && !samePath) continue;
+      if (!sameKey || !sameGithub || !samePath) {
+        throw new RepositoryOnboardingConflictError(
+          "system.yaml repository key, GitHub identity, or path conflicts with this onboarding job",
+        );
+      }
+    }
+    try {
+      assertManagedRepositoryPath(latest.runtime.repositoriesPath, targetPath, false);
+    } catch (error) {
+      throw new RepositoryOnboardingConflictError(
+        error instanceof Error && error.message.trim().length > 0
+          ? `Onboarding target conflicts with the current managed root: ${error.message}`
+          : "Onboarding target conflicts with the current managed root",
+      );
+    }
+    // Preserve the shared config object used by scheduler/projectors while
+    // adopting the latest parsed YAML for registration and future scans.
+    Object.assign(this.config, latest);
+    // A matching configured row is valid only when its identity/path match;
+    // branch and remote are intentionally not part of this retry conflict so
+    // a pre-registration job may repair a bad branch through the request body.
     return hashRaw(raw);
   }
 
@@ -536,11 +608,12 @@ export class RepositoryOnboardingService {
     if (this.domainFiles === undefined) throw new Error("Domain file service is not configured");
     this.domainFiles.refresh(repositoryId);
     if (this.projector === undefined) throw new Error("System schedule projector is not configured");
-    this.projector.projectRepository(repository, {
+    const schedulePolicy = {
       automaticSync: settings.automaticSync,
-      syncFrequencyMinutes: settings.syncFrequencyMinutes,
+      syncCron: settings.syncCron,
       retention: settings.retention,
-    });
+    };
+    this.projector.projectRepository(repository, schedulePolicy);
   }
 
   private async initialSync(repositoryId: string): Promise<void> {
@@ -589,24 +662,36 @@ export class RepositoryOnboardingService {
         (job) =>
           job.input.key.toLocaleLowerCase("en-US") === repository.key.toLocaleLowerCase("en-US") &&
           job.input.github.toLocaleLowerCase("en-US") === repository.github.toLocaleLowerCase("en-US"),
-      ).at(-1);
+      ).sort(compareOnboardingJobs)[0];
       if (existing !== undefined) {
         if (existing.status === "cancelled") {
           // Cancellation is an explicit user decision and survives restart.
           continue;
         }
-        if (existing.status === "queued") {
+        if (
+          existing.status === "queued" ||
+          existing.status === "validating" ||
+          existing.status === "cloning" ||
+          existing.status === "registering" ||
+          existing.status === "initializing" ||
+          existing.status === "syncing"
+        ) {
           this.schedule(existing.jobId);
           continue;
         }
         if (existing.status === "failed" || existing.status === "ready") {
-          const recovered = retryRepositoryOnboardingJob(
-            this.database,
-            existing.jobId,
-            this.timestamp(),
-            { allowReady: true, configHash: hashFile(this.configPath) },
-          );
-          this.schedule(recovered.jobId);
+          try {
+            const configHash = this.refreshConfigForRetry(existing);
+            const recovered = retryRepositoryOnboardingJob(
+              this.database,
+              existing.jobId,
+              this.timestamp(),
+              { allowReady: true, configHash },
+            );
+            this.schedule(recovered.jobId);
+          } catch (error) {
+            this.logger.error("Unable to requeue configured repository onboarding", error);
+          }
         }
         continue;
       }
@@ -901,4 +986,9 @@ function ensureManagedRoot(path: string): void {
 
 function hashRaw(raw: string): string {
   return createHash("sha256").update(raw).digest("hex");
+}
+
+function compareOnboardingJobs(left: RepositoryOnboardingJob, right: RepositoryOnboardingJob): number {
+  const updated = right.updatedAt.localeCompare(left.updatedAt);
+  return updated !== 0 ? updated : right.createdAt.localeCompare(left.createdAt);
 }
