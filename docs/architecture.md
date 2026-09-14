@@ -51,14 +51,14 @@ HTTP 生产入口是 [buildProductionApp](../apps/server/src/app.ts)，要求注
 
 SIGINT/SIGTERM 经 [lifecycle.ts](../apps/server/src/lifecycle.ts) 触发幂等关闭；app 的关闭钩子先停止 metadata maintenance，再等待 `SchedulerEngine` 停止 timer 并结束活跃的 scheduled Agent runs，然后关闭 Agent runtime，之后才关闭同步协调、Knowledge、Domain watcher、重分类和 SQLite。增加后台服务时必须同时接入退出清理。
 
-Scheduler 是现有唯一的定时入口。`SchedulerEngine` 为持久任务维护 timer map，并把九个 canonical system action 委派给 [system-actions.ts](../apps/server/src/system-actions.ts) 的统一 registry；`runtime.ts` 不再拥有这些 action 的实现。Settings V2 是 system schedule policy authority；runtime 启动和 Settings 更新都会经 [system-schedules.ts](../apps/server/src/system-schedules.ts) 把 policy 投影到稳定的 `scheduled_tasks` 行，Scheduler 只执行 projection 并记录 runtime facts。metadata maintenance 使用现有 `repository.metadata-maintenance` system action（默认每天 03:00，按配置时区）。该 action 每天执行固定的 `purge_runtime_history`；只有 Repository retention 的 automatic archive 开关打开时才追加 `archive`，archive selector 中的 `prune` 仅控制 payload 清理，不是独立 operation，不会添加第二个 timer、后台 cron 或独立调度框架。
+Scheduler 是现有唯一的定时入口。`SchedulerEngine` 为持久任务维护 timer map，并把九个 canonical system action 委派给 [system-actions.ts](../apps/server/src/system-actions.ts) 的统一 registry；`runtime.ts` 不再拥有这些 action 的实现。Settings V3 是 system schedule policy authority，所有用户可配置周期都直接保存五字段 Cron；runtime 启动和 Settings 更新都会经 [system-schedules.ts](../apps/server/src/system-schedules.ts) 把 policy 投影到稳定的 `scheduled_tasks` 行，Scheduler 只执行 projection 并记录 runtime facts。system task 创建只保存 action、repository、Cron、timezone 和 enabled 等系统字段，Agent-only 的 prompt、workspace、provider、model、reasoning 字段保持 `NULL`。metadata maintenance 使用现有 `repository.metadata-maintenance` system action（默认每天 03:00，按配置时区）。该 action 每天执行固定的 `purge_runtime_history`；只有 Repository retention 的 automatic archive 开关打开时才追加 `archive`，archive selector 中的 `prune` 仅控制 payload 清理，不是独立 operation，不会添加第二个 timer、后台 cron 或独立调度框架。
 
 ## 必须保持的边界
 
 - Web/Server 共享 contracts，禁止复制 HTTP schema。
 - `buildProductionApp` 的生产依赖完整且必选，且是 Server package 的唯一公开 app builder；`buildTestApp` 仅供同仓库 focused tests 从 `src/app` 直接导入，不能在生产 runtime 中按 capability 是否存在选择分支。
 - `SyncCoordinator` 的产品操作 `startHistory`、`startFetchPullRequest`、`configureHistory`、`pauseHistory`、`resumeHistory` 均为必选接口；生产 route 直接调用，不以 `undefined` 防御替代产品能力。
-- `settings.json` V2 保存用户 policy；`scheduled_tasks` 是 system schedule projection，`scheduled_task_runs` 是 runtime history，runtime facts 不反向写 Settings。
+- `settings.json` V3 保存用户 policy；`scheduled_tasks` 是 system schedule projection，`scheduled_task_runs` 是 runtime history，runtime facts 不反向写 Settings。
 - Settings API 返回的 Code backup `repositoryPath` 和 `available` 只来自 runtime；它们不是可持久化的用户 policy。
 - 只有 agent-runtime-dsh 可以导入 `@deepseek-ai/*`；产品层消费自身事件。产品级 wire event 只有 contracts 的 `AgentRuntimeEvent`，包括 status、assistant、tool、interaction、activity 和 error；DSH `SessionEvent` 只在 adapter 内转换，不进入 Server 或持久层。
 - 只有 github 包执行 `gh`；当前 GitHub 数据传输使用 HTTP fetch。
@@ -77,7 +77,7 @@ Scheduler 是现有唯一的定时入口。`SchedulerEngine` 为持久任务维�
 
 ## 代码、运行数据和安全边界
 
-应用代码、`dist` 和依赖属于 checkout 或镜像；`system.yaml`、`settings.json`、SQLite、Knowledge Markdown/Git、Agent session homes、凭证、Domain 文件和可选 Agent Archive 是运行数据，位置由配置和 data root 决定。Agent Archive 默认位于 `systemRoot/agent-history`，用户明确保存的自定义 `archiveRepositoryPath` 优先；Docker 的默认路径因此是 `/data/agent-history`。Code backup 的 `repositoryPath` 与 `available` 是运行时事实，不写入 SettingsDocumentV2；`repositoryPath` 由真实 code checkout 决定。Worktree 是可重建缓存，但 dirty 或未提交用户内容仍需保护。
+应用代码、`dist` 和依赖属于 checkout 或镜像；`system.yaml`、`settings.json`、SQLite、Knowledge Markdown/Git、Agent session homes、凭证、Domain 文件和可选 Agent Archive 是运行数据，位置由配置和 data root 决定。Agent Archive 默认位于 `systemRoot/agent-history`，用户明确保存的自定义 `archiveRepositoryPath` 优先；Docker 的默认路径因此是 `/data/agent-history`。Code backup 的 `repositoryPath` 与 `available` 是运行时事实，不写入 SettingsDocumentV3；`repositoryPath` 由真实 code checkout 决定。Worktree 是可重建缓存，但 dirty 或未提交用户内容仍需保护。
 
 可选密码锁只保护 LoongBoard Web/API 的访问门禁。它把 scrypt 派生值和 HMAC 签名密钥写入 `runtime.statePath/auth.json`，以 HttpOnly、SameSite=Strict cookie 建立本地会话；它不加密 SQLite、Knowledge、Agent home、worktree 或任何其他运行数据。DSH 仍是外部 runtime；产品只保存 opaque runtime id、normalized 消息和 title/titleSource ownership，不复制 DSH loop、原始事件或 title generation。会话标题只读取 DSH 原生 title 能力并投影 ownership，不由 LoongBoard 另行生成。
 

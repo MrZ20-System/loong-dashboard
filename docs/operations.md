@@ -21,27 +21,27 @@ pnpm dev
 
 | 字段组 | 含义 |
 | --- | --- |
-| version / timezone | 当前 version=1；日期活动的 IANA 时区 |
+| version / timezone | 当前 version=2；日期活动及 system task 使用的 IANA 时区 |
 | repositories[] | key、name、GitHub owner/repo、本地 path、remote、defaultBranch、worktreeSlots（Worktree capacity fallback） |
-| knowledge | path、相对 inbox、historyLimit；可选 checkpoint 配置见 Knowledge 章节 |
+| knowledge | path、相对 inbox、historyLimit；可选 checkpoint/push Cron 配置见 Knowledge 章节 |
 | runtime | statePath、repositoriesPath、worktreesPath、serverHost、serverPort；`repositoriesPath` 是页面接入仓库的受管 clone 根目录；`LOONGBOARD_SERVER_HOST`/`LOONGBOARD_SERVER_PORT` 可在进程环境中覆盖监听值 |
 | agent | defaultProvider、defaultModel、defaultReasoningEffort、idleProcessMinutes |
 
 `system.yaml.repositories` 是仓库定义的唯一持久来源，启动时投影到 SQLite。Settings → Repositories 可提交 GitHub HTTPS/SSH 地址或 `owner/repo`；Server 在 `runtime.repositoriesPath` 下安全 clone 或复用已验证 checkout，并通过原子写入把定义追加到 `system.yaml`。SQLite 只保存投影和可恢复的接入任务状态，不是第二份仓库注册表。配置拒绝重复 key/GitHub slug、无效时区、越界 inbox 和逃出受管根目录的路径。
 
-仓库接入是异步流程：验证、clone/复用、YAML 注册、SQLite 投影、Settings/Domain/Scheduler 初始化及首次 metadata sync 都有持久状态。失败或取消不会被标为 ready，可从页面重试；服务重启会恢复 queued 任务。已有有效 checkout 不会覆盖，目标目录、父目录或符号链接越界时 fail closed。新仓库默认 10 个 Worktree slots，允许范围为 1–16；首次 metadata sync 默认回看 7 天，已有显式 30 天设置继续保留。
+仓库接入是异步流程：验证、clone/复用、YAML 注册、SQLite 投影、Settings/Domain/Scheduler 初始化及首次 metadata sync 都有持久状态。默认分支固定为 `main`，LoongBoard 不调用远端 API 猜测；其他分支必须在 Advanced Settings 中明确填写。失败任务会在重新打开页面时自动恢复展示；clone 因分支不存在而失败时，可修改分支并 Retry，更新后的输入持久保存。只有 queued、validating、cloning 可 Cancel；registration 开始后不做 destructive rollback，只能等待完成或失败后重试。已有有效 checkout 不会覆盖，目标目录、父目录或符号链接越界时 fail closed。新仓库默认 10 个 Worktree slots，允许范围为 1–16；首次 metadata sync 默认回看 7 天，已有显式 30 天设置继续保留。
 
 `agent.idleProcessMinutes` 缺省为 120，`0` 表示 Never。该时间从 turn 完成后开始计算，不限制正在执行的 Agent 长任务；已有显式配置继续生效。`system.yaml` 的 Agent 字段是安装级 fallback；服务启动后会把 `settings.json` 中保存的 default provider/model/reasoning 和 retention overrides 应用到 Agent runtime。Scheduled Task 自己保存的模型配置不受该默认值 hydration 覆盖。
 
 Repository metadata retention 位于每个 Repository Settings：默认 automatic archive 为 OFF、cutoff 为 7 天，scope 可分别选择 merged PR、closed PR 和 closed Issue，另有 `prunePayloadWhenArchived` 开关。手动维护先用本地日期执行 preview，再确认 Archive & clean；Server 按配置时区转换为 UTC，并以默认 250 条（内部允许 200–500）的 batch 执行。归档不删除 PR/Issue metadata，Archived/All 视图仍可读；restore 或 reopen 会解除归档，继续处于 terminal 状态的 metadata update 不会自动解除归档。payload 被清理后，PR files/Issue detail 会在下一次需要时重新从 GitHub 获取。现有 `repository.metadata-maintenance` system schedule 每天都会执行 runtime sync-run history purge，即使 automatic archive 为 OFF；只有 metadata `archive` operation 受该开关控制，`prunePayloadWhenArchived` 只是 archive request/selector 的 payload 清理布尔值，不是独立阶段或 run kind，不另加 timer。手动 Storage maintenance 使用同一固定 30 天 + 最新 100 条策略。
 
-Repository Settings 以 Settings V2 policy 形式保存在 system workspace 的 `settings.json`：forward sync 的开关与频率是用户 operational policy，写入后由 runtime bridge 投影到稳定的 `repository.sync` scheduled task。服务启动时再次以 JSON policy 投影 enabled 和 cron；task 既有值不能反向覆盖 JSON。已有成功水位的增量从 watermark 前 2 分钟读取。更老数据的范围只由 SQLite 中持久的 History target 控制，Settings 使用日期选择器及 7/30/90 天 quick actions，不再暴露一套重复的 Initial sync range。手动 Sync now 与自动 `repository.sync` 使用同一 forward 规则。
+Repository Settings 以 Settings V3 policy 形式保存在 system workspace 的 `settings.json`：forward sync 的开关与 `syncCron` 是用户 operational policy，写入后由 runtime bridge 投影到稳定的 `repository.sync` scheduled task。Knowledge、Code backup 和 Agent Archive 的 checkpoint/export 与 push 同样直接保存 Cron；自动开关关闭时仍保留有效表达式。服务启动时再次以 JSON policy 投影 enabled 和 cron；task 既有值不能反向覆盖 JSON。已有成功水位的增量从 watermark 前 2 分钟读取。更老数据的范围只由 SQLite 中持久的 History target 控制，Settings 使用日期选择器及 7/30/90 天 quick actions，不再暴露一套重复的 Initial sync range。手动 Sync now 与自动 `repository.sync` 使用同一 forward 规则。
 
 Repository Worktree Settings 的 maximum slots 与 idle cleanup TTL 是 operational override；它们覆盖 `system.yaml` 的安装级 fallback，不写入 `worktree_slots`。维护为低频或显式操作：自动 TTL 及缩容只处理 clean、非 busy slot，手动 Clean unused now 忽略 TTL 但仍保护 busy、dirty 和 status 失败的 slot。Settings/API 展示 configured/physical/active/idle/dirty/pending retirement；缩容不会因忽略高编号目录而留下磁盘孤儿。
 
 Agent Archive 使用独立的 archive repository/path 配置。默认目录是 `systemRoot/agent-history`；用户明确保存的自定义 `archiveRepositoryPath`（archive directory）优先，因此 Docker 的典型默认路径是 `/data/agent-history`。Settings → Code backup 同页的 Agent history 区域支持 export/checkpoint cadence、独立 push cadence、source ref、remote、remote backup branch（默认 `agent-history-backup`）和最近状态。运行 exporter 时，`agent_sessions` 与 `agent_messages` 的 normalized projection 是唯一输入；输出为 `conversations/<safe-session-id>/metadata.json` 和 `transcript.jsonl`。DSH source of truth 仍在各会话的 runtime home；LoongBoard 当前 adapter 没有稳定官方 export 时，archive 明确是 normalized transcript fallback。导出不复制 `dsh-home`、provider secrets、credentials、cache 或其他 runtime 目录，且重复运行不会重写未变化文件。archive path 必须独立于 runtime state、agent-sessions、provider-secrets、worktrees、Knowledge 和代码仓库；目标不存在时可创建，export 可写入该目录，但不会自动 `git init`。checkpoint/push 只对已经存在且可写的 Git repository 执行；目录不是 Git repository 时会保留失败状态并拒绝该操作。
 
-Code backup 的 `repositoryPath` 和 `available` 是 runtime-only 状态：Server 启动时检查真实 code checkout 是否为 Git repository，SettingsDocumentV2 只保存 checkpoint/push policy，不保存这两个字段。镜像部署通常没有 `.git`，此时 `available=false`，自动 checkpoint/push 不会被投影为可执行任务，手工动作也会被拒绝并返回精确提示 `Code backup unavailable in container-image deployment.`。即使如此，保存其他 Code backup 字段、路由字段和 Agent Archive 仍可用。
+Code backup 的 `repositoryPath` 和 `available` 是 runtime-only 状态：Server 启动时检查真实 code checkout 是否为 Git repository，SettingsDocumentV3 只保存 checkpoint/push policy，不保存这两个字段。镜像部署通常没有 `.git`，此时 `available=false`，自动 checkpoint/push 不会被投影为可执行任务，手工动作也会被拒绝并返回精确提示 `Code backup unavailable in container-image deployment.`。即使如此，保存其他 Code backup 字段、路由字段和 Agent Archive 仍可用。
 
 ## 凭证
 
@@ -61,10 +61,12 @@ Settings → Integrations → GitHub 是 GitHub 凭证的唯一控制入口。�
 | runtime.repositoriesPath | Settings 接入和默认容器仓库的持久 checkout；不能与 state/worktree/Knowledge 根目录混用 |
 | runtime.worktreesPath | PR slot 缓存；清理前由 WorktreeJanitor 确认没有 busy/dirty 内容，Git status 失败时 fail closed |
 | system workspace/agent-history | Agent Archive 默认目录；Docker 中对应 `/data/agent-history`，用户保存的自定义 archive path 优先 |
-| system workspace/settings.json | 控制中心非秘密设置；严格 Settings V2 policy。缺失文件或 V1 文档会迁移为完整 V2；V2 的未知、缺失或非法字段会拒绝并保留原文件，V1 迁移可能丢弃 legacy 未知字段 |
+| system workspace/settings.json | 控制中心非秘密设置；严格 Settings V3 policy。V2 启动迁移优先采用 `scheduled_tasks.cron_expression` 的真实投影，缺失时才转换 legacy interval；迁移完成后 runtime 只读取 V3，非法文档会拒绝并保留原文件 |
 | system workspace/domains/*.json | Domain JSON 源文件；文件名普通 key 可读，异常 key 编码 |
 | system workspace/prompts/update-domains.md | Agent 更新 Domain 使用的可编辑 prompt |
 | runtime.statePath/domain-file-versions | Domain/prompt content hash 短期历史，可由 history/restore API 查看 |
+
+`system.yaml` V1 在启动时一次性迁移为 V2：legacy checkpoint/push interval 转成 Cron，完整 V2 校验通过后才原子替换，并保留可恢复备份；迁移失败不损坏原文件。runtime 不长期兼容两套配置形状。
 
 SIGINT/SIGTERM 触发服务的有序退出。服务启动会把数据库中上次遗留的 running metadata sync 标记为 interrupted/failed，保留已写入 rows 与成功 watermark；下次显式 Sync now 可继续。不会自动补跑错过的周期。备份前停止写入，保留整个知识仓库、数据库及会话目录；只备份 Markdown 无法恢复聊天与短期版本。SQLite 在线复制不作为安全备份方式，完整备份/恢复边界见 [Backup and Restore](backup-restore.md)。不要用删除 `.loong` 处理普通启动故障。
 

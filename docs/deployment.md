@@ -4,7 +4,7 @@ LoongBoard 的部署产物只有一套：`pnpm build` 生成 workspace packages�
 
 ## Native production
 
-在应用仓库根目录准备 `system.yaml`。默认查找位置是应用仓库的父目录；如果使用自定义位置，设置 `LOONGBOARD_SYSTEM_CONFIG`，其相对路径相对应用仓库根目录解析。YAML 内所有相对路径则相对 YAML 文件所在目录解析。
+在应用仓库根目录准备 version 2 的 `system.yaml`。默认查找位置是应用仓库的父目录；如果使用自定义位置，设置 `LOONGBOARD_SYSTEM_CONFIG`，其相对路径相对应用仓库根目录解析。YAML 内所有相对路径则相对 YAML 文件所在目录解析。已有 version 1 配置会在启动时经过完整校验、备份和原子替换迁移到 version 2；迁移失败时原文件保持不变。
 
 ```bash
 pnpm install --frozen-lockfile
@@ -49,7 +49,7 @@ Native 环境中父目录 `system.yaml` 的 `./vllm`、`./vllm-ascend` 等 repos
 
 当前 Dockerfile 和 Compose 没有声明 `USER`、`user`、`PUID` 或 `PGID`；镜像不支持通过 PUID/PGID 改变运行用户，设置这些变量本身也不会改变权限。`/data` bind mount 必须对容器实际用户可写；如果通过本地 override 使用非 root 用户，需自行配置用户映射和目录权限，这不属于当前默认部署的保证范围。
 
-镜像安装 Node、Git 和 CA certificates。宿主机不需要为这些组件提供挂载。GitHub 凭证通过 Settings 保存，或在启动容器时显式传入 `GH_TOKEN`/`GITHUB_TOKEN`；宿主机的 `gh` 登录状态不会自动进入容器。Dockerfile 不 COPY SSH key、token、`system.yaml`、`.loong`、knowledge 或 worktrees。Code backup 的 `repositoryPath` 和 `available` 由运行时从真实 code checkout 探测，不写入 SettingsDocumentV2；镜像 checkout 没有 `.git` 时 `available=false`，自动 checkpoint/push 会关闭，手工 Checkpoint now/Push now 会拒绝，并显示 `Code backup unavailable in container-image deployment.`。Code backup 的 policy 仍可保存，但不能开启必失败的自动任务。
+镜像安装 Node、Git 和 CA certificates。宿主机不需要为这些组件提供挂载。GitHub 凭证通过 Settings 保存，或在启动容器时显式传入 `GH_TOKEN`/`GITHUB_TOKEN`；宿主机的 `gh` 登录状态不会自动进入容器。Dockerfile 不 COPY SSH key、token、`system.yaml`、`.loong`、knowledge 或 worktrees。Code backup 的 `repositoryPath` 和 `available` 由运行时从真实 code checkout 探测，不写入 SettingsDocumentV3；镜像 checkout 没有 `.git` 时 `available=false`，自动 checkpoint/push 会关闭，手工 Checkpoint now/Push now 会拒绝，并显示 `Code backup unavailable in container-image deployment.`。Code backup 的 policy 仍可保存，但不能开启必失败的自动任务。
 
 Agent Archive 默认使用 `systemRoot/agent-history`；在当前 Compose 中对应持久 data root 下的 `/data/agent-history`，用户明确保存的自定义 archive path 优先。运行时可以创建缺失的 archive directory，export 也可写入其中，但不会自动 `git init`；checkpoint/push 要求目标已经是可写的 Git repository，否则操作会失败并保留状态。容器重建不会删除宿主机 data directory，因此默认 archive 不会随容器层丢失。Settings 页面在 code backup unavailable 时仍可保存普通字段、路由字段和 Agent Archive 设置。
 

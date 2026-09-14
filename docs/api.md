@@ -7,7 +7,8 @@
 | `/health` | GET，精确返回 `{ "status": "ok" }` | [health](../packages/contracts/src/health.ts) / [app](../apps/server/src/app.ts) |
 | `/auth/status`、`/auth/unlock`、`/auth/password`、`/auth/disable`、`/auth/logout` | GET/POST 可选本地密码锁；仅 status/unlock/health 是公共 API，其余 API 在锁启用时需要 HttpOnly session cookie | [auth](../packages/contracts/src/auth.ts) / [auth route](../apps/server/src/routes/auth.ts) |
 | `/repositories` | GET 配置仓库投影；POST 创建持久异步仓库接入任务并以 202 返回 job id | [repositories](../packages/contracts/src/repositories.ts)、[repository onboarding](../packages/contracts/src/repository-onboarding.ts) / [repositories route](../apps/server/src/routes/repositories.ts) |
-| `/repository-onboarding/:jobId` | GET 查询验证、clone、注册、初始化、同步或终态进度；POST `retry` / `cancel` 重试或取消 | repository onboarding / repositories route |
+| `/repository-onboarding`、`/:jobId` | GET 集合返回最多 10 条可恢复任务（active、最新 failed、最新 metadata-pending ready）；GET 单项查询验证、clone、注册、初始化、同步或终态进度 | repository onboarding / repository onboarding route |
+| `/repository-onboarding/:jobId/retry`、`/cancel` | POST retry 可选 `{ "defaultBranch": "master" }`，空 body 沿用原输入；只有未注册任务可修正分支。Cancel 仅允许 queued、validating、cloning，registration 开始后返回 409 | repository onboarding / repository onboarding route |
 | `/repositories/:id/sync`、`/sync-status` | POST 接受 forward/history/fetch_pr 同步并返回 `syncRunId`，GET 当前状态；HTTP trigger 固定为 `api` | [sync](../packages/contracts/src/sync.ts) / [sync route](../apps/server/src/routes/sync.ts) |
 | `/repositories/:id/sync-runs`、`/sync-runs/:runId` | GET 最近 run 或具体 run（含 PR/Issue stream、计数、水位、错误） | sync / [sync route](../apps/server/src/routes/sync.ts) |
 | `/repositories/:id/sync-history` | GET metadata history target、cursor/anchor 与最老覆盖边界；PUT 设置目标日期或 enable；POST `/pause`、`/continue` 控制 batch admission | sync / [sync route](../apps/server/src/routes/sync.ts) |

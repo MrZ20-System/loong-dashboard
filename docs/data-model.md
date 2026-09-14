@@ -7,7 +7,7 @@
 | 表 | 职责 | 服务源码 |
 | --- | --- | --- |
 | repositories | `system.yaml.repositories` 的 SQLite 投影，key 为稳定 id，移除配置后禁用并保留历史 | [repository-service](../packages/database/src/repository-service.ts) |
-| repository_onboarding_jobs | 仓库验证、clone、注册、初始化和首次同步的持久异步状态；保存规范化非秘密输入与可重试错误，不保存凭证 | [repository-onboarding-service](../packages/database/src/repository-onboarding-service.ts) |
+| repository_onboarding_jobs | 仓库验证、clone、注册、初始化和首次同步的持久异步状态；保存规范化非秘密输入、修正后的默认分支与可重试错误，不保存凭证；Settings 只恢复 active、最新 failed 和最新 metadata-pending ready | [repository-onboarding-service](../packages/database/src/repository-onboarding-service.ts) |
 | repository_sync_state | PR/Issue 分流状态、水位和错误 | [sync-service](../packages/database/src/sync-service.ts) |
 | repository_sync_runs / repository_sync_run_streams / repository_sync_run_targets | 持久 sync run、实体流进度、forward / fetch_pr 当轮 enrichment 目标和错误/水位前后值 | [sync-service](../packages/database/src/sync-service.ts) |
 | repository_history_state | 每实体 history cursor、更新时间恢复 anchor、目标日期、最老覆盖边界和运行状态 | [sync-service](../packages/database/src/sync-service.ts) |
@@ -30,7 +30,7 @@ Repository summary 的 list/get projection 同时返回本地 `pullRequestCount`
 
 Domain 的用户源文件位于 system workspace 的 `domains/<repository-key>.json`，由 [DomainFileService](../apps/server/src/domain-file.ts) 负责安全路径、机械校验、pretty format 和外部编辑吸收；`domain_rules` 与 `pull_request_domains` 只是分类查询投影。文件解析失败时源文本仍可读，最近一次有效投影继续提供分类，修复后再投影并触发重分类。文件版本的内容和 hash 保存在 `runtime.statePath/domain-file-versions/`，它是短期恢复记录，不替代 JSON 源文件或 Git。
 
-控制中心非秘密值以严格 V2 policy 文档保存在 system workspace 的 `settings.json`；它是用户 policy authority，更新先写 JSON，再由 runtime bridge 投影 system `scheduled_tasks` 的 enabled/cron。`scheduled_task_runs` 的 next/last/error 等 runtime facts 不写回 Settings。GitHub token 和 Agent provider secret 位于 `runtime.statePath` 下的私有文件（0600），不进入数据库、设置响应或版本记录。
+控制中心非秘密值以严格 V3 policy 文档保存在 system workspace 的 `settings.json`；它是用户 policy authority，所有用户周期直接保存合法 Cron，更新先写 JSON，再由 runtime bridge 投影 system `scheduled_tasks` 的 enabled/cron。V2 只作为一次性迁移输入；迁移优先保留数据库中已有稳定 system task 的 `cron_expression`。`scheduled_task_runs` 的 next/last/error 等 runtime facts 不写回 Settings。GitHub token 和 Agent provider secret 位于 `runtime.statePath` 下的私有文件（0600），不进入数据库、设置响应或版本记录。
 
 ## 恢复与数据边界
 
