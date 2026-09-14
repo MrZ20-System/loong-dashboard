@@ -23,15 +23,19 @@ import {
   knowledgeCheckpointSettingsUpdateSchema,
   type KnowledgeCheckpointSettings,
   type KnowledgeCheckpointSettingsUpdate,
+  repositoryOnboardingListResponseSchema,
+  repositoryOnboardingRetrySchema,
   repositoryOnboardingAcceptedSchema,
   repositoryOnboardingSchema,
   type RepositoryOnboarding,
   type RepositoryOnboardingAccepted,
   type RepositoryOnboardingCreate,
+  type RepositoryOnboardingListResponse,
+  type RepositoryOnboardingRetry,
 } from "@loongboard/contracts";
 import { dispatchAuthRequiredEvent } from "./auth-required-event";
 
-export type { AgentArchiveSettings, AgentArchiveSettingsUpdate, AgentRuntimeSettings, AgentRuntimeSettingsUpdate, CodeBackupSettings, CodeBackupSettingsUpdate, GitHubIntegration, JsonSource, KnowledgeCheckpointSettings, KnowledgeCheckpointSettingsUpdate, RepositorySettings, RepositoryOnboarding, RepositoryOnboardingAccepted, RepositoryOnboardingCreate } from "@loongboard/contracts";
+export type { AgentArchiveSettings, AgentArchiveSettingsUpdate, AgentRuntimeSettings, AgentRuntimeSettingsUpdate, CodeBackupSettings, CodeBackupSettingsUpdate, GitHubIntegration, JsonSource, KnowledgeCheckpointSettings, KnowledgeCheckpointSettingsUpdate, RepositorySettings, RepositoryOnboarding, RepositoryOnboardingAccepted, RepositoryOnboardingCreate, RepositoryOnboardingListResponse, RepositoryOnboardingRetry } from "@loongboard/contracts";
 
 export function createRepositoryOnboarding(input: RepositoryOnboardingCreate): Promise<RepositoryOnboardingAccepted> {
   return json("/api/repositories", repositoryOnboardingAcceptedSchema, { method: "POST", body: JSON.stringify(input) });
@@ -41,8 +45,15 @@ export function fetchRepositoryOnboarding(jobId: string, signal?: AbortSignal): 
   return json(`/api/repository-onboarding/${encodeURIComponent(jobId)}`, repositoryOnboardingSchema, { signal });
 }
 
-export function retryRepositoryOnboarding(jobId: string): Promise<RepositoryOnboardingAccepted> {
-  return json(`/api/repository-onboarding/${encodeURIComponent(jobId)}/retry`, repositoryOnboardingAcceptedSchema, { method: "POST" });
+export function fetchRecoverableRepositoryOnboarding(signal?: AbortSignal): Promise<RepositoryOnboardingListResponse> {
+  return json("/api/repository-onboarding", repositoryOnboardingListResponseSchema, { signal });
+}
+
+export function retryRepositoryOnboarding(jobId: string, input?: RepositoryOnboardingRetry): Promise<RepositoryOnboardingAccepted> {
+  return json(`/api/repository-onboarding/${encodeURIComponent(jobId)}/retry`, repositoryOnboardingAcceptedSchema, {
+    method: "POST",
+    ...(input === undefined ? {} : { body: JSON.stringify(repositoryOnboardingRetrySchema.parse(input)) }),
+  });
 }
 
 export function cancelRepositoryOnboarding(jobId: string): Promise<RepositoryOnboarding> {

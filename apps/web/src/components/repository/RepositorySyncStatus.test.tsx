@@ -70,7 +70,7 @@ function makeSettings(syncLookbackDays: 7 | 30): RepositorySettings {
   return {
     repositoryId,
     automaticSync: true,
-    syncFrequencyMinutes: 60,
+    syncCron: "0 * * * *",
     syncLookbackDays,
     retention: {
       automaticArchiveEnabled: false,

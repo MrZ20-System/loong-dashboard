@@ -11,17 +11,25 @@ import {
 import { SettingsSwitch } from "./SettingsSwitch";
 import { useI18n, type LocalizedMessage, type MessageValues } from "../../i18n";
 import { ErrorText } from "./settings-helpers";
+import { CronField } from "./CronField";
 
 type Feedback = { message: LocalizedMessage; values?: MessageValues };
 
+const DEFAULT_KNOWLEDGE_CHECKPOINT_CRON = "0 0 * * *";
+const DEFAULT_KNOWLEDGE_PUSH_CRON = "0 0 * * *";
+
 export function KnowledgeBackupSection() {
-  const { t, formatDateTime, formatNumber } = useI18n();
+  const { t, formatDateTime } = useI18n();
   const client = useQueryClient();
   const query = useQuery({ queryKey: ["knowledge-checkpoint-settings"], queryFn: fetchKnowledgeCheckpointSettings, refetchInterval: 5_000 });
   const [draft, setDraft] = useState<Partial<KnowledgeCheckpointSettings>>({});
   const [message, setMessage] = useState<Feedback | null>(null);
   const save = useMutation({
-    mutationFn: () => updateKnowledgeCheckpointSettings(draft),
+    mutationFn: () => updateKnowledgeCheckpointSettings({
+      ...draft,
+      ...(draft.checkpointCron !== undefined ? { checkpointCron: draft.checkpointCron.trim() || DEFAULT_KNOWLEDGE_CHECKPOINT_CRON } : {}),
+      ...(draft.pushCron !== undefined ? { pushCron: draft.pushCron.trim() || DEFAULT_KNOWLEDGE_PUSH_CRON } : {}),
+    }),
     onSuccess: (data) => {
       client.setQueryData(["knowledge-checkpoint-settings"], data);
       setDraft({});
@@ -68,8 +76,8 @@ export function KnowledgeBackupSection() {
         <label>{t({ en: "Remote", "zh-CN": "远端" })}<input value={data.remote ?? "origin"} onChange={(event) => setDraft((old) => ({ ...old, remote: event.target.value }))} /></label>
         <label>{t({ en: "Source ref", "zh-CN": "源 ref" })}<input value={data.sourceRef ?? "main"} onChange={(event) => setDraft((old) => ({ ...old, sourceRef: event.target.value }))} /></label>
         <label>{t({ en: "Remote backup branch", "zh-CN": "远端备份分支" })}<input value={data.remoteBranch ?? "loongboard-knowledge-backup"} onChange={(event) => setDraft((old) => ({ ...old, remoteBranch: event.target.value }))} /></label>
-        <label>{t({ en: "Checkpoint frequency", "zh-CN": "检查点频率" })}<select value={data.checkpointIntervalMinutes ?? ""} onChange={(event) => setDraft((old) => ({ ...old, checkpointIntervalMinutes: event.target.value ? Number(event.target.value) : null }))}><option value="">{t({ en: "Manual only", "zh-CN": "仅手动" })}</option><option value={30}>{t({ en: "{count} minutes", "zh-CN": "{count} 分钟" }, { count: formatNumber(30) })}</option><option value={60}>{t({ en: "{count} hour", "zh-CN": "{count} 小时" }, { count: formatNumber(1) })}</option><option value={240}>{t({ en: "{count} hours", "zh-CN": "{count} 小时" }, { count: formatNumber(4) })}</option><option value={1440}>{t({ en: "Daily", "zh-CN": "每天" })}</option></select></label>
-        <label>{t({ en: "Push frequency", "zh-CN": "推送频率" })}<select value={data.pushIntervalMinutes ?? ""} onChange={(event) => setDraft((old) => ({ ...old, pushIntervalMinutes: event.target.value ? Number(event.target.value) : null }))}><option value="">{t({ en: "Manual only", "zh-CN": "仅手动" })}</option><option value={360}>{t({ en: "{count} hours", "zh-CN": "{count} 小时" }, { count: formatNumber(6) })}</option><option value={1440}>{t({ en: "Daily", "zh-CN": "每天" })}</option></select></label>
+        <CronField id="knowledge-checkpoint-cron" label={t({ en: "Checkpoint Cron", "zh-CN": "检查点 Cron" })} value={data.checkpointCron ?? DEFAULT_KNOWLEDGE_CHECKPOINT_CRON} onChange={(value) => setDraft((old) => ({ ...old, checkpointCron: value }))} defaultValue={DEFAULT_KNOWLEDGE_CHECKPOINT_CRON} />
+        <CronField id="knowledge-push-cron" label={t({ en: "Push Cron", "zh-CN": "推送 Cron" })} value={data.pushCron ?? DEFAULT_KNOWLEDGE_PUSH_CRON} onChange={(value) => setDraft((old) => ({ ...old, pushCron: value }))} defaultValue={DEFAULT_KNOWLEDGE_PUSH_CRON} />
       </div>
       <p className="settings-muted">{t({ en: "Last success:", "zh-CN": "上次成功：" })} {data.lastSuccessAt ? formatDateTime(data.lastSuccessAt) : "—"} · {t({ en: "Next checkpoint:", "zh-CN": "下次检查点：" })} {data.nextRunAt ? formatDateTime(data.nextRunAt) : "—"}</p>
       {data.lastError && <p role="alert" className="settings-error">{t({ en: "Last error:", "zh-CN": "最近错误：" })} {data.lastError}</p>}

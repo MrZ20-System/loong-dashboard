@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { LocaleProvider, translate } from "../../i18n";
 import type { RepositoryOnboarding } from "../../settings-client";
@@ -10,6 +10,7 @@ import { onboardingFailure, OnboardingProgress, RepositoryOnboardingCard, reposi
 const settingsMocks = vi.hoisted(() => ({
   createRepositoryOnboarding: vi.fn(),
   fetchRepositoryOnboarding: vi.fn(),
+  fetchRecoverableRepositoryOnboarding: vi.fn(),
   retryRepositoryOnboarding: vi.fn(),
   cancelRepositoryOnboarding: vi.fn(),
 }));
@@ -23,6 +24,10 @@ afterEach(() => {
   vi.clearAllMocks();
   window.sessionStorage.removeItem("loongboard.repository-onboarding.jobId");
   vi.restoreAllMocks();
+});
+
+beforeEach(() => {
+  settingsMocks.fetchRecoverableRepositoryOnboarding.mockResolvedValue({ items: [] });
 });
 
 function onboardingJob(overrides: Partial<RepositoryOnboarding> = {}): RepositoryOnboarding {
@@ -48,7 +53,7 @@ describe("repository onboarding", () => {
     const input = screen.getByLabelText("GitHub URL");
     fireEvent.change(input, { target: { value: "owner/repo" } });
     fireEvent.click(screen.getByRole("button", { name: "Connect repository" }));
-    await waitFor(() => expect(settingsMocks.createRepositoryOnboarding).toHaveBeenCalledWith(expect.objectContaining({ url: "owner/repo", remote: "upstream", worktreeSlots: 10 })));
+    await waitFor(() => expect(settingsMocks.createRepositoryOnboarding).toHaveBeenCalledWith(expect.objectContaining({ url: "owner/repo", remote: "upstream", defaultBranch: "main", worktreeSlots: 10 })));
     expect(input).toHaveValue("owner/repo");
   });
 
@@ -79,16 +84,39 @@ describe("repository onboarding", () => {
     expect(retry).toHaveBeenCalledOnce();
   });
 
-  it("exposes retry for failed jobs and cancel for active jobs", () => {
+  it("exposes retry with an editable branch and limits cancel to the pre-registration phases", () => {
     const retry = vi.fn();
     const cancel = vi.fn();
     const { rerender } = render(<LocaleProvider><MemoryRouter><OnboardingProgress job={onboardingJob({ status: "failed", step: "failed", detail: "remote denied", progress: 0, repositoryId: null, error: { code: "REMOTE_DENIED", message: "remote denied", retryable: true } })} onRetry={retry} onCancel={cancel} retrying={false} cancelling={false} /></MemoryRouter></LocaleProvider>);
+    expect(screen.getByLabelText("Default branch for retry")).toHaveValue("main");
+    fireEvent.change(screen.getByLabelText("Default branch for retry"), { target: { value: "master" } });
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
-    expect(retry).toHaveBeenCalledOnce();
-    rerender(<LocaleProvider><MemoryRouter><OnboardingProgress job={onboardingJob({ status: "syncing", step: "syncing", detail: "Syncing", progress: 50, repositoryId: null })} onRetry={retry} onCancel={cancel} retrying={false} cancelling={false} /></MemoryRouter></LocaleProvider>);
+    expect(retry).toHaveBeenCalledWith("master");
+    rerender(<LocaleProvider><MemoryRouter><OnboardingProgress job={onboardingJob({ status: "cloning", step: "cloning", detail: "Cloning", progress: 20, repositoryId: null })} onRetry={retry} onCancel={cancel} retrying={false} cancelling={false} /></MemoryRouter></LocaleProvider>);
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(cancel).toHaveBeenCalledOnce();
+    rerender(<LocaleProvider><MemoryRouter><OnboardingProgress job={onboardingJob({ status: "registering", step: "registering", detail: "Registering", progress: 60, repositoryId: null })} onRetry={retry} onCancel={cancel} retrying={false} cancelling={false} /></MemoryRouter></LocaleProvider>);
+    expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    expect(screen.getByText("Repository registration has started and can no longer be cancelled.")).toBeInTheDocument();
     expect(screen.queryByText(/Repository onboarding failed:/)).not.toBeInTheDocument();
+  });
+
+  it("recovers the newest active or failed job when no stored job is available", async () => {
+    const recovered = onboardingJob({ status: "failed", step: "failed", detail: "remote denied", progress: 0, repositoryId: null, updatedAt: "2026-09-13T02:00:00.000Z", error: { code: "REMOTE_DENIED", message: "remote denied", retryable: true } });
+    settingsMocks.fetchRecoverableRepositoryOnboarding.mockResolvedValue({ items: [recovered] });
+    settingsMocks.fetchRepositoryOnboarding.mockResolvedValue(recovered);
+    renderCard();
+    await waitFor(() => expect(settingsMocks.fetchRecoverableRepositoryOnboarding).toHaveBeenCalledOnce());
+    expect(await screen.findByText(/remote denied/)).toBeInTheDocument();
+    expect(window.sessionStorage.getItem("loongboard.repository-onboarding.jobId")).toBe("job-1");
+  });
+
+  it("maps a default-branch failure to the bilingual retry guidance", () => {
+    expect(onboardingFailure(
+      (localizedMessage, values) => translate("zh-CN", localizedMessage, values),
+      new Error('POST /api/repository-onboarding/job-1/retry failed with HTTP 409: default branch "main" does not exist'),
+      "main",
+    )).toBe('默认分支 "main" 不存在。请修改默认分支后重试。');
   });
 
   it("keeps onboarding steps and duplicate-repository feedback fully localized in Chinese", () => {

@@ -20,6 +20,7 @@ import {
   createRepositoryOnboarding,
   fetchRepositorySettings,
   fetchRepositoryOnboarding,
+  fetchRecoverableRepositoryOnboarding,
   retryRepositoryOnboarding,
   updateRepositorySettings,
   type RepositoryOnboarding,
@@ -27,12 +28,14 @@ import {
 import { RepositoryRetentionSection } from "./RepositoryRetentionSection";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { ErrorText } from "./settings-helpers";
+import { CronField } from "./CronField";
 import { useI18n, type I18nContextValue } from "../../i18n";
 
 const activeRunStatuses = new Set<SyncRun["status"]>(["queued", "running"]);
 
 export const DEFAULT_REPOSITORY_WORKTREE_SLOTS = 10;
 export const DEFAULT_REPOSITORY_SYNC_LOOKBACK_DAYS = 7;
+export const DEFAULT_REPOSITORY_SYNC_CRON = "0 */1 * * *";
 
 export function repositoryDefaultsFromUrl(value: string) {
   const input = value.trim().replace(/\/$/, "");
@@ -108,8 +111,31 @@ function storeOnboardingJobId(jobId: string | null): void {
   }
 }
 
-export function onboardingFailure(t: I18nContextValue["t"], error: unknown): string {
-  const detail = error instanceof Error ? error.message : String(error);
+function onboardingErrorDetail(error: unknown): string {
+  if (error instanceof Error) return error.message;
+  if (typeof error === "object" && error !== null && "message" in error) {
+    return String((error as { message?: unknown }).message ?? error);
+  }
+  return String(error);
+}
+
+function isDefaultBranchError(detail: string): boolean {
+  return /default[ _-]?branch|branch(?:[^\n]{0,32})(?:not found|does not exist|missing|unavailable)/i.test(detail);
+}
+
+export function onboardingFailure(t: I18nContextValue["t"], error: unknown, defaultBranch?: string): string {
+  const detail = onboardingErrorDetail(error);
+  if (isDefaultBranchError(detail)) {
+    const quotedBranch = detail.match(/default[ _-]?branch[^"'`]*["'`]([^"'`]+)["'`]/i)?.[1];
+    const branch = quotedBranch ?? defaultBranch ?? "main";
+    return t(
+      {
+        en: "Default branch \"{branch}\" does not exist. Change the default branch and retry.",
+        "zh-CN": "默认分支 \"{branch}\" 不存在。请修改默认分支后重试。",
+      },
+      { branch },
+    );
+  }
   const duplicate = detail.match(/Repository key or GitHub repository is already configured:\s*(.+)$/);
   if (duplicate?.[1]) {
     return t(
@@ -125,16 +151,20 @@ export function onboardingFailure(t: I18nContextValue["t"], error: unknown): str
 
 export function OnboardingProgress({ job, onRetry, onCancel, onSync, retrying, cancelling }: {
   job: RepositoryOnboarding;
-  onRetry: () => void;
+  onRetry: (defaultBranch?: string) => void;
   onCancel: () => void;
   onSync?: () => void;
   retrying: boolean;
   cancelling: boolean;
 }) {
   const { t } = useI18n();
-  const current = job.status === "queued" ? 0 : onboardingSteps.findIndex(([status]) => status === job.status);
-  const active = !["ready", "failed", "cancelled"].includes(job.status);
+  const current = job.status === "queued" ? 0 : Math.max(0, onboardingSteps.findIndex(([status]) => status === job.status));
+  const canCancel = ["queued", "validating", "cloning"].includes(job.status);
   const currentLabel = onboardingStatusLabels[job.status];
+  const [retryBranch, setRetryBranch] = useState(job.input.defaultBranch);
+  useEffect(() => {
+    setRetryBranch(job.input.defaultBranch);
+  }, [job.jobId, job.status, job.input.defaultBranch]);
   return <section className="repository-onboarding-progress" aria-live="polite" aria-labelledby="repository-onboarding-progress-heading">
     <header className="settings-card__header"><div><p className="eyebrow">{t({ en: "Repository onboarding", "zh-CN": "仓库接入" })}</p><h3 id="repository-onboarding-progress-heading">{t({ en: "Setting up your repository", "zh-CN": "正在设置仓库" })}</h3></div><span className={`status-pill status-pill--${job.status}`}>{t(currentLabel)}</span></header>
     <ol className="repository-onboarding-steps" aria-label={t({ en: "Repository onboarding steps", "zh-CN": "仓库接入步骤" })}>
@@ -142,12 +172,32 @@ export function OnboardingProgress({ job, onRetry, onCancel, onSync, retrying, c
     </ol>
     <progress aria-label={t({ en: "Repository onboarding progress", "zh-CN": "仓库接入进度" })} value={job.progress} max={100}>{job.progress}%</progress>
     <p className="settings-neutral">{t({ en: "Current step: {step}", "zh-CN": "当前步骤：{step}" }, { step: t(currentLabel) })}</p>
-    {job.detail && <p className={job.status === "failed" ? "settings-error" : "settings-muted"}>{job.status === "failed" ? onboardingFailure(t, job.detail) : job.detail}</p>}
+    {job.detail && <p className={job.status === "failed" ? "settings-error" : "settings-muted"}>{job.status === "failed" ? onboardingFailure(t, job.error ?? job.detail, job.input.defaultBranch) : job.detail}</p>}
     {job.githubMetadataPending && <p role="status" className="settings-neutral">{t({ en: "Code is connected; GitHub metadata is waiting for credentials.", "zh-CN": "代码已接入，GitHub 元数据等待凭据。" })} <Link to="/settings/integrations">{t({ en: "Configure GitHub access", "zh-CN": "配置 GitHub 访问" })}</Link></p>}
-    {(job.status === "failed" || job.status === "cancelled" || (job.status === "ready" && job.githubMetadataPending)) && <div className="settings-form-row"><button type="button" onClick={onRetry} disabled={retrying}>{retrying ? t({ en: "Continuing…", "zh-CN": "继续中…" }) : job.status === "ready" && job.githubMetadataPending ? t({ en: "Credentials configured — continue first sync", "zh-CN": "凭据已配置——继续首次同步" }) : t({ en: "Retry", "zh-CN": "重试" })}</button></div>}
+    {job.status === "failed" && <div className="settings-form-row"><label>{t({ en: "Default branch for retry", "zh-CN": "重试默认分支" })}<input value={retryBranch} onChange={(event) => setRetryBranch(event.target.value)} disabled={retrying || job.repositoryId !== null} aria-describedby="repository-onboarding-retry-branch-help" /></label><p id="repository-onboarding-retry-branch-help" className="settings-muted">{job.repositoryId === null ? t({ en: "Change this only when the repository uses another default branch.", "zh-CN": "仅当仓库使用其他默认分支时修改。" }) : t({ en: "The repository is already registered; its default branch cannot be changed here.", "zh-CN": "仓库已注册，不能在此修改默认分支。" })}</p></div>}
+    {(job.status === "failed" || job.status === "cancelled" || (job.status === "ready" && job.githubMetadataPending)) && <div className="settings-form-row"><button type="button" onClick={() => onRetry(job.status === "failed" && job.repositoryId === null ? retryBranch.trim() || job.input.defaultBranch : undefined)} disabled={retrying}>{retrying ? t({ en: "Continuing…", "zh-CN": "继续中…" }) : job.status === "ready" && job.githubMetadataPending ? t({ en: "Credentials configured — continue first sync", "zh-CN": "凭据已配置——继续首次同步" }) : t({ en: "Retry", "zh-CN": "重试" })}</button></div>}
     {job.status === "ready" && job.repositoryId && <div className="settings-form-row"><Link className="button-link" to={`/repositories/${encodeURIComponent(job.repositoryId)}`}>{t({ en: "Open repository", "zh-CN": "进入仓库" })}</Link>{onSync && <button type="button" className="button-primary" onClick={onSync}>{t({ en: "Sync now", "zh-CN": "立即同步" })}</button>}</div>}
-    {active && <button type="button" className="button-danger" onClick={onCancel} disabled={cancelling}>{cancelling ? t({ en: "Cancelling…", "zh-CN": "取消中…" }) : t({ en: "Cancel", "zh-CN": "取消" })}</button>}
+    {canCancel && <button type="button" className="button-danger" onClick={onCancel} disabled={cancelling}>{cancelling ? t({ en: "Cancelling…", "zh-CN": "取消中…" }) : t({ en: "Cancel", "zh-CN": "取消" })}</button>}
+    {["registering", "initializing", "syncing"].includes(job.status) && <p className="settings-muted">{t({ en: "Repository registration has started and can no longer be cancelled.", "zh-CN": "仓库注册已开始，不能再取消。" })}</p>}
   </section>;
+}
+
+const recoverableOnboardingStatuses = new Set<RepositoryOnboarding["status"]>([
+  "queued",
+  "validating",
+  "cloning",
+  "registering",
+  "initializing",
+  "syncing",
+  "failed",
+]);
+
+function isRecoverableOnboardingJob(job: RepositoryOnboarding): boolean {
+  return recoverableOnboardingStatuses.has(job.status) || (job.status === "ready" && job.githubMetadataPending);
+}
+
+function isHttpError(error: unknown, status: number): boolean {
+  return error instanceof Error && new RegExp(`HTTP ${status}\\b`).test(error.message);
 }
 
 export function RepositoryOnboardingCard() {
@@ -156,26 +206,48 @@ export function RepositoryOnboardingCard() {
   const [githubUrl, setGithubUrl] = useState("");
   const [advanced, setAdvanced] = useState(false);
   const [jobId, setJobId] = useState<string | null>(readStoredOnboardingJobId);
+  const [recoverySuppressed, setRecoverySuppressed] = useState(false);
   const [editedFields, setEditedFields] = useState({ displayName: false, key: false });
   const [form, setForm] = useState(() => ({ displayName: "", key: "", remoteName: "upstream", defaultBranch: "main", worktreeSlots: DEFAULT_REPOSITORY_WORKTREE_SLOTS }));
   const defaults = repositoryDefaultsFromUrl(githubUrl);
   const job = useQuery({ queryKey: ["repository-onboarding", jobId], enabled: jobId !== null, queryFn: ({ signal }) => fetchRepositoryOnboarding(jobId as string, signal), refetchInterval: (query) => {
+    if (query.state.error) return false;
     const status = query.state.data?.status;
     return status && ["ready", "failed", "cancelled"].includes(status) ? false : 1_000;
   } });
-  const create = useMutation({ mutationFn: () => createRepositoryOnboarding({ url: githubUrl.trim(), ...(form.displayName ? { displayName: form.displayName } : {}), ...(form.key ? { key: form.key } : {}), remote: form.remoteName, defaultBranch: form.defaultBranch, worktreeSlots: form.worktreeSlots }), onSuccess: ({ jobId: next }) => setJobId(next) });
-  const retry = useMutation({ mutationFn: () => retryRepositoryOnboarding(jobId as string), onSuccess: ({ jobId: next }) => { setJobId(next); void client.invalidateQueries({ queryKey: ["repository-onboarding", next] }); } });
-  const cancel = useMutation({ mutationFn: () => cancelRepositoryOnboarding(jobId as string), onSuccess: (next) => client.setQueryData(["repository-onboarding", jobId], next) });
+  const recoverable = useQuery({ queryKey: ["repository-onboarding-recoverable"], enabled: jobId === null && !recoverySuppressed, queryFn: ({ signal }) => fetchRecoverableRepositoryOnboarding(signal), staleTime: 5_000 });
+  const create = useMutation({ mutationFn: () => createRepositoryOnboarding({ url: githubUrl.trim(), ...(form.displayName ? { displayName: form.displayName } : {}), ...(form.key ? { key: form.key } : {}), remote: form.remoteName, defaultBranch: form.defaultBranch.trim() || "main", worktreeSlots: form.worktreeSlots }), onSuccess: ({ jobId: next }) => { setRecoverySuppressed(false); setJobId(next); } });
+  const retry = useMutation({ mutationFn: (defaultBranch?: string) => retryRepositoryOnboarding(jobId as string, defaultBranch === undefined ? undefined : { defaultBranch }), onSuccess: ({ jobId: next }) => { setJobId(next); void client.invalidateQueries({ queryKey: ["repository-onboarding", next] }); } });
+  const cancel = useMutation({ mutationFn: () => cancelRepositoryOnboarding(jobId as string), onSuccess: (next) => client.setQueryData(["repository-onboarding", jobId], next), onError: (error) => { if (isHttpError(error, 409)) void client.invalidateQueries({ queryKey: ["repository-onboarding", jobId] }); } });
   const sync = useMutation({ mutationFn: () => startSync(job.data?.repositoryId as string), onSuccess: () => { void client.invalidateQueries({ queryKey: ["sync", job.data?.repositoryId] }); } });
   const terminalJob = job.data !== undefined && ["ready", "failed", "cancelled"].includes(job.data.status);
-  const activeJob = jobId !== null && !terminalJob && !job.isError;
+  const activeJob = jobId !== null && !job.isError && (job.data === undefined || ["queued", "validating", "cloning", "registering", "initializing", "syncing"].includes(job.data.status));
   useEffect(() => {
     if (!defaults) return;
     setForm((current) => ({ ...current, displayName: editedFields.displayName ? current.displayName : defaults.displayName, key: editedFields.key ? current.key : defaults.key }));
   }, [defaults?.displayName, defaults?.key, editedFields.displayName, editedFields.key]);
   useEffect(() => {
-    if (jobId !== null) storeOnboardingJobId(jobId);
+    storeOnboardingJobId(jobId);
   }, [jobId]);
+  useEffect(() => {
+    if (jobId === null || !job.isError || !isHttpError(job.error, 404)) return;
+    setJobId(null);
+    storeOnboardingJobId(null);
+  }, [job.error, job.isError, jobId]);
+  useEffect(() => {
+    if (jobId === null || job.data === undefined || isRecoverableOnboardingJob(job.data)) return;
+    setJobId(null);
+    storeOnboardingJobId(null);
+  }, [job.data, jobId]);
+  useEffect(() => {
+    if (jobId !== null || recoverySuppressed || recoverable.data === undefined) return;
+    const next = [...recoverable.data.items]
+      .filter(isRecoverableOnboardingJob)
+      .sort((left, right) => Date.parse(right.updatedAt) - Date.parse(left.updatedAt))[0];
+    if (next === undefined) return;
+    client.setQueryData(["repository-onboarding", next.jobId], next);
+    setJobId(next.jobId);
+  }, [client, jobId, recoverable.data, recoverySuppressed]);
   useEffect(() => {
     if (job.data?.status !== "ready") return;
     void client.invalidateQueries({ queryKey: ["repositories"] });
@@ -185,7 +257,7 @@ export function RepositoryOnboardingCard() {
     void client.invalidateQueries({ queryKey: ["sync-runs"] });
   }, [client, job.data?.status]);
   const localError = githubUrl.length > 0 && !defaults ? t({ en: "Enter a GitHub URL such as owner/repo.", "zh-CN": "请输入 GitHub 地址，例如 owner/repo。" }) : null;
-  const actionError = create.error ?? retry.error ?? cancel.error ?? job.error;
+  const actionError = create.error ?? retry.error ?? (cancel.error && !isHttpError(cancel.error, 409) ? cancel.error : null) ?? (job.error && !isHttpError(job.error, 404) ? job.error : null) ?? (jobId === null ? recoverable.error : null);
   const update = (field: "displayName" | "key" | "remoteName" | "defaultBranch" | "worktreeSlots", value: string | number) => {
     setForm((current) => ({ ...current, [field]: value }));
     if (field === "displayName" || field === "key") setEditedFields((current) => ({ ...current, [field]: true }));
@@ -194,6 +266,7 @@ export function RepositoryOnboardingCard() {
     setGithubUrl("");
     setAdvanced(false);
     setJobId(null);
+    setRecoverySuppressed(true);
     storeOnboardingJobId(null);
     setEditedFields({ displayName: false, key: false });
     setForm({ displayName: "", key: "", remoteName: "upstream", defaultBranch: "main", worktreeSlots: DEFAULT_REPOSITORY_WORKTREE_SLOTS });
@@ -205,10 +278,10 @@ export function RepositoryOnboardingCard() {
       {defaults && <p className="settings-muted">{defaults.owner}/{defaults.name} · {t({ en: "7-day initial sync · 10 worktree slots", "zh-CN": "初始同步 7 天 · 10 个工作树槽位" })}</p>}
       {localError && <p role="alert" className="settings-error">{localError}</p>}
       <details open={advanced} onToggle={(event) => setAdvanced(event.currentTarget.open)}><summary>{t({ en: "Advanced settings", "zh-CN": "高级设置" })}</summary><div className="settings-grid"><label>{t({ en: "Display name", "zh-CN": "显示名称" })}<input disabled={activeJob} value={form.displayName} onChange={(event) => update("displayName", event.target.value)} /></label><label>{t({ en: "Repository key", "zh-CN": "仓库键" })}<input disabled={activeJob} value={form.key} onChange={(event) => update("key", event.target.value)} /></label><label>{t({ en: "Remote name", "zh-CN": "远端名称" })}<input disabled={activeJob} value={form.remoteName} onChange={(event) => update("remoteName", event.target.value)} /></label><label>{t({ en: "Default branch", "zh-CN": "默认分支" })}<input disabled={activeJob} value={form.defaultBranch} onChange={(event) => update("defaultBranch", event.target.value)} /></label><label>{t({ en: "Worktree slots", "zh-CN": "工作树槽位" })}<select disabled={activeJob} value={form.worktreeSlots} onChange={(event) => update("worktreeSlots", Number(event.target.value))}>{Array.from({ length: 16 }, (_, index) => index + 1).map((count) => <option key={count} value={count}>{count}</option>)}</select></label><p className="settings-muted">{t({ en: "Initial sync window: 7 days", "zh-CN": "初始同步窗口：7 天" })}</p></div></details>
-      {actionError && <p role="alert" className="settings-error">{onboardingFailure(t, actionError)}</p>}
+      {actionError && <p role="alert" className="settings-error">{onboardingFailure(t, actionError, job.data?.input.defaultBranch)}</p>}
       <button type="submit" className="button-primary" disabled={!defaults || create.isPending || activeJob}>{create.isPending ? t({ en: "Starting…", "zh-CN": "启动中…" }) : t({ en: "Connect repository", "zh-CN": "接入仓库" })}</button>
     </form>
-    {job.data && <><OnboardingProgress job={job.data} onRetry={() => retry.mutate()} onCancel={() => cancel.mutate()} onSync={job.data.repositoryId ? () => sync.mutate() : undefined} retrying={retry.isPending} cancelling={cancel.isPending} />{terminalJob && <button type="button" className="button-primary repository-onboarding-reset" onClick={resetOnboarding}>{t({ en: "Connect another repository", "zh-CN": "接入其他仓库" })}</button>}</>}
+    {job.data && <><OnboardingProgress job={job.data} onRetry={(defaultBranch) => retry.mutate(defaultBranch)} onCancel={() => cancel.mutate()} onSync={job.data.repositoryId ? () => sync.mutate() : undefined} retrying={retry.isPending} cancelling={cancel.isPending} />{terminalJob && <button type="button" className="button-primary repository-onboarding-reset" onClick={resetOnboarding}>{t({ en: "Connect another repository", "zh-CN": "接入其他仓库" })}</button>}</>}
   </article>;
 }
 
@@ -382,11 +455,11 @@ function RepositorySettingsCard({
   const client = useQueryClient();
   const settings = useQuery({ queryKey: ["repository-settings", repositoryId], queryFn: () => fetchRepositorySettings(repositoryId) });
   const sync = useQuery({ queryKey: ["sync", repositoryId], queryFn: ({ signal }) => fetchSyncStatus(repositoryId, signal), refetchInterval: 5_000 });
-  const [frequency, setFrequency] = useState(60);
+  const [cron, setCron] = useState(DEFAULT_REPOSITORY_SYNC_CRON);
   const [automatic, setAutomatic] = useState(true);
   const [configuredSlots, setConfiguredSlots] = useState(DEFAULT_REPOSITORY_WORKTREE_SLOTS);
   const [idleCleanupTtlHours, setIdleCleanupTtlHours] = useState(24);
-  const save = useMutation({ mutationFn: () => updateRepositorySettings(repositoryId, { automaticSync: automatic, syncFrequencyMinutes: frequency, worktrees: { configuredSlots, idleCleanupTtlHours } }), onSuccess: (data) => { client.setQueryData(["repository-settings", repositoryId], data); } });
+  const save = useMutation({ mutationFn: () => updateRepositorySettings(repositoryId, { automaticSync: automatic, syncCron: cron.trim() || DEFAULT_REPOSITORY_SYNC_CRON, worktrees: { configuredSlots, idleCleanupTtlHours } }), onSuccess: (data) => { client.setQueryData(["repository-settings", repositoryId], data); } });
   const cleanup = useMutation({ mutationFn: () => cleanupRepositoryWorktrees(repositoryId), onSuccess: (data) => { client.setQueryData(["repository-settings", repositoryId], data); } });
   const run = useMutation({ mutationFn: () => startSync(repositoryId), onSuccess: () => { void client.invalidateQueries({ queryKey: ["sync", repositoryId] }); } });
   const state = settings.data;
@@ -394,10 +467,10 @@ function RepositorySettingsCard({
   useEffect(() => {
     if (state === undefined) return;
     setAutomatic(state.automaticSync);
-    setFrequency(state.syncFrequencyMinutes);
+    setCron(state.syncCron || DEFAULT_REPOSITORY_SYNC_CRON);
     setConfiguredSlots(state.worktrees?.configuredSlots ?? DEFAULT_REPOSITORY_WORKTREE_SLOTS);
     setIdleCleanupTtlHours(state.worktrees?.idleCleanupTtlHours ?? 24);
-  }, [state?.automaticSync, state?.syncFrequencyMinutes, state?.worktrees?.configuredSlots, state?.worktrees?.idleCleanupTtlHours]);
+  }, [state?.automaticSync, state?.syncCron, state?.worktrees?.configuredSlots, state?.worktrees?.idleCleanupTtlHours]);
   const stream = sync.data?.pullRequests;
   const pullSuccess = stream?.lastSuccessAt ?? null;
   const issueSuccess = sync.data?.issues.lastSuccessAt ?? null;
@@ -417,7 +490,7 @@ function RepositorySettingsCard({
     {save.isError && <ErrorText error={save.error} />}
     {run.isError && <ErrorText error={run.error} />}
     {save.isSuccess && <p role="status" className="settings-message">{t({ en: "Repository sync settings saved.", "zh-CN": "仓库同步设置已保存。" })}</p>}
-    <div className="settings-form-row"><SettingsSwitch label={t({ en: "Automatic sync", "zh-CN": "自动同步" })} checked={automatic} onChange={setAutomatic} /><label>{t({ en: "Every", "zh-CN": "每" })} <select value={frequency} onChange={(event) => setFrequency(Number(event.target.value))}><option value={15}>{t({ en: "{count} minutes", "zh-CN": "{count} 分钟" }, { count: formatNumber(15) })}</option><option value={60}>{t({ en: "{count} hour", "zh-CN": "{count} 小时" }, { count: formatNumber(1) })}</option><option value={360}>{t({ en: "{count} hours", "zh-CN": "{count} 小时" }, { count: formatNumber(6) })}</option><option value={1440}>{t({ en: "Daily", "zh-CN": "每天" })}</option></select></label><button type="button" onClick={() => save.mutate()} disabled={save.isPending}>{t({ en: "Save", "zh-CN": "保存" })}</button><button type="button" className="button-primary" onClick={() => run.mutate()} disabled={run.isPending}>{run.isPending ? t({ en: "Starting…", "zh-CN": "启动中…" }) : t({ en: "Sync now", "zh-CN": "立即同步" })}</button><Link className="button-link" to={`/repositories/${encodeURIComponent(repositoryId)}`}>{t({ en: "Open repository", "zh-CN": "进入仓库" })}</Link></div>
+    <div className="settings-form-row"><SettingsSwitch label={t({ en: "Automatic sync", "zh-CN": "自动同步" })} checked={automatic} onChange={setAutomatic} /><CronField id={`repository-sync-cron-${repositoryId}`} label={t({ en: "Sync Cron", "zh-CN": "同步 Cron" })} value={cron} onChange={setCron} defaultValue={DEFAULT_REPOSITORY_SYNC_CRON} /><button type="button" onClick={() => save.mutate()} disabled={save.isPending}>{t({ en: "Save", "zh-CN": "保存" })}</button><button type="button" className="button-primary" onClick={() => run.mutate()} disabled={run.isPending}>{run.isPending ? t({ en: "Starting…", "zh-CN": "启动中…" }) : t({ en: "Sync now", "zh-CN": "立即同步" })}</button><Link className="button-link" to={`/repositories/${encodeURIComponent(repositoryId)}`}>{t({ en: "Open repository", "zh-CN": "进入仓库" })}</Link></div>
     <section className="settings-subsection" aria-labelledby={`worktrees-${repositoryId}`}><header className="settings-card__header"><div><p className="eyebrow">{t({ en: "Workspace isolation", "zh-CN": "工作区隔离" })}</p><h4 id={`worktrees-${repositoryId}`}>{t({ en: "Worktrees", "zh-CN": "工作树" })}</h4><p className="settings-muted">{t({ en: "Capacity is per repository and does not limit Agent global concurrency.", "zh-CN": "容量按仓库计算，不限制智能代理全局并发。" })}</p></div></header><div className="settings-grid"><label>{t({ en: "Maximum slots", "zh-CN": "最大槽位" })}<select value={configuredSlots} onChange={(event) => setConfiguredSlots(Number(event.target.value))}>{Array.from({ length: 16 }, (_, index) => index + 1).map((count) => <option key={count} value={count}>{formatNumber(count)}</option>)}</select></label><label>{t({ en: "Idle cleanup TTL", "zh-CN": "空闲清理 TTL" })}<select value={idleCleanupTtlHours} onChange={(event) => setIdleCleanupTtlHours(Number(event.target.value))}><option value={6}>{formatNumber(6)} {t({ en: "hours", "zh-CN": "小时" })}</option><option value={24}>{formatNumber(24)} {t({ en: "hours", "zh-CN": "小时" })}</option><option value={72}>{formatNumber(3)} {t({ en: "days", "zh-CN": "天" })}</option><option value={168}>{formatNumber(7)} {t({ en: "days", "zh-CN": "天" })}</option><option value={720}>{formatNumber(30)} {t({ en: "days", "zh-CN": "天" })}</option></select></label></div><dl className="settings-details"><div><dt>{t({ en: "Configured / physical", "zh-CN": "配置 / 物理" })}</dt><dd>{worktrees?.configuredSlots !== undefined ? formatNumber(worktrees.configuredSlots) : formatNumber(configuredSlots)} / {worktrees?.physicalSlots !== undefined ? formatNumber(worktrees.physicalSlots) : formatNumber(0)}</dd></div><div><dt>{t({ en: "Active / idle", "zh-CN": "活动 / 空闲" })}</dt><dd>{formatNumber(worktrees?.active ?? 0)} / {formatNumber(worktrees?.idle ?? 0)}</dd></div><div><dt>{t({ en: "Dirty", "zh-CN": "有改动" })}</dt><dd>{formatNumber(worktrees?.dirty ?? 0)}</dd></div><div><dt>{t({ en: "Pending retirement", "zh-CN": "待回收" })}</dt><dd>{formatNumber(worktrees?.pendingRetirement ?? 0)}</dd></div></dl><div className="settings-form-row"><button type="button" onClick={() => cleanup.mutate()} disabled={cleanup.isPending}>{cleanup.isPending ? t({ en: "Cleaning…", "zh-CN": "清理中…" }) : t({ en: "Clean unused now", "zh-CN": "立即清理未使用项" })}</button></div>{cleanup.isError && <ErrorText error={cleanup.error} />}</section>
     <HistorySyncSection repositoryId={repositoryId} />
     <RepositoryRetentionSection repositoryId={repositoryId} />

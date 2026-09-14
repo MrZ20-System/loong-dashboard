@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AUTH_REQUIRED_EVENT } from "./auth-required-event";
-import { fetchRepositorySettings } from "./settings-client";
+import { fetchRecoverableRepositoryOnboarding, fetchRepositorySettings, retryRepositoryOnboarding } from "./settings-client";
 
 function json(value: unknown, status: number): Response {
   return new Response(JSON.stringify(value), {
@@ -52,5 +52,36 @@ describe("settings client auth boundary", () => {
     } finally {
       window.removeEventListener(AUTH_REQUIRED_EVENT, onAuthRequired);
     }
+  });
+});
+
+describe("repository onboarding client", () => {
+  it("fetches the bounded recoverable list", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => json({ items: [] }, 200));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchRecoverableRepositoryOnboarding()).resolves.toEqual({ items: [] });
+    expect(fetchMock).toHaveBeenCalledWith("/api/repository-onboarding", expect.objectContaining({
+      headers: { Accept: "application/json" },
+    }));
+  });
+
+  it("sends only the optional default branch override when retrying", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => json({ jobId: "job-1", status: "queued" }, 200));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await retryRepositoryOnboarding("job/1", { defaultBranch: "master" });
+    expect(fetchMock).toHaveBeenNthCalledWith(1, "/api/repository-onboarding/job%2F1/retry", expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ defaultBranch: "master" }),
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+    }));
+
+    await retryRepositoryOnboarding("job-1");
+    expect(fetchMock).toHaveBeenNthCalledWith(2, "/api/repository-onboarding/job-1/retry", expect.objectContaining({
+      method: "POST",
+      headers: { Accept: "application/json" },
+    }));
+    expect(fetchMock.mock.calls[1]?.[1]).not.toHaveProperty("body");
   });
 });

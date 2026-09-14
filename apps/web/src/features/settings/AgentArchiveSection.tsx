@@ -10,17 +10,25 @@ import {
 import { SettingsSwitch } from "./SettingsSwitch";
 import { useI18n, type LocalizedMessage, type MessageValues } from "../../i18n";
 import { ErrorText } from "./settings-helpers";
+import { CronField } from "./CronField";
 
 type Feedback = { message: LocalizedMessage; values?: MessageValues };
 
+const DEFAULT_AGENT_EXPORT_CRON = "0 0 * * *";
+const DEFAULT_AGENT_PUSH_CRON = "0 0 * * *";
+
 export function AgentArchiveSection() {
-  const { t, formatDateTime, formatNumber } = useI18n();
+  const { t, formatDateTime } = useI18n();
   const client = useQueryClient();
   const query = useQuery({ queryKey: ["agent-archive-settings"], queryFn: fetchAgentArchiveSettings, refetchInterval: 5_000 });
   const [draft, setDraft] = useState<Partial<AgentArchiveSettings>>({});
   const [message, setMessage] = useState<Feedback | null>(null);
   const save = useMutation({
-    mutationFn: () => updateAgentArchiveSettings(draft),
+    mutationFn: () => updateAgentArchiveSettings({
+      ...draft,
+      ...(draft.exportCron !== undefined ? { exportCron: draft.exportCron.trim() || DEFAULT_AGENT_EXPORT_CRON } : {}),
+      ...(draft.pushCron !== undefined ? { pushCron: draft.pushCron.trim() || DEFAULT_AGENT_PUSH_CRON } : {}),
+    }),
     onSuccess: (data) => {
       client.setQueryData(["agent-archive-settings"], data);
       setDraft({});
@@ -56,6 +64,7 @@ export function AgentArchiveSection() {
         </div>
       </header>
       {query.isError && <ErrorText error={query.error} />}
+      {save.isError && <ErrorText error={save.error} />}
       <div className="settings-grid">
         <label>{t({ en: "Archive repository path", "zh-CN": "归档仓库路径" })}<input value={data.archiveRepositoryPath ?? ""} onChange={(event) => setDraft((old) => ({ ...old, archiveRepositoryPath: event.target.value }))} /></label>
         <label>{t({ en: "Source ref", "zh-CN": "源 ref" })}<input value={data.sourceRef ?? "main"} onChange={(event) => setDraft((old) => ({ ...old, sourceRef: event.target.value }))} /></label>
@@ -65,8 +74,8 @@ export function AgentArchiveSection() {
           <SettingsSwitch label={t({ en: "Automatic export", "zh-CN": "自动导出" })} description={t({ en: "Export normalized transcripts on the configured cadence.", "zh-CN": "按配置频率导出规范化记录。" })} checked={data.enabled ?? false} onChange={(checked) => setDraft((old) => ({ ...old, enabled: checked }))} />
           <SettingsSwitch label={t({ en: "Automatic push", "zh-CN": "自动推送" })} description={t({ en: "Push archive checkpoints to the configured branch.", "zh-CN": "将归档检查点推送到配置的分支。" })} checked={data.automaticPush ?? false} onChange={(checked) => setDraft((old) => ({ ...old, automaticPush: checked }))} />
         </div>
-        <label>{t({ en: "Export/checkpoint frequency", "zh-CN": "导出/检查点频率" })}<select value={data.exportIntervalMinutes ?? ""} onChange={(event) => setDraft((old) => ({ ...old, exportIntervalMinutes: event.target.value ? Number(event.target.value) : null }))}><option value="">{t({ en: "Manual only", "zh-CN": "仅手动" })}</option><option value={30}>{t({ en: "{count} minutes", "zh-CN": "{count} 分钟" }, { count: formatNumber(30) })}</option><option value={60}>{t({ en: "{count} hour", "zh-CN": "{count} 小时" }, { count: formatNumber(1) })}</option><option value={240}>{t({ en: "{count} hours", "zh-CN": "{count} 小时" }, { count: formatNumber(4) })}</option><option value={1440}>{t({ en: "Daily", "zh-CN": "每天" })}</option></select></label>
-        <label>{t({ en: "Push frequency", "zh-CN": "推送频率" })}<select value={data.pushIntervalMinutes ?? ""} onChange={(event) => setDraft((old) => ({ ...old, pushIntervalMinutes: event.target.value ? Number(event.target.value) : null }))}><option value="">{t({ en: "Manual only", "zh-CN": "仅手动" })}</option><option value={360}>{t({ en: "{count} hours", "zh-CN": "{count} 小时" }, { count: formatNumber(6) })}</option><option value={1440}>{t({ en: "Daily", "zh-CN": "每天" })}</option></select></label>
+        <CronField id="agent-export-cron" label={t({ en: "Export Cron", "zh-CN": "导出 Cron" })} value={data.exportCron ?? DEFAULT_AGENT_EXPORT_CRON} onChange={(value) => setDraft((old) => ({ ...old, exportCron: value }))} defaultValue={DEFAULT_AGENT_EXPORT_CRON} />
+        <CronField id="agent-push-cron" label={t({ en: "Push Cron", "zh-CN": "推送 Cron" })} value={data.pushCron ?? DEFAULT_AGENT_PUSH_CRON} onChange={(value) => setDraft((old) => ({ ...old, pushCron: value }))} defaultValue={DEFAULT_AGENT_PUSH_CRON} />
       </div>
       <p className="settings-muted">{t({ en: "Last export:", "zh-CN": "上次导出：" })} {data.lastExportAt ? formatDateTime(data.lastExportAt) : "—"} · {t({ en: "Next export:", "zh-CN": "下次导出：" })} {data.nextExportAt ? formatDateTime(data.nextExportAt) : "—"} · {t({ en: "Last push:", "zh-CN": "上次推送：" })} {data.lastPushAt ? formatDateTime(data.lastPushAt) : "—"}</p>
       {data.lastError && <p role="alert" className="settings-error">{t({ en: "Last error:", "zh-CN": "最近错误：" })} {data.lastError}</p>}

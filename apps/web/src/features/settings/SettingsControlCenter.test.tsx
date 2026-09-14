@@ -84,9 +84,9 @@ function codeBackupSettings(available: boolean) {
     available,
     repositoryPath: "/workspace/loong-dashboard",
     automaticCheckpoint: true,
-    checkpointIntervalMinutes: 60,
+    checkpointCron: "0 * * * *",
     automaticPush: true,
-    pushIntervalMinutes: 1440,
+    pushCron: "0 */6 * * *",
     sourceRef: "main",
     remote: "origin",
     remoteBranch: "loongboard-backup",
@@ -102,9 +102,9 @@ function mockAgentArchiveSettings() {
   settingsMocks.fetchAgentArchiveSettings.mockResolvedValue({
     archiveRepositoryPath: "/workspace/agent-history",
     enabled: false,
-    exportIntervalMinutes: null,
+    exportCron: "0 3 * * *",
     automaticPush: false,
-    pushIntervalMinutes: null,
+    pushCron: "0 3 * * *",
     sourceRef: "main",
     remote: "origin",
     remoteBranch: "agent-history-backup",
@@ -133,8 +133,8 @@ describe("Knowledge checkpoint settings", () => {
       remote: "origin",
       sourceRef: "main",
       remoteBranch: "loongboard-knowledge-backup",
-      checkpointIntervalMinutes: 60,
-      pushIntervalMinutes: null,
+      checkpointCron: "0 3 * * *",
+      pushCron: "0 3 * * *",
     });
     settingsMocks.updateKnowledgeCheckpointSettings.mockResolvedValue({});
 
@@ -145,14 +145,14 @@ describe("Knowledge checkpoint settings", () => {
     fireEvent.change(screen.getByLabelText("Source ref"), {
       target: { value: "release" },
     });
-    fireEvent.change(screen.getByLabelText("Checkpoint frequency"), {
-      target: { value: "240" },
+    fireEvent.change(screen.getByLabelText("Checkpoint Cron"), {
+      target: { value: "0 */6 * * *" },
     });
     fireEvent.click(screen.getByRole("button", { name: "Save backup settings" }));
 
     await waitFor(() => expect(settingsMocks.updateKnowledgeCheckpointSettings).toHaveBeenCalledWith({
       sourceRef: "release",
-      checkpointIntervalMinutes: 240,
+      checkpointCron: "0 */6 * * *",
     }));
     const payload = settingsMocks.updateKnowledgeCheckpointSettings.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(payload).not.toHaveProperty("branch");
@@ -202,10 +202,13 @@ describe("Code backup settings", () => {
 
     fireEvent.click(card.getByRole("button", { name: "Checkpoint now" }));
     fireEvent.click(card.getByRole("button", { name: "Push now" }));
+    fireEvent.change(card.getByLabelText("Push Cron"), { target: { value: "0 3 * * 1" } });
+    fireEvent.click(card.getByRole("button", { name: "Save code backup" }));
 
     await waitFor(() => {
       expect(settingsMocks.runCodeBackupCheckpoint).toHaveBeenCalledTimes(1);
       expect(settingsMocks.pushCodeBackup).toHaveBeenCalledTimes(1);
+      expect(settingsMocks.updateCodeBackupSettings).toHaveBeenCalledWith({ pushCron: "0 3 * * 1" });
     });
   });
 

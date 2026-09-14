@@ -11,17 +11,25 @@ import { AgentArchiveSection } from "./AgentArchiveSection";
 import { SettingsSwitch } from "./SettingsSwitch";
 import { useI18n, type LocalizedMessage, type MessageValues } from "../../i18n";
 import { ErrorText } from "./settings-helpers";
+import { CronField } from "./CronField";
 
 type Feedback = { message: LocalizedMessage; values?: MessageValues };
 
+const DEFAULT_CODE_CHECKPOINT_CRON = "0 0 * * *";
+const DEFAULT_CODE_PUSH_CRON = "0 0 * * *";
+
 export function CodeBackupSection() {
-  const { t, formatDateTime, formatNumber } = useI18n();
+  const { t, formatDateTime } = useI18n();
   const client = useQueryClient();
   const query = useQuery({ queryKey: ["code-backup-settings"], queryFn: fetchCodeBackupSettings, refetchInterval: 5_000 });
   const [draft, setDraft] = useState<Partial<CodeBackupSettings>>({});
   const [message, setMessage] = useState<Feedback | null>(null);
   const save = useMutation({
-    mutationFn: () => updateCodeBackupSettings(draft),
+    mutationFn: () => updateCodeBackupSettings({
+      ...draft,
+      ...(draft.checkpointCron !== undefined ? { checkpointCron: draft.checkpointCron.trim() || DEFAULT_CODE_CHECKPOINT_CRON } : {}),
+      ...(draft.pushCron !== undefined ? { pushCron: draft.pushCron.trim() || DEFAULT_CODE_PUSH_CRON } : {}),
+    }),
     onSuccess: (data) => {
       client.setQueryData(["code-backup-settings"], data);
       setDraft({});
@@ -59,6 +67,7 @@ export function CodeBackupSection() {
         </div>
       </header>
       {query.isError && <ErrorText error={query.error} />}
+      {save.isError && <ErrorText error={save.error} />}
       {runtimeAvailability === false && <p role="status" className="settings-muted">{t({ en: "Code backup unavailable in container-image deployment.", "zh-CN": "容器镜像部署中不可用代码备份。" })}</p>}
       <div className="settings-grid">
         <label>{t({ en: "Repository path", "zh-CN": "仓库路径" })}<input value={data.repositoryPath ?? ""} readOnly aria-readonly="true" /></label>
@@ -69,8 +78,8 @@ export function CodeBackupSection() {
           <SettingsSwitch label={t({ en: "Automatic checkpoint", "zh-CN": "自动创建检查点" })} description={t({ en: "Create a source checkpoint on the configured cadence.", "zh-CN": "按配置频率创建源代码检查点。" })} checked={data.automaticCheckpoint ?? false} onChange={(checked) => setDraft((old) => ({ ...old, automaticCheckpoint: checked }))} disabled={!available || query.isPending} />
           <SettingsSwitch label={t({ en: "Automatic push", "zh-CN": "自动推送" })} description={t({ en: "Push checkpoints to the configured backup branch.", "zh-CN": "将检查点推送到配置的备份分支。" })} checked={data.automaticPush ?? false} onChange={(checked) => setDraft((old) => ({ ...old, automaticPush: checked }))} disabled={!available || query.isPending} />
         </div>
-        <label>{t({ en: "Checkpoint frequency", "zh-CN": "检查点频率" })}<select value={data.checkpointIntervalMinutes ?? ""} onChange={(event) => setDraft((old) => ({ ...old, checkpointIntervalMinutes: event.target.value ? Number(event.target.value) : null }))}><option value="">{t({ en: "Manual only", "zh-CN": "仅手动" })}</option><option value={30}>{t({ en: "{count} minutes", "zh-CN": "{count} 分钟" }, { count: formatNumber(30) })}</option><option value={60}>{t({ en: "{count} hour", "zh-CN": "{count} 小时" }, { count: formatNumber(1) })}</option><option value={240}>{t({ en: "{count} hours", "zh-CN": "{count} 小时" }, { count: formatNumber(4) })}</option><option value={1440}>{t({ en: "Daily", "zh-CN": "每天" })}</option></select></label>
-        <label>{t({ en: "Push frequency", "zh-CN": "推送频率" })}<select value={data.pushIntervalMinutes ?? ""} onChange={(event) => setDraft((old) => ({ ...old, pushIntervalMinutes: event.target.value ? Number(event.target.value) : null }))}><option value="">{t({ en: "Manual only", "zh-CN": "仅手动" })}</option><option value={360}>{t({ en: "{count} hours", "zh-CN": "{count} 小时" }, { count: formatNumber(6) })}</option><option value={1440}>{t({ en: "Daily", "zh-CN": "每天" })}</option></select></label>
+        <CronField id="code-checkpoint-cron" label={t({ en: "Checkpoint Cron", "zh-CN": "检查点 Cron" })} value={data.checkpointCron ?? DEFAULT_CODE_CHECKPOINT_CRON} onChange={(value) => setDraft((old) => ({ ...old, checkpointCron: value }))} defaultValue={DEFAULT_CODE_CHECKPOINT_CRON} />
+        <CronField id="code-push-cron" label={t({ en: "Push Cron", "zh-CN": "推送 Cron" })} value={data.pushCron ?? DEFAULT_CODE_PUSH_CRON} onChange={(value) => setDraft((old) => ({ ...old, pushCron: value }))} defaultValue={DEFAULT_CODE_PUSH_CRON} />
       </div>
       {data.lastError && <p role="alert" className="settings-error">{t({ en: "Last error:", "zh-CN": "最近错误：" })} {data.lastError}</p>}
       <p className="settings-muted">{t({ en: "Last checkpoint:", "zh-CN": "上次检查点：" })} {data.lastCheckpointAt ? formatDateTime(data.lastCheckpointAt) : "—"} · {t({ en: "Last push:", "zh-CN": "上次推送：" })} {data.lastPushAt ? formatDateTime(data.lastPushAt) : "—"}</p>
