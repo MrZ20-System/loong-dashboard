@@ -19,7 +19,7 @@ export function SettingsControlCenter() {
         <article className="settings-control-tile"><span className="settings-tile-icon">◇</span><h3>{t({ en: "Domains", "zh-CN": "领域" })}</h3><p>{t({ en: "Edit rendered rules, JSON source and update prompts.", "zh-CN": "编辑渲染规则、JSON 源文件和更新提示词。" })}</p><Link to="/settings/domains">{t({ en: "Open Domains", "zh-CN": "打开领域" })}</Link></article>
         <article className="settings-control-tile"><span className="settings-tile-icon">◷</span><h3>{t({ en: "Schedules", "zh-CN": "计划任务" })}</h3><p>{t({ en: "Review Agent and system schedules and run history.", "zh-CN": "查看智能代理和系统计划任务及运行历史。" })}</p><Link to="/settings/schedules">{t({ en: "Open Schedules", "zh-CN": "打开计划任务" })}</Link></article>
         <article className="settings-control-tile"><span className="settings-tile-icon">♥</span><h3>{t({ en: "Health", "zh-CN": "健康状态" })}</h3><p>{t({ en: "Check the API and runtime boundary.", "zh-CN": "检查 API 和运行时边界。" })}</p><Link to="/settings/health">{t({ en: "Open Health", "zh-CN": "打开健康状态" })}</Link></article>
-        <article className="settings-control-tile"><span className="settings-tile-icon">✓</span><h3>{t({ en: "Knowledge checkpoint", "zh-CN": "知识库检查点" })}</h3><p>{t({ en: "Configure Knowledge commit and push switches with separate Cron schedules.", "zh-CN": "分别配置知识库提交、推送开关和 Cron 计划。" })}</p><Link to="/settings/checkpoint">{t({ en: "Manage checkpoint", "zh-CN": "管理检查点" })}</Link></article>
+        <article className="settings-control-tile"><span className="settings-tile-icon">✓</span><h3>{t({ en: "Personal Data", "zh-CN": "个人数据" })}</h3><p>{t({ en: "Import Personal Data and configure independent checkpoint and push schedules.", "zh-CN": "导入个人数据，并分别配置检查点和推送计划。" })}</p><Link to="/settings/personal-data">{t({ en: "Manage Personal Data", "zh-CN": "管理个人数据" })}</Link></article>
         <article className="settings-control-tile"><span className="settings-tile-icon">⇧</span><h3>{t({ en: "Code backup", "zh-CN": "代码备份" })}</h3><p>{t({ en: "Protect the LoongBoard source repository with separate Cron schedules for checkpoint and push.", "zh-CN": "使用独立的检查点和推送 Cron 计划保护 LoongBoard 源代码仓库。" })}</p><Link to="/settings/code-backup">{t({ en: "Manage code backup", "zh-CN": "管理代码备份" })}</Link></article>
         <article className="settings-control-tile"><span className="settings-tile-icon">⌑</span><h3>{t({ en: "Security", "zh-CN": "安全" })}</h3><p>{t({ en: "Enable or change the local password lock for Web/API access.", "zh-CN": "启用或更改 Web/API 访问的本地密码锁。" })}</p><Link to="/settings/security">{t({ en: "Manage password lock", "zh-CN": "管理密码锁" })}</Link></article>
       </div>
@@ -33,6 +33,11 @@ export { HistorySyncSection } from "./RepositorySettingsSection";
 export { RepositorySettingsSection, RepositorySettingsSection as RepositoriesSettings } from "./RepositorySettingsSection";
 export { GitHubSettingsSection, GitHubSettingsSection as IntegrationsSettings } from "./GitHubSettingsSection";
 export { AgentSettingsSection, AgentSettingsSection as AgentSettings } from "./AgentSettingsSection";
-export { KnowledgeBackupSection, KnowledgeBackupSection as KnowledgeCheckpointSettingsPage } from "./KnowledgeBackupSection";
+export {
+  PersonalDataSection,
+  PersonalDataSection as PersonalDataSettingsPage,
+  PersonalDataSection as KnowledgeBackupSection,
+  PersonalDataSection as KnowledgeCheckpointSettingsPage,
+} from "./PersonalDataSection";
 export { CodeBackupSection, CodeBackupSettingsPage } from "./CodeBackupSection";
 export { AgentArchiveSection, AgentArchiveSection as AgentArchiveSettingsSection } from "./AgentArchiveSection";

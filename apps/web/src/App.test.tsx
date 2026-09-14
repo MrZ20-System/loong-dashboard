@@ -66,6 +66,8 @@ vi.mock("./features/settings/SettingsControlCenter", () => ({
   RepositoriesSettings: () => <h1>Repositories settings route</h1>,
   IntegrationsSettings: () => <h1>Integrations settings route</h1>,
   AgentSettings: () => <h1>Agent settings route</h1>,
+  PersonalDataSection: () => <h1>Personal Data settings route</h1>,
+  PersonalDataSettingsPage: () => <h1>Personal Data settings route</h1>,
   KnowledgeCheckpointSettingsPage: () => <h1>Checkpoint settings route</h1>,
   CodeBackupSettingsPage: () => <h1>Code backup settings route</h1>,
 }));
@@ -284,6 +286,8 @@ describe("App router", () => {
     ["/agent", "Agent route"],
     ["/knowledge", "Knowledge route"],
     ["/settings", "Settings route"],
+    ["/settings/personal-data", "Personal Data settings route"],
+    ["/settings/checkpoint", "Personal Data settings route"],
     ["/settings/health", "Health route"],
     ["/health", "Health route"],
     ["/repositories/repo", "Activity route"],

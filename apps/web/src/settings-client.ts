@@ -21,8 +21,16 @@ import {
   type RepositorySettingsUpdate,
   knowledgeCheckpointSettingsSchema,
   knowledgeCheckpointSettingsUpdateSchema,
+  personalDataImportSchema,
   type KnowledgeCheckpointSettings,
   type KnowledgeCheckpointSettingsUpdate,
+  personalDataImportResponseSchema,
+  personalDataInstructionTreeRefreshResponseSchema,
+  personalDataSettingsSchema,
+  personalDataSettingsUpdateSchema,
+  type PersonalDataImport,
+  type PersonalDataSettings,
+  type PersonalDataSettingsUpdate,
   repositoryOnboardingListResponseSchema,
   repositoryOnboardingRetrySchema,
   repositoryOnboardingAcceptedSchema,
@@ -35,7 +43,7 @@ import {
 } from "@loongboard/contracts";
 import { dispatchAuthRequiredEvent } from "./auth-required-event";
 
-export type { AgentArchiveSettings, AgentArchiveSettingsUpdate, AgentRuntimeSettings, AgentRuntimeSettingsUpdate, CodeBackupSettings, CodeBackupSettingsUpdate, GitHubIntegration, JsonSource, KnowledgeCheckpointSettings, KnowledgeCheckpointSettingsUpdate, RepositorySettings, RepositoryOnboarding, RepositoryOnboardingAccepted, RepositoryOnboardingCreate, RepositoryOnboardingListResponse, RepositoryOnboardingRetry } from "@loongboard/contracts";
+export type { AgentArchiveSettings, AgentArchiveSettingsUpdate, AgentRuntimeSettings, AgentRuntimeSettingsUpdate, CodeBackupSettings, CodeBackupSettingsUpdate, GitHubIntegration, JsonSource, KnowledgeCheckpointSettings, KnowledgeCheckpointSettingsUpdate, PersonalDataImport, PersonalDataSettings, PersonalDataSettingsUpdate, RepositorySettings, RepositoryOnboarding, RepositoryOnboardingAccepted, RepositoryOnboardingCreate, RepositoryOnboardingListResponse, RepositoryOnboardingRetry } from "@loongboard/contracts";
 
 export function createRepositoryOnboarding(input: RepositoryOnboardingCreate): Promise<RepositoryOnboardingAccepted> {
   return json("/api/repositories", repositoryOnboardingAcceptedSchema, { method: "POST", body: JSON.stringify(input) });
@@ -147,6 +155,38 @@ export function saveDomainPrompt(repositoryId: string, content: string): Promise
 
 export function fetchKnowledgeCheckpointSettings(): Promise<KnowledgeCheckpointSettings> {
   return json("/api/settings/knowledge-checkpoint", knowledgeCheckpointSettingsSchema);
+}
+
+export function fetchPersonalDataSettings(): Promise<PersonalDataSettings> {
+  return json("/api/settings/personal-data", personalDataSettingsSchema);
+}
+
+export function updatePersonalDataSettings(patch: PersonalDataSettingsUpdate): Promise<PersonalDataSettings> {
+  return json("/api/settings/personal-data", personalDataSettingsSchema, {
+    method: "PUT",
+    body: JSON.stringify(patch),
+  });
+}
+
+export function importPersonalData(input: PersonalDataImport): Promise<{ accepted: true }> {
+  return json("/api/settings/personal-data/import", personalDataImportResponseSchema, {
+    method: "POST",
+    body: JSON.stringify(personalDataImportSchema.parse(input)),
+  }).then(() => ({ accepted: true as const }));
+}
+
+export function refreshPersonalDataInstructionTree(): Promise<{ accepted: true }> {
+  return json("/api/settings/personal-data/instruction-tree/refresh", personalDataInstructionTreeRefreshResponseSchema, {
+    method: "POST",
+  }).then(() => ({ accepted: true as const }));
+}
+
+export function runPersonalDataCheckpoint(): Promise<{ accepted: true }> {
+  return json("/api/settings/personal-data/checkpoint", savedResponseSchema, { method: "POST" }).then(() => ({ accepted: true as const }));
+}
+
+export function pushPersonalData(): Promise<{ accepted: true }> {
+  return json("/api/settings/personal-data/push", savedResponseSchema, { method: "POST" }).then(() => ({ accepted: true as const }));
 }
 
 export function fetchCodeBackupSettings(): Promise<CodeBackupSettings> {

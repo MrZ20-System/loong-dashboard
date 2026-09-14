@@ -5,6 +5,12 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const settingsMocks = vi.hoisted(() => ({
+  fetchPersonalDataSettings: vi.fn(),
+  updatePersonalDataSettings: vi.fn(),
+  importPersonalData: vi.fn(),
+  refreshPersonalDataInstructionTree: vi.fn(),
+  runPersonalDataCheckpoint: vi.fn(),
+  pushPersonalData: vi.fn(),
   fetchKnowledgeCheckpointSettings: vi.fn(),
   updateKnowledgeCheckpointSettings: vi.fn(),
   runKnowledgeCheckpoint: vi.fn(),
@@ -125,18 +131,22 @@ afterEach(() => {
   }
 });
 
-describe("Knowledge checkpoint settings", () => {
+describe("Personal Data settings", () => {
   it("renders and saves the canonical checkpoint fields", async () => {
-    settingsMocks.fetchKnowledgeCheckpointSettings.mockResolvedValue({
-      autoCommit: true,
-      autoPush: false,
+    settingsMocks.fetchPersonalDataSettings.mockResolvedValue({
+      path: "/workspace/personal-data",
+      knowledgePath: "/workspace/personal-data/knowledge",
+      instructionTreePath: "/workspace/personal-data/knowledge/_loongboard/instruction-tree.md",
+      available: true,
+      automaticCheckpoint: true,
+      automaticPush: false,
       remote: "origin",
       sourceRef: "main",
       remoteBranch: "loongboard-knowledge-backup",
       checkpointCron: "0 3 * * *",
       pushCron: "0 3 * * *",
     });
-    settingsMocks.updateKnowledgeCheckpointSettings.mockResolvedValue({});
+    settingsMocks.updatePersonalDataSettings.mockResolvedValue({});
 
     renderPage();
 
@@ -150,13 +160,50 @@ describe("Knowledge checkpoint settings", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "Save backup settings" }));
 
-    await waitFor(() => expect(settingsMocks.updateKnowledgeCheckpointSettings).toHaveBeenCalledWith({
+    await waitFor(() => expect(settingsMocks.updatePersonalDataSettings).toHaveBeenCalledWith({
       sourceRef: "release",
       checkpointCron: "0 */6 * * *",
     }));
-    const payload = settingsMocks.updateKnowledgeCheckpointSettings.mock.calls[0]?.[0] as Record<string, unknown>;
+    const payload = settingsMocks.updatePersonalDataSettings.mock.calls[0]?.[0] as Record<string, unknown>;
     expect(payload).not.toHaveProperty("branch");
     expect(payload).not.toHaveProperty("intervalMinutes");
+  });
+
+  it("imports into the configured empty directory and refreshes the tree independently", async () => {
+    settingsMocks.fetchPersonalDataSettings.mockResolvedValue({
+      path: "/workspace/personal-data",
+      knowledgePath: "/workspace/personal-data/knowledge",
+      instructionTreePath: "/workspace/personal-data/knowledge/_loongboard/instruction-tree.md",
+      available: true,
+      automaticCheckpoint: false,
+      automaticPush: false,
+      remote: "origin",
+      sourceRef: "main",
+      remoteBranch: "loongboard-personal-data-backup",
+      checkpointCron: "0 0 * * *",
+      pushCron: "0 0 * * *",
+    });
+    settingsMocks.importPersonalData.mockResolvedValue({ accepted: true });
+    settingsMocks.refreshPersonalDataInstructionTree.mockResolvedValue({ accepted: true });
+
+    renderPage();
+
+    const url = await screen.findByPlaceholderText("https://github.com/org/repo.git");
+    expect(screen.getByDisplayValue("profile/z20")).toBeInTheDocument();
+    expect(await screen.findByDisplayValue("/workspace/personal-data")).toHaveAttribute("readonly");
+    fireEvent.change(url, { target: { value: "https://github.com/acme/personal-data.git" } });
+    fireEvent.change(screen.getByDisplayValue("profile/z20"), { target: { value: "release" } });
+    fireEvent.click(screen.getByRole("button", { name: "Import repository" }));
+
+    await waitFor(() => expect(settingsMocks.importPersonalData).toHaveBeenCalledWith({
+      repositoryUrl: "https://github.com/acme/personal-data.git",
+      branch: "release",
+    }));
+    expect(await screen.findByDisplayValue("profile/z20")).toBeInTheDocument();
+    expect(screen.getByDisplayValue("/workspace/personal-data")).toHaveAttribute("readonly");
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh Instruction Tree" }));
+    await waitFor(() => expect(settingsMocks.refreshPersonalDataInstructionTree).toHaveBeenCalledTimes(1));
   });
 });
 

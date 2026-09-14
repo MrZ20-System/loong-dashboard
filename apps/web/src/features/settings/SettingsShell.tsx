@@ -6,7 +6,7 @@ const settingsTabs = [
   { to: "/settings/repositories", label: { en: "Repositories", "zh-CN": "仓库" } },
   { to: "/settings/integrations", label: { en: "Integrations", "zh-CN": "集成" } },
   { to: "/settings/agent", label: { en: "Agent", "zh-CN": "智能代理" } },
-  { to: "/settings/checkpoint", label: { en: "Checkpoint", "zh-CN": "检查点" } },
+  { to: "/settings/personal-data", label: { en: "Personal Data", "zh-CN": "个人数据" } },
   { to: "/settings/code-backup", label: { en: "Code backup", "zh-CN": "代码备份" } },
   { to: "/settings/domains", label: { en: "Domains", "zh-CN": "领域" } },
   { to: "/settings/schedules", label: { en: "Schedules", "zh-CN": "计划任务" } },

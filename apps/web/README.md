@@ -2,7 +2,7 @@
 
 React 浏览器应用。页面路由、Query/API 客户端、PR 工作台、共享聊天与 Markdown/Monaco。使用 contracts 校验响应，不访问数据库或远端 GitHub。
 
-Repository 下提供当前 PR 的 Recently Updated / PR Number 两种 keyset 查询，以及按真实 `mergedAt` 分组的独立 Merged 时间线。设置控制中心覆盖 forward sync、持续 History metadata backfill、GitHub 凭据摘要、runtime defaults、Knowledge checkpoint、Domain source/history/prompt、schedules 和 health。Agent 页面与 Global Dock 共享显式 session ID；Dock 支持 viewport 内自适应、消息滚动和 launcher toggle。同步完成后会刷新 repository Query，使侧栏计数保持最新。全局 hover 保留交互反馈但不增加文字下划线。
+Repository 下提供当前 PR 的 Recently Updated / PR Number 两种 keyset 查询，以及按真实 `mergedAt` 分组的独立 Merged 时间线。设置控制中心覆盖 forward sync、持续 History metadata backfill、GitHub 凭据摘要、runtime defaults、Personal Data import/tree/backup、Domain source/history/prompt、schedules 和 health。Agent 页面与 Global Dock 共享显式 session ID；Dock 支持 viewport 内自适应、消息滚动和 launcher toggle。同步完成后会刷新 repository Query，使侧栏计数保持最新。全局 hover 保留交互反馈但不增加文字下划线。
 
 - [实现说明](../../docs/frontend.md)
 - [源码入口](src/shell/AppShell.tsx)

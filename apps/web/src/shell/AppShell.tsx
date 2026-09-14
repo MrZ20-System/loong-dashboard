@@ -16,7 +16,7 @@ import { MergedPage } from "../features/community/MergedPage";
 import { RepositoryActivityPage } from "../features/community/RepositoryActivityPage";
 import { DomainsSettingsPage } from "../features/settings/DomainsSettingsPage";
 import { SettingsShell } from "../features/settings/SettingsShell";
-import { AgentSettings, IntegrationsSettings, RepositoriesSettings, SettingsControlCenter, KnowledgeCheckpointSettingsPage, CodeBackupSettingsPage } from "../features/settings/SettingsControlCenter";
+import { AgentSettings, IntegrationsSettings, RepositoriesSettings, SettingsControlCenter, PersonalDataSettingsPage, CodeBackupSettingsPage } from "../features/settings/SettingsControlCenter";
 import { HealthPage } from "../features/system/HealthPage";
 import { SecuritySettings } from "../features/settings/SecuritySettings";
 import { AppSidebar } from "./AppSidebar";
@@ -136,7 +136,8 @@ export function AppShell() {
               <Route path="/settings/repositories" element={<SettingsShell><RepositoriesSettings /></SettingsShell>} />
               <Route path="/settings/integrations" element={<SettingsShell><IntegrationsSettings /></SettingsShell>} />
               <Route path="/settings/agent" element={<SettingsShell><AgentSettings /></SettingsShell>} />
-              <Route path="/settings/checkpoint" element={<SettingsShell><KnowledgeCheckpointSettingsPage /></SettingsShell>} />
+              <Route path="/settings/personal-data" element={<SettingsShell><PersonalDataSettingsPage /></SettingsShell>} />
+              <Route path="/settings/checkpoint" element={<Navigate to="/settings/personal-data" replace />} />
               <Route path="/settings/code-backup" element={<SettingsShell><CodeBackupSettingsPage /></SettingsShell>} />
               <Route path="/settings/security" element={<SettingsShell><SecuritySettings /></SettingsShell>} />
               <Route

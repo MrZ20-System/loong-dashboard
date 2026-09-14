@@ -1,7 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { AUTH_REQUIRED_EVENT } from "./auth-required-event";
-import { fetchRecoverableRepositoryOnboarding, fetchRepositorySettings, retryRepositoryOnboarding } from "./settings-client";
+import {
+  fetchPersonalDataSettings,
+  fetchRecoverableRepositoryOnboarding,
+  fetchRepositorySettings,
+  importPersonalData,
+  pushPersonalData,
+  refreshPersonalDataInstructionTree,
+  retryRepositoryOnboarding,
+  runPersonalDataCheckpoint,
+  updatePersonalDataSettings,
+} from "./settings-client";
 
 function json(value: unknown, status: number): Response {
   return new Response(JSON.stringify(value), {
@@ -82,6 +92,42 @@ describe("repository onboarding client", () => {
       method: "POST",
       headers: { Accept: "application/json" },
     }));
+    expect(fetchMock.mock.calls[1]?.[1]).not.toHaveProperty("body");
+  });
+});
+
+describe("Personal Data client", () => {
+  it("uses canonical endpoints and preserves the import contract", async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    fetchMock
+      .mockResolvedValueOnce(json({ path: "/workspace/personal-data", knowledgePath: "/workspace/personal-data/knowledge", instructionTreePath: "/workspace/personal-data/knowledge/_loongboard/instruction-tree.md", available: true, automaticCheckpoint: false, automaticPush: false, remote: "origin", sourceRef: "main", remoteBranch: "loongboard-personal-data-backup", checkpointCron: "0 0 * * *", pushCron: "0 0 * * *" }, 200))
+      .mockResolvedValueOnce(json({ path: "knowledge/_loongboard/instruction-tree.md", updatedAt: "2026-09-14T00:00:00.000Z" }, 200))
+      .mockResolvedValueOnce(json({ path: "/workspace/personal-data", knowledgePath: "/workspace/personal-data/knowledge", instructionTreePath: "/workspace/personal-data/knowledge/_loongboard/instruction-tree.md", available: true }, 200))
+      .mockResolvedValueOnce(json({ saved: true }, 200))
+      .mockResolvedValueOnce(json({ saved: true }, 200))
+      .mockResolvedValueOnce(json({ path: "/workspace/personal-data", knowledgePath: "/workspace/personal-data/knowledge", instructionTreePath: "/workspace/personal-data/knowledge/_loongboard/instruction-tree.md", available: true, automaticCheckpoint: false, automaticPush: false, remote: "origin", sourceRef: "main", remoteBranch: "loongboard-personal-data-backup", checkpointCron: "0 0 * * *", pushCron: "0 0 * * *" }, 200));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchPersonalDataSettings()).resolves.toMatchObject({ path: "/workspace/personal-data" });
+    await expect(refreshPersonalDataInstructionTree()).resolves.toEqual({ accepted: true });
+    await expect(importPersonalData({ repositoryUrl: "https://github.com/acme/personal-data.git", branch: "profile/z20" })).resolves.toEqual({ accepted: true });
+    await expect(runPersonalDataCheckpoint()).resolves.toEqual({ accepted: true });
+    await expect(pushPersonalData()).resolves.toEqual({ accepted: true });
+    await expect(updatePersonalDataSettings({ sourceRef: "main" })).resolves.toMatchObject({ path: "/workspace/personal-data" });
+
+    expect(fetchMock.mock.calls.map(([path]) => path)).toEqual([
+      "/api/settings/personal-data",
+      "/api/settings/personal-data/instruction-tree/refresh",
+      "/api/settings/personal-data/import",
+      "/api/settings/personal-data/checkpoint",
+      "/api/settings/personal-data/push",
+      "/api/settings/personal-data",
+    ]);
+    expect(fetchMock.mock.calls[2]?.[1]).toEqual(expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ repositoryUrl: "https://github.com/acme/personal-data.git", branch: "profile/z20" }),
+    }));
+    expect(fetchMock.mock.calls[1]?.[1]).toEqual(expect.objectContaining({ method: "POST" }));
     expect(fetchMock.mock.calls[1]?.[1]).not.toHaveProperty("body");
   });
 });

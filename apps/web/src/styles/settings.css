@@ -444,6 +444,9 @@
 .settings-switch__copy small { color: var(--text-secondary); font-size: 11px; line-height: 1.35; }
 .settings-switch-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-column: 1 / -1; gap: 10px; }
 .settings-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 18px 0; }
+.personal-data-settings { min-width: 0; }
+.personal-data-settings .settings-card p { line-height: 1.55; }
+.personal-data-import-grid input[readonly] { color: var(--text-secondary); background: var(--surface-muted); text-overflow: ellipsis; }
 .secret-form { display: flex; flex-direction: column; gap: 12px; }
 .secret-form input { width: 100%; }
 .settings-error, .settings-message { margin: 12px 0; color: var(--red); font-size: 12px; }
@@ -485,6 +488,6 @@
 }
 
 @media (max-width: 560px) {
-  .repository-onboarding-form .settings-grid, .repository-settings-card .settings-grid { grid-template-columns: 1fr; }
+  .repository-onboarding-form .settings-grid, .repository-settings-card .settings-grid, .personal-data-import-grid { grid-template-columns: 1fr; }
   .repository-onboarding-steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

@@ -12,7 +12,7 @@ import {
 } from "./scheduled-client";
 
 function systemTaskHref(action: string | null | undefined): string {
-  if (action === "knowledge.checkpoint" || action === "knowledge.push") return "/settings/checkpoint";
+  if (action === "personal-data.checkpoint" || action === "personal-data.push") return "/settings/personal-data";
   if (action === "repository.sync") return "/settings/repositories";
   return "/settings";
 }
@@ -160,7 +160,7 @@ export function ScheduledTasksPage() {
         <label>{t({ en: "Timezone", "zh-CN": "时区" })}<input aria-label={t({ en: "Timezone", "zh-CN": "时区" })} value={form.timezone} onChange={(event) => setForm({ ...form, timezone: event.target.value })} /></label>
         <label>{t({ en: "Type", "zh-CN": "类型" })}<select aria-label={t({ en: "Schedule type", "zh-CN": "计划任务类型" })} value={form.kind} onChange={(event) => setForm({ ...form, kind: event.target.value as "agent" | "system" })}><option value="agent">{t({ en: "Agent conversation", "zh-CN": "Agent 对话" })}</option><option value="system">{t({ en: "System action", "zh-CN": "系统操作" })}</option></select></label>
         {form.kind === "agent" && <><label>{t({ en: "Workspace path", "zh-CN": "工作区路径" })}<input aria-label={t({ en: "Workspace path", "zh-CN": "工作区路径" })} value={form.workspacePath} onChange={(event) => setForm({ ...form, workspacePath: event.target.value })} placeholder="/path/to/repo-or-knowledge" /></label><label>{t({ en: "Prompt (sent verbatim)", "zh-CN": "提示词（原样发送）" })}<textarea aria-label={t({ en: "Prompt", "zh-CN": "提示词" })} rows={3} value={form.prompt} onChange={(event) => setForm({ ...form, prompt: event.target.value })} /></label></>}
-        {form.kind === "system" && <label>{t({ en: "System action", "zh-CN": "系统操作" })}<input aria-label={t({ en: "System action", "zh-CN": "系统操作" })} value={form.action} onChange={(event) => setForm({ ...form, action: event.target.value })} placeholder="repository.sync or knowledge.checkpoint" /></label>}
+        {form.kind === "system" && <label>{t({ en: "System action", "zh-CN": "系统操作" })}<input aria-label={t({ en: "System action", "zh-CN": "系统操作" })} value={form.action} onChange={(event) => setForm({ ...form, action: event.target.value })} placeholder="repository.sync or personal-data.checkpoint" /></label>}
         <button type="submit" disabled={create.isPending}>{create.isPending ? t({ en: "Creating…", "zh-CN": "创建中…" }) : t({ en: "Create task", "zh-CN": "创建任务" })}</button>
       </form>
 
