@@ -29,6 +29,7 @@ type Outcome = "success-without-text" | "error-after-text";
 
 class LifecycleRuntime implements AgentRuntime {
   readonly specs: AgentSessionSpec[] = [];
+  readonly capabilitySpecs: AgentSessionSpec[] = [];
   stopCalls = 0;
   stopHook: (() => void) | undefined;
   private runCount = 0;
@@ -57,6 +58,22 @@ class LifecycleRuntime implements AgentRuntime {
 
   runtimeSessionId(_sessionId: string): string {
     return "opaque-native-session";
+  }
+
+  async discoverCapabilities(spec: AgentSessionSpec) {
+    this.capabilitySpecs.push(spec);
+    return {
+      runtimeKind: "test",
+      version: "test",
+      profile: "test",
+      connected: true,
+      models: [],
+      reasoning: [],
+      commands: [],
+      features: [],
+      discovery: "runtime" as const,
+      discoveredAt: new Date().toISOString(),
+    };
   }
 
   async stop(): Promise<void> {
@@ -162,6 +179,39 @@ async function createAndRun(
 }
 
 describe("AgentChatController native turn lifecycle", () => {
+  it("uses an existing fallback workspace before Personal Data is imported", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "loongboard-agent-chat-unimported-personal-data-"));
+    directories.push(directory);
+    const database = openDatabase(join(directory, "state.sqlite3"));
+    databases.push(database);
+    const runtime = new LifecycleRuntime(["success-without-text"]);
+    const personalDataPath = join(directory, "personal-data");
+    const controller = new AgentChatController({
+      database,
+      workspaceRuns: new WorkspaceRunCoordinator(),
+      agentSessionsPath: join(directory, "agent-sessions"),
+      worktreesPath: join(directory, "worktrees"),
+      personalDataPath,
+      knowledgePath: join(personalDataPath, "knowledge"),
+      defaults: {
+        provider: "deepseek-official",
+        model: "deepseek-v4-flash",
+        reasoningEffort: "high",
+        idleProcessMinutes: 120,
+      },
+      runtimeFactory: () => runtime,
+    });
+
+    const created = await controller.ensureSession({ scope: { kind: "general", route: "before-import" } });
+    expect(created.session.workspacePath).toBe(process.cwd());
+    expect(existsSync(personalDataPath)).toBe(false);
+    await expect(controller.discoverCapabilities()).resolves.toMatchObject({ connected: true });
+    expect(runtime.capabilitySpecs[0]?.workspacePath).toBe(process.cwd());
+    expect(existsSync(personalDataPath)).toBe(false);
+
+    await controller.close();
+  });
+
   it("marks a no-text native command success idle and retains its opaque id", async () => {
     const { controller, database, runtime } = createFixture(["success-without-text"]);
     const sessionId = await createAndRun(controller, "/status");

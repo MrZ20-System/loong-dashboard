@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { lstatSync, mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 
@@ -110,6 +110,18 @@ function validateWorktreeSlotCapacity(repositoryId: string, value: number): numb
     );
   }
   return value;
+}
+
+function firstExistingWorkspace(...candidates: Array<string | undefined>): string {
+  for (const candidate of candidates) {
+    if (candidate === undefined) continue;
+    try {
+      if (lstatSync(candidate).isDirectory()) return candidate;
+    } catch {
+      // A configured Personal Data or Knowledge path may not exist before import.
+    }
+  }
+  return process.cwd();
 }
 
 /**
@@ -279,7 +291,7 @@ export class AgentSessionService {
     const probeRoot = mkdtempSync(join(this.agentSessionsPath, "capability-"));
     const spec: AgentSessionSpec = {
       sessionId: `capability_${randomUUID().replace(/-/g, "")}`,
-      workspacePath: this.personalDataPath ?? this.knowledgePath ?? process.cwd(),
+      workspacePath: firstExistingWorkspace(this.personalDataPath, this.knowledgePath),
       dshHomePath: join(probeRoot, "dsh-home"),
       provider: this.defaults.provider,
       model: this.defaults.model,
@@ -595,13 +607,13 @@ export class AgentSessionService {
       if (scope.kind === "domain") {
         requireEnabledRepository(this.database, scope.repositoryId);
         return {
-          path: this.domainWorkspaceRoot ?? this.knowledgePath ?? process.cwd(),
+          path: firstExistingWorkspace(this.domainWorkspaceRoot, this.knowledgePath),
         };
       }
       const repository = requireEnabledRepository(this.database, scope.repositoryId);
       return { path: repository.localPath };
     }
-    return { path: this.personalDataPath ?? this.knowledgePath ?? process.cwd() };
+    return { path: firstExistingWorkspace(this.personalDataPath, this.knowledgePath) };
   }
 }
 
