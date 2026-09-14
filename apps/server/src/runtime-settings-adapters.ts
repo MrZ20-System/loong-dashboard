@@ -77,13 +77,13 @@ export function createRuntimeSettingsAdapters(
 ): RuntimeSettingsAdapters {
   const state: SystemActionState = {
     checkpoint: {
-      autoCommit: options.config.knowledge.checkpoint?.autoCommit ?? false,
-      autoPush: options.config.knowledge.checkpoint?.autoPush ?? false,
+      automaticCheckpoint: options.config.knowledge.checkpoint?.autoCommit ?? false,
+      automaticPush: options.config.knowledge.checkpoint?.autoPush ?? false,
       remote: options.config.knowledge.checkpoint?.remote ?? "origin",
       sourceRef: options.config.knowledge.checkpoint?.sourceRef ?? "main",
       remoteBranch:
         options.config.knowledge.checkpoint?.remoteBranch ??
-        "loongboard-knowledge-backup",
+        "loongboard-personal-data-backup",
       checkpointCron: "0 0 * * *",
       pushCron: "0 0 * * *",
       nextRunAt: null,
@@ -266,19 +266,19 @@ export function createRuntimeSettingsAdapters(
       get: () => {
         const task = getScheduledTask(
           options.database,
-          SYSTEM_TASK_IDS.knowledgeCheckpoint,
+          SYSTEM_TASK_IDS.personalDataCheckpoint,
         );
         const pushTask = getScheduledTask(
           options.database,
-          SYSTEM_TASK_IDS.knowledgePush,
+          SYSTEM_TASK_IDS.personalDataPush,
         );
         const runs = [
           ...(task === null
             ? []
-            : listScheduledTaskRuns(options.database, SYSTEM_TASK_IDS.knowledgeCheckpoint)),
+            : listScheduledTaskRuns(options.database, SYSTEM_TASK_IDS.personalDataCheckpoint)),
           ...(pushTask === null
             ? []
-            : listScheduledTaskRuns(options.database, SYSTEM_TASK_IDS.knowledgePush)),
+            : listScheduledTaskRuns(options.database, SYSTEM_TASK_IDS.personalDataPush)),
         ];
         return input.projector.checkpointRuntimeStatus(
           task,
@@ -289,12 +289,12 @@ export function createRuntimeSettingsAdapters(
       update: (settings) => {
         state.checkpoint = {
           ...state.checkpoint,
-          ...(settings.autoCommit === undefined
+          ...(settings.automaticCheckpoint === undefined
             ? {}
-            : { autoCommit: settings.autoCommit }),
-          ...(settings.autoPush === undefined
+            : { automaticCheckpoint: settings.automaticCheckpoint }),
+          ...(settings.automaticPush === undefined
             ? {}
-            : { autoPush: settings.autoPush }),
+            : { automaticPush: settings.automaticPush }),
           ...(settings.remote === undefined ? {} : { remote: settings.remote }),
           ...(settings.sourceRef === undefined
             ? {}
@@ -317,16 +317,16 @@ export function createRuntimeSettingsAdapters(
         state.checkpoint.nextRunAt = tasks.checkpoint.nextRunAt;
         const pushTask = getScheduledTask(
           options.database,
-          SYSTEM_TASK_IDS.knowledgePush,
+          SYSTEM_TASK_IDS.personalDataPush,
         );
         const runs = [
           ...listScheduledTaskRuns(
             options.database,
-            SYSTEM_TASK_IDS.knowledgeCheckpoint,
+            SYSTEM_TASK_IDS.personalDataCheckpoint,
           ),
           ...(pushTask === null
             ? []
-            : listScheduledTaskRuns(options.database, SYSTEM_TASK_IDS.knowledgePush)),
+            : listScheduledTaskRuns(options.database, SYSTEM_TASK_IDS.personalDataPush)),
         ];
         return input.projector.checkpointRuntimeStatus(
           tasks.checkpoint,
@@ -335,10 +335,10 @@ export function createRuntimeSettingsAdapters(
         );
       },
       run: async () => {
-        await input.scheduler.runNow(SYSTEM_TASK_IDS.knowledgeCheckpoint);
+        await input.scheduler.runNow(SYSTEM_TASK_IDS.personalDataCheckpoint);
       },
       push: async () => {
-        await input.scheduler.runNow(SYSTEM_TASK_IDS.knowledgePush);
+        await input.scheduler.runNow(SYSTEM_TASK_IDS.personalDataPush);
       },
     };
 
@@ -369,7 +369,7 @@ export function createRuntimeSettingsAdapters(
           archivePath: next.archiveRepositoryPath,
           statePath: options.config.runtime.statePath,
           worktreesPath: options.config.runtime.worktreesPath,
-          knowledgePath: options.config.knowledge.path,
+          personalDataPath: options.config.personalData.path,
           codeRepositoryPath: options.codeRepositoryPath,
           create: true,
         });
@@ -389,9 +389,16 @@ export function createRuntimeSettingsAdapters(
   };
 
   const hydratePolicy = (settings: SettingsController): void => {
+    const personalData = settings.personalDataSettingsSync();
     state.checkpoint = {
       ...state.checkpoint,
-      ...settings.checkpointSettingsSync(),
+      automaticCheckpoint: personalData.automaticCheckpoint,
+      automaticPush: personalData.automaticPush,
+      checkpointCron: personalData.checkpointCron,
+      pushCron: personalData.pushCron,
+      remote: personalData.remote,
+      sourceRef: personalData.sourceRef,
+      remoteBranch: personalData.remoteBranch,
     };
     state.codeBackup = {
       ...settings.codeBackupSettingsSync(),
@@ -403,7 +410,7 @@ export function createRuntimeSettingsAdapters(
       archivePath: persistedArchive.archiveRepositoryPath,
       statePath: options.config.runtime.statePath,
       worktreesPath: options.config.runtime.worktreesPath,
-      knowledgePath: options.config.knowledge.path,
+      personalDataPath: options.config.personalData.path,
       codeRepositoryPath: options.codeRepositoryPath,
       create: true,
     });

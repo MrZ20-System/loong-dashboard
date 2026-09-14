@@ -1,8 +1,10 @@
 import {
   settingsDocumentV2Schema,
   settingsDocumentV3Schema,
+  settingsDocumentV4Schema,
   type SettingsDocumentV2,
   type SettingsDocumentV3,
+  type SettingsDocumentV4,
 } from "@loongboard/contracts";
 import { validateCron } from "@loongboard/scheduler";
 
@@ -22,6 +24,7 @@ export interface SettingsDocumentDefaults {
     retentionMinutes?: number;
   };
   knowledgeBackup?: Partial<SettingsDocumentV3["knowledgeBackup"]>;
+  personalDataBackup?: Partial<SettingsDocumentV4["personalDataBackup"]>;
   codeBackup?: Partial<SettingsDocumentV3["codeBackup"]>;
   agentArchive?: Partial<SettingsDocumentV3["agentArchive"]>;
 }
@@ -31,6 +34,8 @@ export interface SettingsDocumentScheduleOverrides {
   repositorySyncCron?: Readonly<Record<string, string>>;
   knowledgeCheckpointCron?: string;
   knowledgePushCron?: string;
+  personalDataCheckpointCron?: string;
+  personalDataPushCron?: string;
   codeCheckpointCron?: string;
   codePushCron?: string;
   agentArchiveExportCron?: string;
@@ -95,6 +100,35 @@ const DEFAULTS: SettingsDocumentV3 = {
   },
 };
 
+const DEFAULTS_V4: SettingsDocumentV4 = {
+  version: 4,
+  repositories: {},
+  github: {
+    verifiedSource: null,
+    account: null,
+    rest: null,
+    graphql: null,
+    lastVerifiedAt: null,
+  },
+  agent: {
+    defaultProvider: null,
+    defaultModel: null,
+    defaultReasoning: null,
+    retentionMinutes: 120,
+  },
+  personalDataBackup: {
+    automaticCheckpoint: false,
+    checkpointCron: DEFAULT_CRON,
+    automaticPush: false,
+    pushCron: DEFAULT_CRON,
+    sourceRef: "main",
+    remote: "origin",
+    remoteBranch: "loongboard-personal-data-backup",
+  },
+  codeBackup: DEFAULTS.codeBackup,
+  agentArchive: DEFAULTS.agentArchive,
+};
+
 /** Build a complete V3 document from installation defaults. */
 export function createDefaultSettingsDocument(
   options: SettingsDocumentDefaults = {},
@@ -127,6 +161,100 @@ export function migrateSettingsToV3(
     return migrateSettingsV2ToV3(source, options, schedules);
   }
   return migrateSettingsV1ToV3(source, options, schedules);
+}
+
+/** Build the complete durable V4 document consumed by the runtime. */
+export function createDefaultSettingsDocumentV4(
+  options: SettingsDocumentDefaults = {},
+): SettingsDocumentV4 {
+  return migrateSettingsToV4(undefined, options);
+}
+
+/**
+ * Migrate every supported durable input directly to Settings V4.  V2/V3
+ * shapes are accepted only here; callers that run the server receive the
+ * strict V4 result and never have to branch on a legacy field name.
+ */
+export function migrateSettingsToV4(
+  raw: unknown,
+  options: SettingsDocumentDefaults = {},
+  schedules: SettingsDocumentScheduleOverrides = {},
+): SettingsDocumentV4 {
+  if (raw !== undefined && !isRecord(raw)) {
+    throw new Error("settings.json must contain an object");
+  }
+  const source = raw ?? {};
+  const version = source.version;
+  if (version !== undefined && version !== 1 && version !== 2 && version !== 3 && version !== 4) {
+    throw new Error(`Unsupported settings.json version: ${String(version)}`);
+  }
+  if (version === 4) {
+    return validateSettingsDocumentV4Crons(settingsDocumentV4Schema.parse(source));
+  }
+  const v3 = version === 3
+    ? settingsDocumentV3Schema.parse(source)
+    : version === 2
+      ? migrateSettingsV2ToV3(source, options, schedules)
+      : migrateSettingsV1ToV3(source, options, schedules);
+  const migrated = migrateSettingsV3ToV4(v3, options, schedules);
+  if (raw === undefined) {
+    // A missing document is a fresh V4 installation.  V1/V3 migration
+    // defaults intentionally retain the old knowledge branch for historical
+    // callers, so apply the canonical Personal Data defaults only here.
+    const personalDataDefaults = options.personalDataBackup ?? {};
+    const personalDataBackup = {
+      ...migrated.personalDataBackup,
+      ...Object.fromEntries(
+        Object.entries(personalDataDefaults).filter(([, value]) => value !== undefined),
+      ),
+      remoteBranch:
+        personalDataDefaults.remoteBranch ??
+        DEFAULTS_V4.personalDataBackup.remoteBranch,
+    };
+    return validateSettingsDocumentV4Crons(
+      settingsDocumentV4Schema.parse({ ...migrated, personalDataBackup }),
+    );
+  }
+  return migrated;
+}
+
+/** Convert the V3 knowledge-named policy to the canonical V4 policy. */
+export function migrateSettingsV3ToV4(
+  raw: SettingsDocumentV3,
+  options: SettingsDocumentDefaults = {},
+  schedules: SettingsDocumentScheduleOverrides = {},
+): SettingsDocumentV4 {
+  const source = settingsDocumentV3Schema.parse(raw);
+  const legacy = source.knowledgeBackup;
+  const personalDataBackup = {
+    // V3 is an existing user document.  Preserve every durable policy value;
+    // defaults are only for missing/absent documents, never for migration of
+    // a field that V3 already required.
+    automaticCheckpoint: legacy.autoCommit,
+    checkpointCron:
+      schedules.personalDataCheckpointCron ??
+      schedules.knowledgeCheckpointCron ??
+      legacy.checkpointCron,
+    automaticPush: legacy.autoPush,
+    pushCron:
+      schedules.personalDataPushCron ??
+      schedules.knowledgePushCron ??
+      legacy.pushCron,
+    sourceRef: legacy.sourceRef,
+    remote: legacy.remote,
+    remoteBranch: legacy.remoteBranch,
+  };
+  return validateSettingsDocumentV4Crons(
+    settingsDocumentV4Schema.parse({
+      version: 4,
+      repositories: source.repositories,
+      github: source.github,
+      agent: source.agent,
+      personalDataBackup,
+      codeBackup: source.codeBackup,
+      agentArchive: source.agentArchive,
+    }),
+  );
 }
 
 /** Migrate a strict V2 document, preferring persisted task projections. */
@@ -499,6 +627,34 @@ export function validateSettingsDocumentCrons(
     ] as const),
     ["knowledgeBackup.checkpointCron", document.knowledgeBackup.checkpointCron],
     ["knowledgeBackup.pushCron", document.knowledgeBackup.pushCron],
+    ["codeBackup.checkpointCron", document.codeBackup.checkpointCron],
+    ["codeBackup.pushCron", document.codeBackup.pushCron],
+    ["agentArchive.exportCron", document.agentArchive.exportCron],
+    ["agentArchive.pushCron", document.agentArchive.pushCron],
+  ] as const;
+  for (const [path, expression] of values) {
+    try {
+      validateCron(expression);
+    } catch (error) {
+      throw new Error(
+        `Invalid settings cron at ${path}: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+  return document;
+}
+
+/** Validate every user-configurable cadence in the canonical V4 document. */
+export function validateSettingsDocumentV4Crons(
+  document: SettingsDocumentV4,
+): SettingsDocumentV4 {
+  const values = [
+    ...Object.entries(document.repositories).map(([id, value]) => [
+      `repositories.${id}.syncCron`,
+      value.syncCron,
+    ] as const),
+    ["personalDataBackup.checkpointCron", document.personalDataBackup.checkpointCron],
+    ["personalDataBackup.pushCron", document.personalDataBackup.pushCron],
     ["codeBackup.checkpointCron", document.codeBackup.checkpointCron],
     ["codeBackup.pushCron", document.codeBackup.pushCron],
     ["agentArchive.exportCron", document.agentArchive.exportCron],

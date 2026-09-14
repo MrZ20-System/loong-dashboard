@@ -32,8 +32,8 @@ function task(action: string, repositoryId: string | null = null): ScheduledTask
 function state(): SystemActionState {
   return {
     checkpoint: {
-      autoCommit: false,
-      autoPush: false,
+      automaticCheckpoint: false,
+      automaticPush: false,
       remote: "origin",
       sourceRef: "main",
       remoteBranch: "knowledge-backup",
@@ -105,8 +105,8 @@ describe("system action registry", () => {
       "repository.sync",
       "repository.metadata-maintenance",
       "repository.worktrees.cleanup",
-      "knowledge.checkpoint",
-      "knowledge.push",
+      "personal-data.checkpoint",
+      "personal-data.push",
       "git.checkpoint",
       "git.push",
       "agent.archive.checkpoint",

@@ -49,8 +49,8 @@ describe("Knowledge checkpoint policy", () => {
     cleanups.push(() => controller.close());
 
     expect(controller.checkpointSettings()).toEqual({
-      autoCommit: true,
-      autoPush: false,
+      automaticCheckpoint: true,
+      automaticPush: false,
       remote: "origin",
       sourceRef: "release",
       remoteBranch: "knowledge-backup",

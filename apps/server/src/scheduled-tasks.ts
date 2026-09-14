@@ -33,8 +33,8 @@ export const SUPPORTED_SYSTEM_ACTIONS = [
   "repository.worktrees.cleanup",
   "git.checkpoint",
   "git.push",
-  "knowledge.checkpoint",
-  "knowledge.push",
+  "personal-data.checkpoint",
+  "personal-data.push",
   "agent.archive.checkpoint",
   "agent.archive.push",
 ] as const;

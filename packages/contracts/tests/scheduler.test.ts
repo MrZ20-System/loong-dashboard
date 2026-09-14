@@ -25,7 +25,7 @@ describe("scheduled task repository bindings", () => {
     expect(
       scheduledTaskCreateSchema.safeParse({
         ...common,
-        action: "knowledge.checkpoint",
+        action: "personal-data.checkpoint",
       }).success,
     ).toBe(true);
   });

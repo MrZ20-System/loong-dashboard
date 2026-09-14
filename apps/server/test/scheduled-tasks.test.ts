@@ -136,7 +136,7 @@ describe("scheduled task repository bindings", () => {
     const unbound = await app.inject({
       method: "POST",
       url: "/api/scheduled-tasks",
-      payload: { ...baseSystemTask, action: "knowledge.checkpoint" },
+      payload: { ...baseSystemTask, action: "personal-data.checkpoint" },
     });
     expect(unbound.statusCode).toBe(201);
     const unboundId = unbound.json().id as string;
@@ -177,7 +177,7 @@ describe("scheduled task repository bindings", () => {
       url: "/api/scheduled-tasks",
       payload: {
         ...baseSystemTask,
-        action: "knowledge.checkpoint",
+        action: "personal-data.checkpoint",
       },
     });
     expect(created.statusCode).toBe(201);
@@ -223,7 +223,7 @@ describe("scheduled task repository bindings", () => {
     const rejected = await app.inject({
       method: "PUT",
       url: `/api/scheduled-tasks/${taskId}`,
-      payload: { kind: "system", action: "knowledge.checkpoint" },
+      payload: { kind: "system", action: "personal-data.checkpoint" },
     });
     expect(rejected.statusCode).toBe(400);
     expect(rejected.json().error.message).toContain("managed by Settings");

@@ -222,7 +222,7 @@ describe("SchedulerEngine session lifecycle", () => {
       model: "system",
       reasoningEffort: "none",
       kind: "system",
-      action: "knowledge.checkpoint",
+      action: "personal-data.checkpoint",
       enabled: false,
     });
     let calls = 0;
@@ -236,7 +236,7 @@ describe("SchedulerEngine session lifecycle", () => {
         async executeSystem(context) {
           calls += 1;
           expect(context.task.id).toBe(task.id);
-          expect(context.task.action).toBe("knowledge.checkpoint");
+          expect(context.task.action).toBe("personal-data.checkpoint");
         },
       },
     });

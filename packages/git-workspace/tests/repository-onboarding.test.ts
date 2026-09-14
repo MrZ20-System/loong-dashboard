@@ -117,6 +117,55 @@ describe("RepositoryOnboardingGit", () => {
     expect(await git(target, ["remote", "get-url", "upstream"])).toBe("https://github.com/fixture/repo.git");
   });
 
+  it("installs into an empty target only after staged validation", async () => {
+    const { root, source, runner, input } = await fixture();
+    for (const directory of ["knowledge", "prompts", "skills"]) {
+      await mkdir(join(source, directory));
+      await writeFile(join(source, directory, ".keep"), "fixture\n");
+    }
+    await git(source, ["add", "knowledge", "prompts", "skills"]);
+    await git(source, ["commit", "-m", "layout"]);
+    const target = join(root, "managed", "empty-target");
+    await mkdir(target);
+    let validatedPath: string | undefined;
+    await expect(new RepositoryOnboardingGit({ runner }).clone(input(target), {
+      allowEmptyTarget: true,
+      validateStagedRepository: async (stagingPath) => {
+        validatedPath = stagingPath;
+        for (const directory of ["knowledge", "prompts", "skills"]) {
+          const entries = await readdir(join(stagingPath, directory));
+          expect(entries).toEqual([".keep"]);
+        }
+      },
+    })).resolves.toMatchObject({ action: "cloned", targetPath: target });
+    expect(validatedPath).toBeDefined();
+    expect(await readdir(join(target, "knowledge"))).toEqual([".keep"]);
+    expect(await readdir(join(target, "prompts"))).toEqual([".keep"]);
+    expect(await readdir(join(target, "skills"))).toEqual([".keep"]);
+
+    const failedTarget = join(root, "managed", "empty-target-failure");
+    await mkdir(failedTarget);
+    await expect(new RepositoryOnboardingGit({ runner }).clone(input(failedTarget), {
+      allowEmptyTarget: true,
+      validateStagedRepository: () => {
+        throw new Error("layout validation failed");
+      },
+    })).rejects.toMatchObject({ code: "clone_failed" });
+    expect(await readdir(failedTarget)).toEqual([]);
+
+    const failedInstallTarget = join(root, "managed", "empty-target-install-failure");
+    await mkdir(failedInstallTarget);
+    const failingInstallService = new RepositoryOnboardingGit({
+      runner,
+      renameEntry: async () => {
+        throw new Error("install failed");
+      },
+    });
+    await expect(failingInstallService.clone(input(failedInstallTarget), { allowEmptyTarget: true }))
+      .rejects.toMatchObject({ code: "clone_failed" });
+    expect(await readdir(failedInstallTarget)).toEqual([]);
+  });
+
   it("ensures an existing matching repository without overwriting it", async () => {
     const { root, input, runner } = await fixture();
     const target = join(root, "managed", "repo");

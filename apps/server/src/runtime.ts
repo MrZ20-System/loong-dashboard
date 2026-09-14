@@ -58,6 +58,7 @@ import { createSystemActionExecutor } from "./system-actions.js";
 import { createSystemScheduleProjector, SYSTEM_TASK_IDS } from "./system-schedules.js";
 import { createRuntimeSettingsAdapters } from "./runtime-settings-adapters.js";
 import { RepositoryOnboardingService } from "./repository-onboarding.js";
+import { PersonalDataService } from "./personal-data.js";
 
 export interface CreateServerRuntimeOptions {
   /** Use a prevalidated config in tests or an embedding process. */
@@ -91,6 +92,7 @@ export interface ServerRuntime {
   readonly auth: AuthService;
   readonly metadataMaintenance: MetadataMaintenanceService;
   readonly repositoryOnboarding: RepositoryOnboardingService;
+  readonly personalData: PersonalDataService;
 }
 
 /** Resolve the one SQLite path owned by the Server runtime. */
@@ -134,6 +136,11 @@ export function createServerRuntime(
     const credential = new GitHubCredentialService({
       filePath: join(config.runtime.statePath, "github-credential.json"),
       environment: options.environment ?? process.env,
+    });
+    const personalData = new PersonalDataService({
+      personalPath: config.personalData.path,
+      knowledgePath: config.knowledge.path,
+      credentialToken: () => credential.resolveToken(),
     });
     const auth = new AuthService({
       statePath: config.runtime.statePath,
@@ -203,6 +210,7 @@ export function createServerRuntime(
       agentSessionsPath: join(config.runtime.statePath, "agent-sessions"),
       worktreesPath: config.runtime.worktreesPath,
       knowledgePath: config.knowledge.path,
+      personalDataPath: config.personalData.path,
       domainWorkspaceRoot: systemRoot,
       worktreeSlotCapacity: runtimeSettingsAdapters.worktreeSlotCapacityResolver,
       defaults: {
@@ -219,6 +227,7 @@ export function createServerRuntime(
     const knowledge = new KnowledgeController({
       database,
       knowledgePath: config.knowledge.path,
+      repositoryPath: config.personalData.path,
       historyLimit: config.knowledge.historyLimit,
       chats: agentChat,
       checkpoint: config.knowledge.checkpoint,
@@ -270,6 +279,10 @@ export function createServerRuntime(
       agent: runtimeSettingsAdapters.agentBridge,
       repositorySchedules: runtimeBridges.repositorySchedules,
       worktrees: runtimeSettingsAdapters.worktreeBridge,
+      personalData: {
+        get: () => personalData.getStatus(),
+        getSync: () => personalData.getStatus(),
+      },
       checkpoint: runtimeBridges.checkpoint,
       codeBackup: runtimeBridges.codeBackup,
       agentArchive: runtimeBridges.agentArchive,
@@ -320,7 +333,7 @@ export function createServerRuntime(
       agentArchive: actionState.agentArchive,
     });
     runtimeSettingsAdapters.setCheckpointNextRunAt(
-      getScheduledTask(database, SYSTEM_TASK_IDS.knowledgeCheckpoint)?.nextRunAt ?? null,
+      getScheduledTask(database, SYSTEM_TASK_IDS.personalDataCheckpoint)?.nextRunAt ?? null,
     );
     metadataMaintenance.recoverInterruptedRuns();
     knowledge.start();
@@ -356,6 +369,7 @@ export function createServerRuntime(
         auth,
         metadataMaintenance,
         repositoryOnboarding,
+        personalData,
       },
       options.appOptions,
     );
@@ -396,6 +410,7 @@ export function createServerRuntime(
       auth,
       metadataMaintenance,
       repositoryOnboarding,
+      personalData,
     };
   } catch (error) {
     database.close();

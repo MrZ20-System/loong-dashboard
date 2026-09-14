@@ -5,6 +5,7 @@ import {
   knowledgeCheckpointSettingsSchema,
   settingsDocumentV2Schema,
   settingsDocumentV3Schema,
+  settingsDocumentV4Schema,
 } from "../src/index.js";
 
 const retention = {
@@ -113,10 +114,43 @@ const v3Document = {
   },
 };
 
+const v4Document = {
+  version: 4 as const,
+  repositories: v3Document.repositories,
+  github: v3Document.github,
+  agent: v3Document.agent,
+  personalDataBackup: {
+    automaticCheckpoint: false,
+    checkpointCron: "0 0 * * *",
+    automaticPush: false,
+    pushCron: "0 0 * * *",
+    sourceRef: "main",
+    remote: "origin",
+    remoteBranch: "loongboard-personal-data-backup",
+  },
+  codeBackup: v3Document.codeBackup,
+  agentArchive: v3Document.agentArchive,
+};
+
 describe("settings contracts", () => {
   it("accepts strict V2 migration input and strict V3 runtime policy", () => {
     expect(settingsDocumentV2Schema.parse(v2Document)).toEqual(v2Document);
     expect(settingsDocumentV3Schema.parse(v3Document)).toEqual(v3Document);
+  });
+
+  it("accepts only the canonical V4 Personal Data backup policy", () => {
+    expect(settingsDocumentV4Schema.parse(v4Document)).toEqual(v4Document);
+    expect(settingsDocumentV4Schema.safeParse({
+      ...v4Document,
+      knowledgeBackup: v3Document.knowledgeBackup,
+    }).success).toBe(false);
+    expect(settingsDocumentV4Schema.safeParse({
+      ...v4Document,
+      personalDataBackup: {
+        ...v4Document.personalDataBackup,
+        checkpointCron: null,
+      },
+    }).success).toBe(false);
   });
 
   it("rejects legacy cadence fields from V3 policy", () => {

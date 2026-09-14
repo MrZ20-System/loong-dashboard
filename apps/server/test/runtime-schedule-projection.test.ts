@@ -110,16 +110,19 @@ function fixture(): {
   const root = mkdtempSync(join(tmpdir(), "loongboard-runtime-projection-"));
   directories.push(root);
   const statePath = join(root, ".loong");
-  const knowledgePath = join(root, "knowledge");
+  const personalDataPath = join(root, "personal-data");
+  const knowledgePath = join(personalDataPath, "knowledge");
   const worktreesPath = join(root, "worktrees");
   const repositoryPath = join(root, "repository");
   mkdirSync(statePath, { recursive: true });
   mkdirSync(knowledgePath, { recursive: true });
+  mkdirSync(join(personalDataPath, "prompts"), { recursive: true });
+  mkdirSync(join(personalDataPath, "skills"), { recursive: true });
   mkdirSync(worktreesPath, { recursive: true });
   mkdirSync(repositoryPath, { recursive: true });
   writeFileSync(join(root, "settings.json"), `${JSON.stringify(settingsDocument(root))}\n`);
   const config = parseSystemConfig({
-    version: 2,
+    version: 3,
     timezone: "UTC",
     repositories: [{
       key: "repo",
@@ -130,6 +133,7 @@ function fixture(): {
       defaultBranch: "main",
       worktreeSlots: 1,
     }],
+    personalData: { path: personalDataPath },
     knowledge: {
       path: knowledgePath,
       inbox: "inbox",
@@ -203,8 +207,8 @@ describe("system schedule projection", () => {
     const { root, databasePath, config } = fixture();
     const database = openDatabase(databasePath);
     reconcileRepositories(database, config.repositories);
-    seedTask(database, "system_knowledge_checkpoint", "knowledge.checkpoint");
-    seedTask(database, "system_knowledge_push", "knowledge.push");
+    seedTask(database, "system_knowledge_checkpoint", "personal-data.checkpoint");
+    seedTask(database, "system_knowledge_push", "personal-data.push");
     seedTask(database, "system_code_checkpoint", "git.checkpoint");
     seedTask(database, "system_code_push", "git.push");
     seedTask(database, "system_agent_archive_checkpoint", "agent.archive.checkpoint");
@@ -217,6 +221,12 @@ describe("system schedule projection", () => {
       provider: emptyProvider(),
     });
     runtimes.push(runtime);
+
+    expect(runtime.personalData.getStatus()).toMatchObject({
+      path: config.personalData.path,
+      knowledgePath: config.knowledge.path,
+      available: true,
+    });
 
     expect(getScheduledTask(runtime.database, "system_repository_sync_repo")).toMatchObject({
       enabled: false,

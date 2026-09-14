@@ -68,8 +68,10 @@ export interface AgentChatDependencies {
   agentSessionsPath: string;
   /** Root that holds per-repository worktree pools (system/.worktrees). */
   worktreesPath: string;
-  /** Knowledge root used as the cwd for knowledge/general chats. */
+  /** Knowledge Markdown root used by Knowledge content services. */
   knowledgePath?: string;
+  /** Personal Data repository root used by general/knowledge Agent chats. */
+  personalDataPath?: string;
   /** System root used by Domain conversations to edit JSON/prompt files. */
   domainWorkspaceRoot?: string;
   /** Optional pool override (tests inject a gated/fake pool). */
@@ -128,6 +130,7 @@ export class AgentChatController {
       agentSessionsPath: dependencies.agentSessionsPath,
       worktreesPath: dependencies.worktreesPath,
       knowledgePath: dependencies.knowledgePath,
+      personalDataPath: dependencies.personalDataPath,
       domainWorkspaceRoot: dependencies.domainWorkspaceRoot,
       worktreeSlotCapacity: dependencies.worktreeSlotCapacity,
       defaults: dependencies.defaults,

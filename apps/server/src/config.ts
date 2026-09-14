@@ -13,6 +13,7 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { z } from "zod";
 
 import { atomicWrite } from "@loongboard/knowledge";
+import { isGitRepository } from "@loongboard/git-workspace";
 import { validateCron } from "@loongboard/scheduler";
 
 import { legacyIntervalToCron } from "./legacy-schedule-migration.js";
@@ -86,7 +87,7 @@ const baseSystemConfigV1Schema = z
 
 const checkpointCronSchema = z.string().trim().min(1);
 
-const baseSystemConfigSchema = z
+const baseSystemConfigV2Schema = z
   .object({
     version: z.literal(2),
     timezone: z.string().trim().min(1),
@@ -134,6 +135,65 @@ const baseSystemConfigSchema = z
         defaultModel: z.string().trim().min(1),
         defaultReasoningEffort: z.string().trim().min(1),
         // Zero retains an idle runtime until explicit stop or server shutdown.
+        idleProcessMinutes: z.number().int().nonnegative().default(120),
+      })
+      .strict(),
+  })
+  .strict();
+
+const personalDataSchema = z
+  .object({
+    /** Git repository root containing knowledge/, prompts/, and skills/. */
+    path: z.string().trim().min(1),
+  })
+  .strict();
+
+const baseSystemConfigSchema = z
+  .object({
+    version: z.literal(3),
+    timezone: z.string().trim().min(1),
+    repositories: z.array(repositorySchema),
+    personalData: personalDataSchema,
+    knowledge: z
+      .object({
+        path: z.string().trim().min(1),
+        inbox: z
+          .string()
+          .trim()
+          .min(1)
+          .refine((path) => !isAbsolute(path), {
+            message: "knowledge.inbox must be relative to knowledge.path",
+          }),
+        historyLimit: z.number().int().positive(),
+        checkpoint: z
+          .object({
+            autoCommit: z.boolean().optional().default(false),
+            autoPush: z.boolean().optional().default(false),
+            remote: z.string().trim().min(1).optional().default("origin"),
+            sourceRef: z.string().trim().min(1).optional().default("main"),
+            remoteBranch: z.string().trim().min(1).optional().default("loongboard-knowledge-backup"),
+            checkpointCron: checkpointCronSchema.optional().default("0 0 * * *"),
+            pushCron: checkpointCronSchema.optional().default("0 0 * * *"),
+          })
+          .strict()
+          .optional(),
+      })
+      .strict(),
+    runtime: z
+      .object({
+        statePath: z.string().trim().min(1),
+        worktreesPath: z.string().trim().min(1),
+        /** Managed root for repositories added from Settings. */
+        repositoriesPath: z.string().trim().min(1).optional().default("./repositories"),
+        serverHost: z.string().trim().min(1),
+        serverPort: z.number().int().min(1).max(65_535),
+      })
+      .strict(),
+    agent: z
+      .object({
+        defaultProvider: z.string().trim().min(1),
+        defaultModel: z.string().trim().min(1),
+        defaultReasoningEffort: z.string().trim().min(1),
         idleProcessMinutes: z.number().int().nonnegative().default(120),
       })
       .strict(),
@@ -237,13 +297,121 @@ function resolveKnowledgeInbox(
   return inboxPath;
 }
 
-/** Convert a V1 system.yaml object into the complete V2 shape. */
+function isStrictDescendant(parent: string, child: string): boolean {
+  const relativePath = relative(resolve(parent), resolve(child));
+  return (
+    relativePath.length > 0 &&
+    relativePath !== ".." &&
+    !relativePath.startsWith(`..${sep}`) &&
+    !isAbsolute(relativePath)
+  );
+}
+
+function assertLegacyPersonalDataLayout(
+  legacyRoot: string,
+  configPath: string,
+): void {
+  const requiredDirectories = ["knowledge", "prompts", "skills"];
+  if (!isGitRepository(legacyRoot)) {
+    throw new Error(
+      `System configuration migration requires manual Personal Data migration at ${configPath}: ` +
+        `legacy knowledge.path must be a Git repository (${legacyRoot})`,
+    );
+  }
+  const missing = requiredDirectories.filter((directory) => {
+    const path = join(legacyRoot, directory);
+    try {
+      return !existsSync(path) || !lstatSync(path).isDirectory();
+    } catch {
+      return true;
+    }
+  });
+  if (missing.length > 0) {
+    throw new Error(
+      `System configuration migration requires manual Personal Data migration at ${configPath}: ` +
+        `Git repository ${legacyRoot} must contain directories ${requiredDirectories
+          .map((directory) => `${directory}/`)
+          .join(", ")}; missing ${missing.map((directory) => `${directory}/`).join(", ")}`,
+    );
+  }
+}
+
+function canonicalizeLegacySystemConfig(
+  source: z.infer<typeof baseSystemConfigV1Schema> | z.infer<typeof baseSystemConfigV2Schema>,
+): Record<string, unknown> {
+  const checkpoint = source.knowledge.checkpoint;
+  const canonicalCheckpoint = checkpoint === undefined
+    ? undefined
+    : "checkpointIntervalMinutes" in checkpoint
+      ? {
+          autoCommit: checkpoint.autoCommit,
+          autoPush: checkpoint.autoPush,
+          remote: checkpoint.remote,
+          sourceRef: checkpoint.sourceRef ?? "main",
+          remoteBranch: checkpoint.remoteBranch,
+          checkpointCron: legacyIntervalToCronOrDefault(checkpoint.checkpointIntervalMinutes),
+          pushCron: legacyIntervalToCronOrDefault(checkpoint.pushIntervalMinutes),
+        }
+      : {
+          autoCommit: checkpoint.autoCommit,
+          autoPush: checkpoint.autoPush,
+          remote: checkpoint.remote,
+          sourceRef: checkpoint.sourceRef,
+          remoteBranch: checkpoint.remoteBranch,
+          checkpointCron: (checkpoint as { checkpointCron: string }).checkpointCron,
+          pushCron: (checkpoint as { pushCron: string }).pushCron,
+        };
+  return {
+    ...source,
+    version: 3,
+    personalData: { path: source.knowledge.path },
+    knowledge: {
+      ...source.knowledge,
+      path: join(source.knowledge.path, "knowledge"),
+      ...(canonicalCheckpoint === undefined ? {} : { checkpoint: canonicalCheckpoint }),
+    },
+  };
+}
+
+/** Convert a legacy V1 system.yaml object directly into canonical V3. */
+export function migrateSystemConfigV1ToV3(
+  raw: unknown,
+  configPath?: string,
+): unknown {
+  const source = baseSystemConfigV1Schema.parse(raw);
+  const migrated = canonicalizeLegacySystemConfig(source);
+  if (configPath !== undefined) {
+    parseSystemConfig(migrated, configPath);
+    assertLegacyPersonalDataLayout(
+      resolveConfiguredPath(dirname(resolve(configPath)), source.knowledge.path),
+      configPath,
+    );
+  }
+  return migrated;
+}
+
+/** Convert a legacy V2 system.yaml object directly into canonical V3. */
+export function migrateSystemConfigV2ToV3(
+  raw: unknown,
+  configPath?: string,
+): unknown {
+  const source = baseSystemConfigV2Schema.parse(raw);
+  const migrated = canonicalizeLegacySystemConfig(source);
+  if (configPath !== undefined) {
+    parseSystemConfig(migrated, configPath);
+    assertLegacyPersonalDataLayout(
+      resolveConfiguredPath(dirname(resolve(configPath)), source.knowledge.path),
+      configPath,
+    );
+  }
+  return migrated;
+}
+
+/** Migration-only compatibility helper for callers from the V1/V2 release. */
 export function migrateSystemConfigV1ToV2(raw: unknown): unknown {
   const source = baseSystemConfigV1Schema.parse(raw);
   const legacy = source.knowledge.checkpoint;
-  if (legacy === undefined) {
-    return { ...source, version: 2 };
-  }
+  if (legacy === undefined) return { ...source, version: 2 };
   return {
     ...source,
     version: 2,
@@ -255,9 +423,7 @@ export function migrateSystemConfigV1ToV2(raw: unknown): unknown {
         remote: legacy.remote,
         sourceRef: legacy.sourceRef ?? "main",
         remoteBranch: legacy.remoteBranch,
-        checkpointCron: legacyIntervalToCronOrDefault(
-          legacy.checkpointIntervalMinutes,
-        ),
+        checkpointCron: legacyIntervalToCronOrDefault(legacy.checkpointIntervalMinutes),
         pushCron: legacyIntervalToCronOrDefault(legacy.pushIntervalMinutes),
       },
     },
@@ -270,17 +436,18 @@ function legacyIntervalToCronOrDefault(value: number | null | undefined): string
     : legacyIntervalToCron(value);
 }
 
-/** Persist a validated V1->V2 migration with a recoverable source backup. */
+/** Persist a validated legacy migration with a recoverable source backup. */
 function persistSystemConfigMigration(
   configPath: string,
   migrated: unknown,
+  sourceVersion: 1 | 2,
 ): void {
   const absolutePath = resolve(configPath);
   const stat = lstatSync(absolutePath);
   if (!stat.isFile()) {
     throw new Error(`System configuration is not a regular file: ${absolutePath}`);
   }
-  const backupPath = `${absolutePath}.v1.bak`;
+  const backupPath = `${absolutePath}.v${sourceVersion}.bak`;
   copyFileSync(absolutePath, backupPath);
   atomicWrite(absolutePath, stringifyYaml(migrated, { indent: 2 }));
 }
@@ -298,13 +465,26 @@ export function parseSystemConfig(
   }
 
   const configDirectory = dirname(resolve(configPath));
+  const personalDataPath = resolveConfiguredPath(
+    configDirectory,
+    parsed.data.personalData.path,
+  );
   const knowledgePath = resolveConfiguredPath(
     configDirectory,
     parsed.data.knowledge.path,
   );
+  if (!isStrictDescendant(personalDataPath, knowledgePath)) {
+    throw new Error(
+      `Invalid system configuration at ${configPath}: knowledge.path must be a strict descendant of personalData.path`,
+    );
+  }
 
   return {
     ...parsed.data,
+    personalData: {
+      ...parsed.data.personalData,
+      path: personalDataPath,
+    },
     repositories: parsed.data.repositories.map((repository) => ({
       ...repository,
       path: resolveConfiguredPath(configDirectory, repository.path),
@@ -354,10 +534,14 @@ export function loadSystemConfig(
 
   const version = isRecord(input) ? input.version : undefined;
   const migratedInput = version === 1
-    ? migrateSystemConfigV1ToV2(input)
-    : input;
+    ? migrateSystemConfigV1ToV3(input, absoluteConfigPath)
+    : version === 2
+      ? migrateSystemConfigV2ToV3(input, absoluteConfigPath)
+      : input;
   const config = parseSystemConfig(migratedInput, absoluteConfigPath);
-  if (version === 1) persistSystemConfigMigration(absoluteConfigPath, migratedInput);
+  if (version === 1 || version === 2) {
+    persistSystemConfigMigration(absoluteConfigPath, migratedInput, version);
+  }
   return environment === undefined
     ? config
     : applyRuntimeEnvironmentOverrides(config, environment);

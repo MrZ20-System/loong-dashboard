@@ -23,7 +23,14 @@ type ConfiguredRepository = SystemConfig["repositories"][number];
 type ScheduleRepository = ConfiguredRepository | RepositoryRecord;
 
 export const SYSTEM_TASK_IDS = {
+  // Keep the historical ids so scheduled run history remains attached to
+  // the same task rows while the action namespace reflects the whole data
+  // repository rather than only its knowledge subtree.
+  personalDataCheckpoint: "system_knowledge_checkpoint",
+  personalDataPush: "system_knowledge_push",
+  /** @deprecated Migration/test compatibility; runtime uses personalData*. */
   knowledgeCheckpoint: "system_knowledge_checkpoint",
+  /** @deprecated Migration/test compatibility; runtime uses personalData*. */
   knowledgePush: "system_knowledge_push",
   codeCheckpoint: "system_code_checkpoint",
   codePush: "system_code_push",
@@ -44,8 +51,12 @@ export interface RepositorySchedulePolicy {
 }
 
 export interface KnowledgeSchedulePolicy {
-  autoCommit: boolean;
-  autoPush: boolean;
+  automaticCheckpoint?: boolean;
+  automaticPush?: boolean;
+  /** @deprecated HTTP/test compatibility; runtime uses automaticCheckpoint. */
+  autoCommit?: boolean;
+  /** @deprecated HTTP/test compatibility; runtime uses automaticPush. */
+  autoPush?: boolean;
   remote: string;
   sourceRef: string;
   remoteBranch: string;
@@ -224,60 +235,62 @@ export function createSystemScheduleProjector(options: {
   const projectKnowledge = (
     settings: KnowledgeSchedulePolicy,
   ): { checkpoint: ScheduledTaskRow; push: ScheduledTaskRow } => {
-    const checkpointTaskId = SYSTEM_TASK_IDS.knowledgeCheckpoint;
+    const automaticCheckpoint = settings.automaticCheckpoint ?? settings.autoCommit ?? false;
+    const automaticPush = settings.automaticPush ?? settings.autoPush ?? false;
+    const checkpointTaskId = SYSTEM_TASK_IDS.personalDataCheckpoint;
     const existingCheckpoint = getScheduledTask(options.database, checkpointTaskId);
     if (
       existingCheckpoint !== null &&
-      (existingCheckpoint.kind !== "system" || existingCheckpoint.action !== "knowledge.checkpoint")
+      (existingCheckpoint.kind !== "system" || existingCheckpoint.action !== "personal-data.checkpoint")
     ) {
       throw new Error(`System task id is already used: ${checkpointTaskId}`);
     }
     const checkpoint = existingCheckpoint === null
       ? createScheduledTask(options.database, {
           id: checkpointTaskId,
-          name: "Knowledge checkpoint",
+          name: "Personal Data checkpoint",
           cronExpression: settings.checkpointCron,
           timezone: options.config.timezone,
           kind: "system",
-          action: "knowledge.checkpoint",
+          action: "personal-data.checkpoint",
           repositoryId: null,
-          enabled: settings.autoCommit,
+          enabled: automaticCheckpoint,
         })
         : updateScheduledTask(options.database, existingCheckpoint.id, {
           cronExpression: settings.checkpointCron,
-          enabled: settings.autoCommit,
+          enabled: automaticCheckpoint,
           timezone: options.config.timezone,
           kind: "system",
-          action: "knowledge.checkpoint",
+          action: "personal-data.checkpoint",
           repositoryId: null,
         });
     options.scheduler.refresh(checkpoint.id);
 
-    const pushTaskId = SYSTEM_TASK_IDS.knowledgePush;
+    const pushTaskId = SYSTEM_TASK_IDS.personalDataPush;
     const existingPush = getScheduledTask(options.database, pushTaskId);
     if (
       existingPush !== null &&
-      (existingPush.kind !== "system" || existingPush.action !== "knowledge.push")
+      (existingPush.kind !== "system" || existingPush.action !== "personal-data.push")
     ) {
       throw new Error(`System task id is already used: ${pushTaskId}`);
     }
     const push = existingPush === null
       ? createScheduledTask(options.database, {
           id: pushTaskId,
-          name: "Knowledge push",
+          name: "Personal Data push",
           cronExpression: settings.pushCron,
           timezone: options.config.timezone,
           kind: "system",
-          action: "knowledge.push",
+          action: "personal-data.push",
           repositoryId: null,
-          enabled: settings.autoPush,
+          enabled: automaticPush,
         })
         : updateScheduledTask(options.database, existingPush.id, {
           cronExpression: settings.pushCron,
-          enabled: settings.autoPush,
+          enabled: automaticPush,
           timezone: options.config.timezone,
           kind: "system",
-          action: "knowledge.push",
+          action: "personal-data.push",
           repositoryId: null,
         });
     options.scheduler.refresh(push.id);

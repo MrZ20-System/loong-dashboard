@@ -15,8 +15,8 @@ export const scheduledSystemActionSchema = z.enum([
   "repository.worktrees.cleanup",
   "git.checkpoint",
   "git.push",
-  "knowledge.checkpoint",
-  "knowledge.push",
+  "personal-data.checkpoint",
+  "personal-data.push",
   "agent.archive.checkpoint",
   "agent.archive.push",
 ]);

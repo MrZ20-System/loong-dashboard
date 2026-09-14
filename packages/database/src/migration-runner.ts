@@ -16,6 +16,7 @@ import { agentSessionTitleSourceMigration } from "./migrations/013-agent-session
 import { phase1SchemaCanonicalizationMigration } from "./migrations/014-phase1-schema-canonicalization.js";
 import { retentionKindCanonicalizationMigration } from "./migrations/015-retention-kind-canonicalization.js";
 import { repositoryOnboardingMigration } from "./migrations/016_repository_onboarding.js";
+import { personalDataActionNamesMigration } from "./migrations/017_personal_data_action_names.js";
 import {
   recoverInterruptedSyncRuns,
   recoverInterruptedSyncStates,
@@ -44,6 +45,7 @@ const migrations: readonly Migration[] = [
   phase1SchemaCanonicalizationMigration,
   retentionKindCanonicalizationMigration,
   repositoryOnboardingMigration,
+  personalDataActionNamesMigration,
 ];
 
 function orderedMigrations(items: readonly Migration[]): readonly Migration[] {

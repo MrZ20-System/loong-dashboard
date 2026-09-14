@@ -80,7 +80,7 @@ describe("scheduled system actions", () => {
       cronExpression: "0 * * * *",
       timezone: "UTC",
       kind: "system",
-      action: "knowledge.checkpoint",
+      action: "personal-data.checkpoint",
       enabled: false,
     });
     expect(() =>
@@ -100,7 +100,7 @@ describe("scheduled system actions", () => {
       cronExpression: "0 * * * *",
       timezone: "UTC",
       kind: "system",
-      action: "knowledge.checkpoint",
+      action: "personal-data.checkpoint",
       repositoryId: "repo",
       enabled: false,
     });

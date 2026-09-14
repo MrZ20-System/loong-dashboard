@@ -160,7 +160,10 @@ describe("AgentArchiveExporter", () => {
     directories.push(root);
     const archivePath = join(root, "configured-archive");
     const defaultArchivePath = join(root, "agent-history");
-    mkdirSync(join(root, "knowledge"), { recursive: true });
+    const personalDataPath = join(root, "personal-data");
+    mkdirSync(join(personalDataPath, "knowledge"), { recursive: true });
+    mkdirSync(join(personalDataPath, "prompts"));
+    mkdirSync(join(personalDataPath, "skills"));
     mkdirSync(join(root, "worktrees"), { recursive: true });
     writeFileSync(
       join(root, "settings.json"),
@@ -168,10 +171,11 @@ describe("AgentArchiveExporter", () => {
       "utf8",
     );
     const config = parseSystemConfig({
-      version: 2,
+      version: 3,
       timezone: "UTC",
       repositories: [],
-      knowledge: { path: join(root, "knowledge"), inbox: "inbox", historyLimit: 10 },
+      personalData: { path: personalDataPath },
+      knowledge: { path: join(personalDataPath, "knowledge"), inbox: "inbox", historyLimit: 10 },
       runtime: {
         statePath: join(root, ".loong"),
         worktreesPath: join(root, "worktrees"),
@@ -207,13 +211,17 @@ describe("AgentArchiveExporter", () => {
   it("uses systemRoot/agent-history when no archive path is persisted", async () => {
     const root = mkdtempSync(join(tmpdir(), "loongboard-agent-archive-default-"));
     directories.push(root);
-    mkdirSync(join(root, "knowledge"), { recursive: true });
+    const personalDataPath = join(root, "personal-data");
+    mkdirSync(join(personalDataPath, "knowledge"), { recursive: true });
+    mkdirSync(join(personalDataPath, "prompts"));
+    mkdirSync(join(personalDataPath, "skills"));
     mkdirSync(join(root, "worktrees"), { recursive: true });
     const config = parseSystemConfig({
-      version: 2,
+      version: 3,
       timezone: "UTC",
       repositories: [],
-      knowledge: { path: join(root, "knowledge"), inbox: "inbox", historyLimit: 10 },
+      personalData: { path: personalDataPath },
+      knowledge: { path: join(personalDataPath, "knowledge"), inbox: "inbox", historyLimit: 10 },
       runtime: {
         statePath: join(root, ".loong"),
         worktreesPath: join(root, "worktrees"),

@@ -134,6 +134,16 @@ export {
   type RepositoryOnboardingStatus,
 } from "./repository-onboarding.js";
 export {
+  personalDataImportResponseSchema,
+  personalDataImportSchema,
+  personalDataInstructionTreeRefreshResponseSchema,
+  personalDataStatusSchema,
+  type PersonalDataImport,
+  type PersonalDataImportResponse,
+  type PersonalDataInstructionTreeRefreshResponse,
+  type PersonalDataStatus,
+} from "./personal-data.js";
+export {
   knowledgeAssetPathQuerySchema,
   knowledgeDocumentCreateSchema,
   knowledgeDocumentParamsSchema,
@@ -329,6 +339,10 @@ export {
   jsonSourceVersionsResponseSchema,
   knowledgeCheckpointSettingsSchema,
   knowledgeCheckpointSettingsUpdateSchema,
+  personalDataBackupSettingsSchema,
+  personalDataBackupSettingsUpdateSchema,
+  personalDataSettingsSchema,
+  personalDataSettingsUpdateSchema,
   providerSecretUpdateSchema,
   removedResponseSchema,
   repositorySettingsParamsSchema,
@@ -350,6 +364,8 @@ export {
   settingsDocumentV3KnowledgeBackupSchema,
   settingsDocumentV3RepositorySchema,
   settingsDocumentV3Schema,
+  settingsDocumentV4PersonalDataBackupSchema,
+  settingsDocumentV4Schema,
   worktreeMaintenanceErrorSchema,
   savedResponseSchema,
   settingsResponseSchema,
@@ -367,6 +383,8 @@ export {
   type JsonSourceVersionsResponse,
   type KnowledgeCheckpointSettings,
   type KnowledgeCheckpointSettingsUpdate,
+  type PersonalDataSettings,
+  type PersonalDataSettingsUpdate,
   type RepositorySettings,
   type RepositorySettingsUpdate,
   type RepositoryWorktreeSettings,
@@ -381,6 +399,8 @@ export {
   type SettingsDocumentV3CodeBackup,
   type SettingsDocumentV3KnowledgeBackup,
   type SettingsDocumentV3Repository,
+  type SettingsDocumentV4PersonalDataBackup,
+  type SettingsDocumentV4,
 } from "./settings.js";
 export {
   calendarDateSchema,

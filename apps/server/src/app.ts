@@ -34,6 +34,7 @@ import { registerAuthRoutes, isPublicApiPath } from "./routes/auth.js";
 import { registerMetadataRoutes } from "./routes/metadata.js";
 import { registerRepositoryRoutes } from "./routes/repositories.js";
 import { registerRepositoryOnboardingRoutes } from "./routes/repository-onboarding.js";
+import { registerPersonalDataRoutes } from "./routes/personal-data.js";
 import { registerSyncRoutes } from "./routes/sync.js";
 import {
   InvalidRequestError,
@@ -46,6 +47,7 @@ import {
 } from "./settings.js";
 import type { SyncCoordinator } from "./sync-coordinator.js";
 import type { RepositoryOnboardingService } from "./repository-onboarding.js";
+import type { PersonalDataService } from "./personal-data.js";
 import { IssueDetailService } from "./issue-detail-service.js";
 import { registerProductionStaticSite } from "./static-site.js";
 
@@ -72,6 +74,7 @@ export interface BuildProductionAppDependencies {
   auth: AuthService;
   metadataMaintenance: MetadataMaintenanceService;
   repositoryOnboarding: RepositoryOnboardingService;
+  personalData: PersonalDataService;
 }
 
 /** Lightweight dependency set intentionally limited to focused route tests. */
@@ -93,6 +96,7 @@ export interface BuildTestAppDependencies {
   auth?: AuthService;
   metadataMaintenance?: MetadataMaintenanceService;
   repositoryOnboarding?: RepositoryOnboardingService;
+  personalData?: PersonalDataService;
 }
 
 /** Fastify options shared by production and focused test app builders. */
@@ -182,6 +186,7 @@ interface RegisterRoutesDependencies {
   settings?: SettingsController;
   metadataMaintenance?: MetadataMaintenanceService;
   repositoryOnboarding?: RepositoryOnboardingService;
+  personalData?: PersonalDataService;
 }
 
 function configureAppShell(app: FastifyInstance, auth: AuthService): void {
@@ -226,6 +231,13 @@ function registerRoutes(
   if (dependencies.repositoryOnboarding !== undefined) {
     registerRepositoryOnboardingRoutes(app, {
       onboarding: dependencies.repositoryOnboarding,
+    });
+  }
+  if (dependencies.personalData !== undefined) {
+    registerPersonalDataRoutes(app, {
+      personalData: dependencies.personalData,
+      // SettingsController owns the combined status + backup policy GET.
+      registerStatusRoute: false,
     });
   }
   registerSyncRoutes(app, {
@@ -322,7 +334,10 @@ function errorResponse(error: unknown): {
                   code === "WORKTREE_POOL_EXHAUSTED" ||
                   code === "SCHEDULED_TASK_WORKSPACE_BUSY" ||
                   code === "REPOSITORY_ONBOARDING_CONFLICT" ||
-                  code === "REPOSITORY_ONBOARDING_FAILED"
+                  code === "REPOSITORY_ONBOARDING_FAILED" ||
+                  code === "PERSONAL_DATA_IMPORT_CONFLICT" ||
+                  code === "PERSONAL_DATA_IMPORT_FAILED" ||
+                  code === "PERSONAL_DATA_UNAVAILABLE"
                 ? 409
                 : 500;
   const message = requestErrorMessage(error, code);
@@ -343,6 +358,9 @@ function errorCode(error: unknown): ApiErrorCode {
   if (hasCode(error, "REPOSITORY_ONBOARDING_NOT_FOUND")) return "REPOSITORY_ONBOARDING_NOT_FOUND";
   if (hasCode(error, "REPOSITORY_ONBOARDING_CONFLICT")) return "REPOSITORY_ONBOARDING_CONFLICT";
   if (hasCode(error, "REPOSITORY_ONBOARDING_FAILED")) return "REPOSITORY_ONBOARDING_FAILED";
+  if (hasCode(error, "PERSONAL_DATA_IMPORT_CONFLICT")) return "PERSONAL_DATA_IMPORT_CONFLICT";
+  if (hasCode(error, "PERSONAL_DATA_IMPORT_FAILED")) return "PERSONAL_DATA_IMPORT_FAILED";
+  if (hasCode(error, "PERSONAL_DATA_UNAVAILABLE")) return "PERSONAL_DATA_UNAVAILABLE";
   if (hasCode(error, "DOMAIN_NOT_FOUND")) return "DOMAIN_NOT_FOUND";
   if (hasCode(error, "DOMAIN_VERSION_NOT_FOUND")) return "DOMAIN_VERSION_NOT_FOUND";
   if (hasCode(error, "DOMAIN_NAME_CONFLICT")) return "DOMAIN_NAME_CONFLICT";

@@ -21,6 +21,13 @@ export type {
 export { IssueDetailService } from "./issue-detail-service.js";
 export type { IssueDetailServiceOptions } from "./issue-detail-service.js";
 export {
+  PersonalDataImportConflictError,
+  PersonalDataImportError,
+  PersonalDataService,
+  PersonalDataUnavailableError,
+} from "./personal-data.js";
+export type { PersonalDataServiceOptions } from "./personal-data.js";
+export {
   MetadataMaintenanceClosedError,
   MetadataMaintenanceService,
 } from "./metadata-maintenance.js";

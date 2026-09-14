@@ -66,6 +66,8 @@ export interface AgentSessionServiceOptions {
   agentSessionsPath: string;
   worktreesPath: string;
   knowledgePath?: string;
+  /** Personal Data repository root for general and knowledge sessions. */
+  personalDataPath?: string;
   domainWorkspaceRoot?: string;
   worktreeSlotCapacity?: WorktreeSlotCapacityResolver;
   defaults: AgentRuntimeDefaults;
@@ -123,6 +125,7 @@ export class AgentSessionService {
   private readonly agentSessionsPath: string;
   private readonly worktreesPath: string;
   private readonly knowledgePath: string | undefined;
+  private readonly personalDataPath: string | undefined;
   private readonly domainWorkspaceRoot: string | undefined;
   private readonly worktreeSlotCapacity: WorktreeSlotCapacityResolver | undefined;
   private readonly defaults: AgentRuntimeDefaults;
@@ -140,6 +143,7 @@ export class AgentSessionService {
     this.agentSessionsPath = options.agentSessionsPath;
     this.worktreesPath = options.worktreesPath;
     this.knowledgePath = options.knowledgePath;
+    this.personalDataPath = options.personalDataPath;
     this.domainWorkspaceRoot = options.domainWorkspaceRoot;
     this.worktreeSlotCapacity = options.worktreeSlotCapacity;
     this.defaults = options.defaults;
@@ -275,7 +279,7 @@ export class AgentSessionService {
     const probeRoot = mkdtempSync(join(this.agentSessionsPath, "capability-"));
     const spec: AgentSessionSpec = {
       sessionId: `capability_${randomUUID().replace(/-/g, "")}`,
-      workspacePath: this.knowledgePath ?? process.cwd(),
+      workspacePath: this.personalDataPath ?? this.knowledgePath ?? process.cwd(),
       dshHomePath: join(probeRoot, "dsh-home"),
       provider: this.defaults.provider,
       model: this.defaults.model,
@@ -597,7 +601,7 @@ export class AgentSessionService {
       const repository = requireEnabledRepository(this.database, scope.repositoryId);
       return { path: repository.localPath };
     }
-    return { path: this.knowledgePath ?? process.cwd() };
+    return { path: this.personalDataPath ?? this.knowledgePath ?? process.cwd() };
   }
 }
 

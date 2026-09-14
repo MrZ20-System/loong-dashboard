@@ -1,4 +1,4 @@
-version: 2
+version: 3
 timezone: Asia/Shanghai
 
 repositories:
@@ -18,8 +18,11 @@ repositories:
     defaultBranch: main
     worktreeSlots: 10
 
+personalData:
+  path: ./personal-data
+
 knowledge:
-  path: ./knowledge
+  path: ./personal-data/knowledge
   inbox: inbox
   historyLimit: 10
   checkpoint:
@@ -27,7 +30,7 @@ knowledge:
     autoPush: false
     remote: origin
     sourceRef: main
-    remoteBranch: loongboard-knowledge-backup
+    remoteBranch: loongboard-personal-data-backup
     checkpointCron: "0 0 * * *"
     pushCron: "0 0 * * *"
 

@@ -35,8 +35,8 @@ import { CODE_BACKUP_UNAVAILABLE_MESSAGE } from "./settings.js";
 /** Runtime-only state updated by successful backup/checkpoint actions. */
 export interface SystemActionState {
   checkpoint: {
-    autoCommit: boolean;
-    autoPush: boolean;
+    automaticCheckpoint: boolean;
+    automaticPush: boolean;
     remote: string;
     sourceRef: string;
     remoteBranch: string;
@@ -71,8 +71,8 @@ export const SYSTEM_ACTIONS = [
   "repository.sync",
   "repository.metadata-maintenance",
   "repository.worktrees.cleanup",
-  "knowledge.checkpoint",
-  "knowledge.push",
+  "personal-data.checkpoint",
+  "personal-data.push",
   "git.checkpoint",
   "git.push",
   "agent.archive.checkpoint",
@@ -145,8 +145,8 @@ export function createSystemActionExecutor(
         fallbackSlots: repository.worktreeSlots,
       });
     }],
-    ["knowledge.checkpoint", async () => {
-      const result = await lock.run(options.config.knowledge.path, () =>
+    ["personal-data.checkpoint", async () => {
+      const result = await lock.run(options.config.personalData.path, () =>
         options.knowledge.runCheckpointNow({ push: false }),
       );
       if (result.error !== undefined) throw new Error(result.error);
@@ -156,8 +156,8 @@ export function createSystemActionExecutor(
         lastError: null,
       };
     }],
-    ["knowledge.push", async () => {
-      const result = await lock.run(options.config.knowledge.path, () =>
+    ["personal-data.push", async () => {
+      const result = await lock.run(options.config.personalData.path, () =>
         options.knowledge.runPushNow(),
       );
       if (result.error !== undefined) throw new Error(result.error);
@@ -213,7 +213,7 @@ export function createSystemActionExecutor(
           archivePath: state.archiveRepositoryPath,
           statePath: options.config.runtime.statePath,
           worktreesPath: options.config.runtime.worktreesPath,
-          knowledgePath: options.config.knowledge.path,
+          personalDataPath: options.config.personalData.path,
           codeRepositoryPath: options.codeRepositoryPath,
           create: false,
         });
@@ -243,7 +243,7 @@ export function createSystemActionExecutor(
           archivePath: state.archiveRepositoryPath,
           statePath: options.config.runtime.statePath,
           worktreesPath: options.config.runtime.worktreesPath,
-          knowledgePath: options.config.knowledge.path,
+          personalDataPath: options.config.personalData.path,
           codeRepositoryPath: options.codeRepositoryPath,
           create: false,
         });
@@ -316,7 +316,9 @@ export function validateAgentArchivePath(input: {
   archivePath: string;
   statePath: string;
   worktreesPath: string;
-  knowledgePath: string;
+  personalDataPath?: string;
+  /** @deprecated Use personalDataPath; retained for existing callers only. */
+  knowledgePath?: string;
   codeRepositoryPath: string;
   create: boolean;
 }): string {
@@ -327,7 +329,7 @@ export function validateAgentArchivePath(input: {
     join(input.statePath, "agent-sessions"),
     join(input.statePath, "provider-secrets"),
     input.worktreesPath,
-    input.knowledgePath,
+    input.personalDataPath ?? input.knowledgePath ?? "",
     input.codeRepositoryPath,
   ];
   if (forbiddenRoots.some((root) => {

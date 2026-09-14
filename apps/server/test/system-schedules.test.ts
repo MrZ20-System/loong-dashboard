@@ -32,15 +32,18 @@ function fixture() {
   const root = mkdtempSync(join(tmpdir(), "loongboard-system-schedules-"));
   directories.push(root);
   const statePath = join(root, ".loong");
+  const personalDataPath = root;
   const knowledgePath = join(root, "knowledge");
   const worktreesPath = join(root, "worktrees");
   const repositoryPath = join(root, "repository");
   mkdirSync(statePath, { recursive: true });
   mkdirSync(knowledgePath, { recursive: true });
+  mkdirSync(join(personalDataPath, "prompts"));
+  mkdirSync(join(personalDataPath, "skills"));
   mkdirSync(worktreesPath, { recursive: true });
   mkdirSync(repositoryPath, { recursive: true });
   const config = parseSystemConfig({
-    version: 2,
+    version: 3,
     timezone: "UTC",
     repositories: [{
       key: "repo",
@@ -51,6 +54,7 @@ function fixture() {
       defaultBranch: "main",
       worktreeSlots: 1,
     }],
+    personalData: { path: personalDataPath },
     knowledge: { path: knowledgePath, inbox: "inbox", historyLimit: 10 },
     runtime: {
       statePath,
@@ -89,8 +93,8 @@ const retention = {
 };
 
 const knowledge = {
-  autoCommit: false,
-  autoPush: false,
+  automaticCheckpoint: false,
+  automaticPush: false,
   remote: "origin",
   sourceRef: "main",
   remoteBranch: "knowledge-backup",
@@ -171,7 +175,7 @@ describe("system schedule projector", () => {
     expect(getScheduledTask(database, SYSTEM_TASK_IDS.knowledgePush)).toMatchObject({
       cronExpression: "0 */1 * * *",
       enabled: false,
-      action: "knowledge.push",
+      action: "personal-data.push",
       prompt: null,
       workspacePath: null,
       provider: null,
@@ -183,8 +187,8 @@ describe("system schedule projector", () => {
   it("clears accidental repository bindings from global system tasks", () => {
     const { config, database, projector } = fixture();
     const globalTasks = [
-      [SYSTEM_TASK_IDS.knowledgeCheckpoint, "knowledge.checkpoint"],
-      [SYSTEM_TASK_IDS.knowledgePush, "knowledge.push"],
+      [SYSTEM_TASK_IDS.personalDataCheckpoint, "personal-data.checkpoint"],
+      [SYSTEM_TASK_IDS.personalDataPush, "personal-data.push"],
       [SYSTEM_TASK_IDS.codeCheckpoint, "git.checkpoint"],
       [SYSTEM_TASK_IDS.codePush, "git.push"],
       [SYSTEM_TASK_IDS.agentArchiveCheckpoint, "agent.archive.checkpoint"],

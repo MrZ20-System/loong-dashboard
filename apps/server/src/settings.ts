@@ -27,13 +27,15 @@ import {
   githubTokenUpdateSchema,
   knowledgeCheckpointSettingsSchema,
   knowledgeCheckpointSettingsUpdateSchema,
+  personalDataSettingsSchema,
+  personalDataSettingsUpdateSchema,
   providerSecretUpdateSchema,
   repositorySettingsParamsSchema,
   repositorySettingsSchema,
   repositorySettingsUpdateSchema,
   savedResponseSchema,
   removedResponseSchema,
-  settingsDocumentV3Schema,
+  settingsDocumentV4Schema,
   type AgentRuntimeSettings,
   type AgentRuntimeSettingsUpdate,
   type AgentArchiveSettings,
@@ -43,10 +45,12 @@ import {
   type GitHubIntegration,
   type KnowledgeCheckpointSettings,
   type KnowledgeCheckpointSettingsUpdate,
+  type PersonalDataSettings,
+  type PersonalDataSettingsUpdate,
   type RepositorySettings,
   type RepositorySettingsUpdate,
   type RepositoryWorktreeSettings,
-  type SettingsDocumentV3,
+  type SettingsDocumentV4,
 } from "@loongboard/contracts";
 import {
   GitHubCredentialService,
@@ -57,7 +61,7 @@ import type { FastifyInstance } from "fastify";
 
 import { InvalidRequestError, parseRequest, sendParsed } from "./route-helpers.js";
 import {
-  migrateSettingsToV3,
+  migrateSettingsToV4,
   type SettingsDocumentScheduleOverrides,
   type SettingsDocumentDefaults,
 } from "./settings-document.js";
@@ -108,22 +112,39 @@ export type RepositoryWorktreeRuntime = Omit<
   "configuredSlots" | "idleCleanupTtlHours"
 >;
 
-/** Shared scheduler authority for the Knowledge-only checkpoint. */
-export interface KnowledgeCheckpointBridge {
+/** Shared scheduler authority for Personal Data checkpoint/push tasks. */
+export interface PersonalDataBackupBridge {
   get?: () =>
     | Promise<Partial<KnowledgeCheckpointRuntime> | null>
     | Partial<KnowledgeCheckpointRuntime>
     | null;
   update?: (
-    patch: KnowledgeCheckpointSettingsUpdate,
+    patch: PersonalDataSettingsUpdate,
   ) => Promise<Partial<KnowledgeCheckpointRuntime> | null> | Partial<KnowledgeCheckpointRuntime> | null;
   run?: () => Promise<void> | void;
   push?: () => Promise<void> | void;
 }
 
+/** @deprecated Use PersonalDataBackupBridge. Kept for embedders during V4 rollout. */
+export type KnowledgeCheckpointBridge = PersonalDataBackupBridge;
+
 export type KnowledgeCheckpointRuntime = Pick<
   KnowledgeCheckpointSettings,
   "nextRunAt" | "lastSuccessAt" | "lastError"
+>;
+
+/** Read-only status supplied by the Personal Data service/composition root. */
+export interface PersonalDataStatusBridge {
+  get?: () =>
+    | Promise<Partial<PersonalDataStatusRuntime> | null>
+    | Partial<PersonalDataStatusRuntime>
+    | null;
+  getSync?: () => Partial<PersonalDataStatusRuntime> | null;
+}
+
+export type PersonalDataStatusRuntime = Pick<
+  PersonalDataSettings,
+  "path" | "knowledgePath" | "instructionTreePath" | "available"
 >;
 
 /** Scheduler authority for the LoongBoard source repository backup tasks. */
@@ -177,7 +198,8 @@ export interface SettingsControllerOptions {
   agent?: AgentRuntimeSettingsBridge;
   repositorySchedules?: RepositorySettingsBridge;
   worktrees?: RepositoryWorktreeBridge;
-  checkpoint?: KnowledgeCheckpointBridge;
+  personalData?: PersonalDataStatusBridge;
+  checkpoint?: PersonalDataBackupBridge;
   codeBackup?: CodeBackupBridge;
   agentArchive?: AgentArchiveBridge;
   defaults?: {
@@ -213,7 +235,8 @@ export class SettingsController {
   private readonly agent: AgentRuntimeSettingsBridge | undefined;
   private readonly repositorySchedules: RepositorySettingsBridge | undefined;
   private readonly worktreeBridge: RepositoryWorktreeBridge | undefined;
-  private readonly checkpointBridge: KnowledgeCheckpointBridge | undefined;
+  private readonly personalDataBridge: PersonalDataStatusBridge | undefined;
+  private readonly checkpointBridge: PersonalDataBackupBridge | undefined;
   private readonly codeBackupBridge: CodeBackupBridge | undefined;
   private readonly agentArchiveBridge: AgentArchiveBridge | undefined;
   private readonly defaults: NonNullable<SettingsControllerOptions["defaults"]>;
@@ -237,6 +260,7 @@ export class SettingsController {
     this.agent = options.agent;
     this.repositorySchedules = options.repositorySchedules;
     this.worktreeBridge = options.worktrees;
+    this.personalDataBridge = options.personalData;
     this.checkpointBridge = options.checkpoint;
     this.codeBackupBridge = options.codeBackup;
     this.agentArchiveBridge = options.agentArchive;
@@ -267,12 +291,14 @@ export class SettingsController {
         defaultReasoning: this.defaults.defaultReasoning,
         retentionMinutes: this.defaults.retentionMinutes,
       },
-      knowledgeBackup: {
-        autoCommit: checkpoint.autoCommit,
-        autoPush: checkpoint.autoPush,
+      personalDataBackup: {
+        automaticCheckpoint: checkpoint.autoCommit,
+        automaticPush: checkpoint.autoPush,
         remote: checkpoint.remote,
         sourceRef: checkpoint.sourceRef,
-        remoteBranch: checkpoint.remoteBranch,
+        // A newly materialized V4 document starts on the Personal Data branch;
+        // an existing V3 document is migrated separately and keeps its branch.
+        remoteBranch: "loongboard-personal-data-backup",
         checkpointCron: checkpoint.checkpointCron,
         pushCron: checkpoint.pushCron,
       },
@@ -550,15 +576,76 @@ export class SettingsController {
     return secrets;
   }
 
-  async checkpointSettings(): Promise<KnowledgeCheckpointSettings> {
-    const stored = this.readDocument().knowledgeBackup;
+  /** Canonical V4 Personal Data settings projection used by the HTTP API. */
+  async personalDataSettings(): Promise<PersonalDataSettings> {
+    const status = {
+      ...fallbackPersonalDataStatus(this.systemRoot),
+      ...(await this.personalDataBridge?.get?.() ?? {}),
+    };
+    const stored = this.readDocument().personalDataBackup;
     const runtime = await this.checkpointBridge?.get?.();
-    return knowledgeCheckpointSettingsSchema.parse({
+    return personalDataSettingsSchema.parse({
+      ...status,
       ...stored,
       nextRunAt: runtime?.nextRunAt ?? null,
       lastSuccessAt: runtime?.lastSuccessAt ?? null,
       lastError: runtime?.lastError ?? null,
     });
+  }
+
+  /** Synchronous Personal Data projection used while composing runtime bridges. */
+  personalDataSettingsSync(): PersonalDataSettings {
+    const status = {
+      ...fallbackPersonalDataStatus(this.systemRoot),
+      ...(this.personalDataBridge?.getSync?.() ?? {}),
+    };
+    const stored = this.readDocument().personalDataBackup;
+    return personalDataSettingsSchema.parse({
+      ...status,
+      ...stored,
+      nextRunAt: null,
+      lastSuccessAt: null,
+      lastError: null,
+    });
+  }
+
+  /**
+   * Persist and project a canonical V4 Personal Data backup policy.  Status
+   * paths are deliberately ignored from the update schema and can only come
+   * from the server-side bridge.
+   */
+  async updatePersonalData(
+    patch: PersonalDataSettingsUpdate,
+  ): Promise<PersonalDataSettings> {
+    const validated = personalDataSettingsUpdateSchema.parse(patch);
+    if (validated.checkpointCron !== undefined) {
+      assertValidCron(validated.checkpointCron, "checkpointCron");
+    }
+    if (validated.pushCron !== undefined) {
+      assertValidCron(validated.pushCron, "pushCron");
+    }
+    const current = this.readDocument().personalDataBackup;
+    const nextPolicy = { ...current, ...validated };
+    this.updateDocument((document) => {
+      document.personalDataBackup = nextPolicy;
+    });
+    const runtime = await this.checkpointBridge?.update?.(validated);
+    const status = {
+      ...fallbackPersonalDataStatus(this.systemRoot),
+      ...(await this.personalDataBridge?.get?.() ?? {}),
+    };
+    return personalDataSettingsSchema.parse({
+      ...status,
+      ...nextPolicy,
+      nextRunAt: runtime?.nextRunAt ?? null,
+      lastSuccessAt: runtime?.lastSuccessAt ?? null,
+      lastError: runtime?.lastError ?? null,
+    });
+  }
+
+  /** @deprecated Use personalDataSettings; retained for old clients only. */
+  async checkpointSettings(): Promise<KnowledgeCheckpointSettings> {
+    return legacyKnowledgeCheckpointSettings(await this.personalDataSettings(), await this.checkpointBridge?.get?.());
   }
 
   async codeBackupSettings(): Promise<CodeBackupSettings> {
@@ -712,37 +799,39 @@ export class SettingsController {
 
   /** Synchronous seed used while composing the runtime before timers start. */
   checkpointSettingsSync(): KnowledgeCheckpointSettings {
-    const stored = this.readDocument().knowledgeBackup;
-    return knowledgeCheckpointSettingsSchema.parse({
-      ...stored,
-      nextRunAt: null,
-      lastSuccessAt: null,
-      lastError: null,
-    });
+    return legacyKnowledgeCheckpointSettings(this.personalDataSettingsSync());
   }
 
   async updateCheckpoint(
     patch: KnowledgeCheckpointSettingsUpdate,
   ): Promise<KnowledgeCheckpointSettings> {
     const validated = knowledgeCheckpointSettingsUpdateSchema.parse(patch);
-    if (validated.checkpointCron !== undefined) {
-      assertValidCron(validated.checkpointCron, "checkpointCron");
-    }
-    if (validated.pushCron !== undefined) {
-      assertValidCron(validated.pushCron, "pushCron");
-    }
-    const current = this.readDocument().knowledgeBackup;
-    const nextPolicy = { ...current, ...validated };
-    this.updateDocument((document) => {
-      document.knowledgeBackup = nextPolicy;
-    });
-    const runtime = await this.checkpointBridge?.update?.(validated);
-    return knowledgeCheckpointSettingsSchema.parse({
-      ...nextPolicy,
-      nextRunAt: runtime?.nextRunAt ?? null,
-      lastSuccessAt: runtime?.lastSuccessAt ?? null,
-      lastError: runtime?.lastError ?? null,
-    });
+    const canonical: PersonalDataSettingsUpdate = {
+      ...(validated.autoCommit === undefined
+        ? {}
+        : { automaticCheckpoint: validated.autoCommit }),
+      ...(validated.autoPush === undefined
+        ? {}
+        : { automaticPush: validated.autoPush }),
+      ...(validated.remote === undefined ? {} : { remote: validated.remote }),
+      ...(validated.sourceRef === undefined ? {} : { sourceRef: validated.sourceRef }),
+      ...(validated.remoteBranch === undefined
+        ? {}
+        : { remoteBranch: validated.remoteBranch }),
+      ...(validated.checkpointCron === undefined
+        ? {}
+        : { checkpointCron: validated.checkpointCron }),
+      ...(validated.pushCron === undefined ? {} : { pushCron: validated.pushCron }),
+    };
+    return legacyKnowledgeCheckpointSettings(await this.updatePersonalData(canonical));
+  }
+
+  async runPersonalDataCheckpoint(): Promise<{ accepted: true }> {
+    return this.runCheckpoint();
+  }
+
+  async pushPersonalData(): Promise<{ accepted: true }> {
+    return this.pushCheckpoint();
   }
 
   async runCheckpoint(): Promise<{ accepted: true }> {
@@ -807,8 +896,8 @@ export class SettingsController {
     }
     return {
       repositorySyncCron,
-      knowledgeCheckpointCron: cron(SYSTEM_TASK_IDS.knowledgeCheckpoint),
-      knowledgePushCron: cron(SYSTEM_TASK_IDS.knowledgePush),
+      personalDataCheckpointCron: cron(SYSTEM_TASK_IDS.personalDataCheckpoint),
+      personalDataPushCron: cron(SYSTEM_TASK_IDS.personalDataPush),
       codeCheckpointCron: cron(SYSTEM_TASK_IDS.codeCheckpoint),
       codePushCron: cron(SYSTEM_TASK_IDS.codePush),
       agentArchiveExportCron: cron(SYSTEM_TASK_IDS.agentArchiveCheckpoint),
@@ -816,9 +905,9 @@ export class SettingsController {
     };
   }
 
-  private readDocument(): SettingsDocumentV3 {
+  private readDocument(): SettingsDocumentV4 {
     if (!existsSync(this.settingsPath)) {
-      const document = migrateSettingsToV3(undefined, this.documentDefaults());
+      const document = migrateSettingsToV4(undefined, this.documentDefaults());
       ensureRegularTarget(this.settingsPath);
       atomicWrite(this.settingsPath, `${JSON.stringify(document, null, 2)}\n`);
       return document;
@@ -842,8 +931,8 @@ export class SettingsController {
           Object.keys(isRecord(decoded.repositories) ? decoded.repositories : {}),
         )
       : {};
-    let document = migrateSettingsToV3(decoded, this.documentDefaults(), schedules);
-    const migrated = decoded.version !== 3;
+    let document = migrateSettingsToV4(decoded, this.documentDefaults(), schedules);
+    const migrated = decoded.version !== 4;
     if (migrated) {
       ensureRegularTarget(this.settingsPath);
       atomicWrite(this.settingsPath, `${JSON.stringify(document, null, 2)}\n`);
@@ -853,7 +942,7 @@ export class SettingsController {
     let addedRepository = false;
     for (const repository of Object.keys(defaults.repositories ?? {})) {
       if (document.repositories[repository] !== undefined) continue;
-      const repositoryDocument = migrateSettingsToV3(
+      const repositoryDocument = migrateSettingsToV4(
         { version: 1, repositories: { [repository]: {} } },
         { repositories: { [repository]: defaults.repositories?.[repository] ?? {} } },
       );
@@ -867,17 +956,17 @@ export class SettingsController {
       addedRepository = true;
     }
     if (addedRepository) {
-      document = settingsDocumentV3Schema.parse(document);
+      document = settingsDocumentV4Schema.parse(document);
       ensureRegularTarget(this.settingsPath);
       atomicWrite(this.settingsPath, `${JSON.stringify(document, null, 2)}\n`);
     }
     return document;
   }
 
-  private updateDocument(mutator: (document: SettingsDocumentV3) => void): void {
+  private updateDocument(mutator: (document: SettingsDocumentV4) => void): void {
     const document = this.readDocument();
     mutator(document);
-    const validated = settingsDocumentV3Schema.parse(document);
+    const validated = settingsDocumentV4Schema.parse(document);
     ensureRegularTarget(this.settingsPath);
     atomicWrite(this.settingsPath, `${JSON.stringify(validated, null, 2)}\n`);
   }
@@ -936,6 +1025,25 @@ export function registerSettingsRoutes(
     return sendParsed(reply, 200, savedResponseSchema, await controller.saveProviderSecret(body.provider, body.secret));
   });
 
+  app.get("/api/settings/personal-data", async (_request, reply) => {
+    return sendParsed(reply, 200, personalDataSettingsSchema, await controller.personalDataSettings());
+  });
+
+  app.put("/api/settings/personal-data", async (request, reply) => {
+    const body = parseRequest(personalDataSettingsUpdateSchema, request.body);
+    return sendParsed(reply, 200, personalDataSettingsSchema, await controller.updatePersonalData(body));
+  });
+
+  app.post("/api/settings/personal-data/checkpoint", async (_request, reply) => {
+    await controller.runPersonalDataCheckpoint();
+    return sendParsed(reply, 200, savedResponseSchema, { saved: true });
+  });
+
+  app.post("/api/settings/personal-data/push", async (_request, reply) => {
+    await controller.pushPersonalData();
+    return sendParsed(reply, 200, savedResponseSchema, { saved: true });
+  });
+
   app.get("/api/settings/knowledge-checkpoint", async (_request, reply) => {
     return sendParsed(reply, 200, knowledgeCheckpointSettingsSchema, await controller.checkpointSettings());
   });
@@ -991,6 +1099,35 @@ export function registerSettingsRoutes(
   app.post("/api/settings/knowledge-checkpoint/push", async (_request, reply) => {
     await controller.pushCheckpoint();
     return sendParsed(reply, 200, savedResponseSchema, { saved: true });
+  });
+}
+
+function fallbackPersonalDataStatus(systemRoot: string): PersonalDataStatusRuntime {
+  const path = resolve(systemRoot, "personal-data");
+  const knowledgePath = resolve(path, "knowledge");
+  return {
+    path,
+    knowledgePath,
+    instructionTreePath: join(knowledgePath, "_loongboard", "instruction-tree.md"),
+    available: false,
+  };
+}
+
+function legacyKnowledgeCheckpointSettings(
+  settings: PersonalDataSettings,
+  runtime?: Partial<KnowledgeCheckpointRuntime> | null,
+): KnowledgeCheckpointSettings {
+  return knowledgeCheckpointSettingsSchema.parse({
+    autoCommit: settings.automaticCheckpoint,
+    autoPush: settings.automaticPush,
+    remote: settings.remote,
+    sourceRef: settings.sourceRef,
+    remoteBranch: settings.remoteBranch,
+    checkpointCron: settings.checkpointCron,
+    pushCron: settings.pushCron,
+    nextRunAt: runtime?.nextRunAt ?? settings.nextRunAt ?? null,
+    lastSuccessAt: runtime?.lastSuccessAt ?? settings.lastSuccessAt ?? null,
+    lastError: runtime?.lastError ?? settings.lastError ?? null,
   });
 }
 

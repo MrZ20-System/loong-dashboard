@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm, rename, writeFile, chmod, lstat, realpath, readdir, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, rename, writeFile, chmod, lstat, realpath, readdir, readFile, rmdir } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dirname, isAbsolute, relative, resolve, sep, join } from "node:path";
 
@@ -37,6 +37,10 @@ export interface RepositoryOnboardingInput {
 export interface RepositoryOnboardingOptions {
   readonly signal?: AbortSignal;
   readonly timeoutMs?: number;
+  /** Permit an existing directory only when it is still empty at install time. */
+  readonly allowEmptyTarget?: boolean;
+  /** Validate the private staging checkout before it is installed at targetPath. */
+  readonly validateStagedRepository?: (stagingPath: string) => void | Promise<void>;
 }
 
 interface FileIdentity {
@@ -406,6 +410,19 @@ export class RepositoryOnboardingGit {
     }
   }
 
+  /** Restore an initially empty caller-owned directory after an install error. */
+  private async restoreEmptyTarget(targetPath: string): Promise<void> {
+    try {
+      if (await targetState(targetPath) !== "missing") return;
+      const parent = dirname(targetPath);
+      const parentStat = await lstat(parent);
+      if (!parentStat.isDirectory() || parentStat.isSymbolicLink()) return;
+      await mkdir(targetPath);
+    } catch {
+      // Restoration is best effort and must never replace a concurrent target.
+    }
+  }
+
   private async inspectUnsafe(input: RepositoryOnboardingInput, options: RepositoryOnboardingOptions): Promise<RepositoryInspection> {
     validateInput(input);
     const location = await pathInsideManagedRoot(input, true);
@@ -450,11 +467,36 @@ export class RepositoryOnboardingGit {
     assertNotAborted(options.signal, location.target);
     const state = await targetState(location.target);
     if (state === "symlink") fail("unsafe_path", "Repository target must not be a symlink", location.target);
-    if (state === "existing") fail("target_exists", "Repository target already exists", location.target);
+    let emptyTargetIdentity: FileIdentity | undefined;
+    if (state === "existing") {
+      if (options.allowEmptyTarget !== true) {
+        fail("target_exists", "Repository target already exists", location.target);
+      }
+      let entries: string[];
+      try {
+        entries = await readdir(location.target);
+      } catch {
+        fail("target_exists", "Repository target could not be inspected", location.target);
+      }
+      if (entries.length > 0) {
+        fail("target_exists", "Repository target must be empty", location.target);
+      }
+      try {
+        // Keep an initially empty target in place until the staged clone has
+        // passed validation. This preserves the caller's directory when
+        // cloning or validation fails; it is removed only immediately before
+        // the no-replace install claim below.
+        emptyTargetIdentity = fileIdentity(await lstat(location.target));
+      } catch {
+        fail("target_exists", "Repository target changed before clone", location.target);
+      }
+    }
     const expected = expectedIdentity(input);
     let stagingRoot: string | undefined;
     let askpassPath: string | undefined;
     let installationClaim: InstallationClaim | undefined;
+    let removedEmptyTarget = false;
+    let installSucceeded = false;
     try {
       stagingRoot = await mkdtemp(join(dirname(location.target), ".loongboard-repository-"));
       const stagingRepo = join(stagingRoot, "repository");
@@ -496,11 +538,34 @@ export class RepositoryOnboardingGit {
       }
       await this.runner.runText(stagingRepo, ["show-ref", "--verify", "--quiet", `refs/remotes/${input.remoteName}/${input.defaultBranch}`], this.commandOptions(options));
       assertNotAborted(options.signal, location.target);
+      if (options.validateStagedRepository !== undefined) {
+        await options.validateStagedRepository(stagingRepo);
+      }
       // Node's rename replaces an existing directory on some platforms. Claim
       // the destination with mkdir immediately after the final lstat instead;
       // this is the portable no-replace invariant. The staged repository is
       // then moved entry-by-entry into the directory we exclusively created.
-      const finalState = await targetState(location.target);
+      let finalState = await targetState(location.target);
+      if (finalState === "existing" && emptyTargetIdentity !== undefined) {
+        let currentTarget: FileIdentity;
+        try {
+          currentTarget = fileIdentity(await lstat(location.target));
+          if (!sameObjectIdentity(currentTarget, emptyTargetIdentity)) {
+            fail("target_exists", "Repository target changed during clone", location.target);
+          }
+          if ((await readdir(location.target)).length !== 0) {
+            fail("target_exists", "Repository target changed during clone", location.target);
+          }
+          // Remove only the directory entry after the staged checkout has
+          // been validated. This is not recursive and cannot delete content.
+          await rmdir(location.target);
+          removedEmptyTarget = true;
+        } catch (error) {
+          if (error instanceof RepositoryOnboardingError) throw error;
+          fail("target_exists", "Repository target changed during clone", location.target);
+        }
+        finalState = await targetState(location.target);
+      }
       if (finalState !== "missing") fail("target_exists", "Repository target appeared during clone", location.target);
       try {
         await mkdir(location.target);
@@ -538,6 +603,7 @@ export class RepositoryOnboardingGit {
       }
       await rm(markerPath, { force: false });
       installationClaim = undefined;
+      installSucceeded = true;
       return { action: "cloned", ...resultBase(input, location.target) };
     } catch (error) {
       if (options.signal?.aborted === true) {
@@ -548,6 +614,9 @@ export class RepositoryOnboardingGit {
       throw new RepositoryOnboardingError("clone_failed", "Git repository clone failed", location.target);
     } finally {
       await this.cleanupOwnedTarget(installationClaim);
+      if (removedEmptyTarget && !installSucceeded) {
+        await this.restoreEmptyTarget(location.target);
+      }
       if (askpassPath !== undefined) await rm(askpassPath, { force: true }).catch(() => undefined);
       if (stagingRoot !== undefined) await rm(stagingRoot, { recursive: true, force: true }).catch(() => undefined);
     }

@@ -245,10 +245,56 @@ export const knowledgeCheckpointSettingsUpdateSchema = z
     message: "At least one setting must be provided",
   });
 
+/**
+ * Personal Data backup settings exposed by the Settings control center.
+ *
+ * `path`, `knowledgePath`, `instructionTreePath`, and `available` are
+ * read-only runtime status fields.  The remaining fields are the V4 durable
+ * policy projection; the server validates Cron syntax before it writes or
+ * projects a schedule.
+ */
+export const personalDataSettingsSchema = z
+  .object({
+    path: z.string().trim().min(1),
+    knowledgePath: z.string().trim().min(1),
+    instructionTreePath: z.string().trim().min(1),
+    available: z.boolean(),
+    automaticCheckpoint: z.boolean(),
+    checkpointCron: cronExpressionSchema,
+    automaticPush: z.boolean(),
+    pushCron: cronExpressionSchema,
+    sourceRef: z.string().trim().min(1),
+    remote: z.string().trim().min(1),
+    remoteBranch: z.string().trim().min(1),
+    nextRunAt: utcDateTimeSchema.nullable().optional(),
+    lastSuccessAt: utcDateTimeSchema.nullable().optional(),
+    lastError: z.string().nullable().optional(),
+  })
+  .strict();
+
+export const personalDataSettingsUpdateSchema = z
+  .object({
+    automaticCheckpoint: z.boolean().optional(),
+    checkpointCron: cronExpressionSchema.optional(),
+    automaticPush: z.boolean().optional(),
+    pushCron: cronExpressionSchema.optional(),
+    sourceRef: z.string().trim().min(1).optional(),
+    remote: z.string().trim().min(1).optional(),
+    remoteBranch: z.string().trim().min(1).optional(),
+  })
+  .strict()
+  .refine((value) => Object.values(value).some((field) => field !== undefined), {
+    message: "At least one setting must be provided",
+  });
+
+/** Explicit name for callers that deal with the durable backup policy. */
+export const personalDataBackupSettingsSchema = personalDataSettingsSchema;
+export const personalDataBackupSettingsUpdateSchema = personalDataSettingsUpdateSchema;
+
 export const codeBackupSettingsSchema = z
   .object({
     repositoryPath: z.string().trim().min(1),
-    /** Runtime-only probe result; never persisted in Settings V3. */
+    /** Runtime-only probe result; never persisted in Settings V4. */
     available: z.boolean(),
     automaticCheckpoint: z.boolean(),
     checkpointCron: cronExpressionSchema,
@@ -489,6 +535,37 @@ export const settingsDocumentV3Schema = z
   })
   .strict();
 
+/**
+ * Durable Personal Data backup policy.  V3 called this object
+ * `knowledgeBackup` and used the older `autoCommit`/`autoPush` names.  V4
+ * gives the policy the repository-wide name used by the runtime while the
+ * migration layer remains the only place that understands the old shape.
+ */
+export const settingsDocumentV4PersonalDataBackupSchema = z
+  .object({
+    automaticCheckpoint: z.boolean(),
+    checkpointCron: cronExpressionSchema,
+    automaticPush: z.boolean(),
+    pushCron: cronExpressionSchema,
+    sourceRef: z.string().trim().min(1),
+    remote: z.string().trim().min(1),
+    remoteBranch: z.string().trim().min(1),
+  })
+  .strict();
+
+/** Durable Settings V4 consumed by the running server. */
+export const settingsDocumentV4Schema = z
+  .object({
+    version: z.literal(4),
+    repositories: z.record(z.string(), settingsDocumentV3RepositorySchema),
+    github: settingsDocumentGithubSchema,
+    agent: settingsDocumentAgentSchema,
+    personalDataBackup: settingsDocumentV4PersonalDataBackupSchema,
+    codeBackup: settingsDocumentV3CodeBackupSchema,
+    agentArchive: settingsDocumentV3AgentArchiveSchema,
+  })
+  .strict();
+
 export const savedResponseSchema = z.object({ saved: z.literal(true) }).strict();
 export const removedResponseSchema = z.object({ removed: z.literal(true) }).strict();
 
@@ -514,8 +591,16 @@ export type KnowledgeCheckpointSettings = z.infer<
 export type KnowledgeCheckpointSettingsUpdate = z.infer<
   typeof knowledgeCheckpointSettingsUpdateSchema
 >;
+export type PersonalDataSettings = z.infer<typeof personalDataSettingsSchema>;
+export type PersonalDataSettingsUpdate = z.infer<
+  typeof personalDataSettingsUpdateSchema
+>;
 export type SettingsDocumentV2 = z.infer<typeof settingsDocumentV2Schema>;
 export type SettingsDocumentV3 = z.infer<typeof settingsDocumentV3Schema>;
+export type SettingsDocumentV4PersonalDataBackup = z.infer<
+  typeof settingsDocumentV4PersonalDataBackupSchema
+>;
+export type SettingsDocumentV4 = z.infer<typeof settingsDocumentV4Schema>;
 export type SettingsDocumentRepository = z.infer<
   typeof settingsDocumentRepositorySchema
 >;

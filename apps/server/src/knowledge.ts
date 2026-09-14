@@ -119,7 +119,11 @@ export class KnowledgeAssetNotFoundError extends Error {
 }
 
 export interface KnowledgeCheckpointOptions {
+  automaticCheckpoint?: boolean;
+  automaticPush?: boolean;
+  /** @deprecated Accepted only while adapting the legacy HTTP projection. */
   autoCommit?: boolean;
+  /** @deprecated Accepted only while adapting the legacy HTTP projection. */
   autoPush?: boolean;
   remote?: string;
   sourceRef?: string;
@@ -131,6 +135,8 @@ export interface KnowledgeCheckpointOptions {
 export interface KnowledgeControllerOptions {
   database: DatabaseClient;
   knowledgePath: string;
+  /** Git repository root used by checkpoint/push; content remains knowledgePath. */
+  repositoryPath?: string;
   /** Number of historical versions kept per document. */
   historyLimit?: number;
   /** Chat controller used for the default document chat. */
@@ -151,12 +157,13 @@ export interface KnowledgeControllerOptions {
 export class KnowledgeController {
   readonly database: DatabaseClient;
   private readonly knowledgePath: string;
+  private readonly repositoryPath: string;
   private readonly historyLimit: number;
   private readonly chats: AgentChatController;
   private readonly watch: typeof watch;
   private readonly checkpoint: {
-    autoCommit: boolean;
-    autoPush: boolean;
+    automaticCheckpoint: boolean;
+    automaticPush: boolean;
     remote: string;
     sourceRef: string;
     remoteBranch: string;
@@ -173,12 +180,15 @@ export class KnowledgeController {
   constructor(options: KnowledgeControllerOptions) {
     this.database = options.database;
     this.knowledgePath = options.knowledgePath;
+    this.repositoryPath = options.repositoryPath ?? options.knowledgePath;
     this.historyLimit = options.historyLimit ?? 10;
     this.chats = options.chats;
     this.watch = options.watch ?? watch;
     this.checkpoint = {
-      autoCommit: options.checkpoint?.autoCommit ?? false,
-      autoPush: options.checkpoint?.autoPush ?? false,
+      automaticCheckpoint:
+        options.checkpoint?.automaticCheckpoint ?? options.checkpoint?.autoCommit ?? false,
+      automaticPush:
+        options.checkpoint?.automaticPush ?? options.checkpoint?.autoPush ?? false,
       remote: options.checkpoint?.remote ?? "origin",
       sourceRef: options.checkpoint?.sourceRef ?? "main",
       remoteBranch: options.checkpoint?.remoteBranch ?? "loongboard-knowledge-backup",
@@ -201,8 +211,14 @@ export class KnowledgeController {
 
   /** Apply Settings changes to future manual and scheduled checkpoints. */
   updateCheckpoint(settings: KnowledgeCheckpointOptions): void {
-    if (settings.autoCommit !== undefined) this.checkpoint.autoCommit = settings.autoCommit;
-    if (settings.autoPush !== undefined) this.checkpoint.autoPush = settings.autoPush;
+    if (settings.automaticCheckpoint !== undefined) {
+      this.checkpoint.automaticCheckpoint = settings.automaticCheckpoint;
+    }
+    if (settings.automaticPush !== undefined) {
+      this.checkpoint.automaticPush = settings.automaticPush;
+    }
+    if (settings.autoCommit !== undefined) this.checkpoint.automaticCheckpoint = settings.autoCommit;
+    if (settings.autoPush !== undefined) this.checkpoint.automaticPush = settings.autoPush;
     if (settings.remote !== undefined) this.checkpoint.remote = settings.remote;
     if (settings.sourceRef !== undefined) this.checkpoint.sourceRef = settings.sourceRef;
     if (settings.remoteBranch !== undefined) this.checkpoint.remoteBranch = settings.remoteBranch;
@@ -213,8 +229,8 @@ export class KnowledgeController {
   /** Run the existing Knowledge checkpoint immediately; push is opt-in. */
   async runCheckpointNow(options: { push?: boolean } = {}): Promise<RunCheckpointResult> {
     return runCheckpoint({
-      repositoryPath: this.knowledgePath,
-      message: `chore(knowledge): checkpoint ${new Date().toISOString()}`,
+      repositoryPath: this.repositoryPath,
+      message: `chore(personal-data): checkpoint ${new Date().toISOString()}`,
       push: options.push ?? false,
       remote: this.checkpoint.remote,
       sourceRef: this.checkpoint.sourceRef,
@@ -225,7 +241,7 @@ export class KnowledgeController {
   /** Push the configured source ref without creating a checkpoint commit. */
   async runPushNow(): Promise<RunCheckpointResult> {
     const result = await pushBackupRef({
-      repositoryPath: this.knowledgePath,
+      repositoryPath: this.repositoryPath,
       remote: this.checkpoint.remote,
       sourceRef: this.checkpoint.sourceRef,
       remoteBranch: this.checkpoint.remoteBranch,

@@ -194,6 +194,7 @@ describe("database migrations", () => {
         { id: "014_phase1_schema_canonicalization" },
         { id: "015_retention_kind_canonicalization" },
         { id: "016_repository_onboarding" },
+        { id: "017_personal_data_action_names" },
       ]);
     } finally {
       database.close();
@@ -231,6 +232,7 @@ describe("database migrations", () => {
         expect.objectContaining({ id: "014_phase1_schema_canonicalization" }),
         expect.objectContaining({ id: "015_retention_kind_canonicalization" }),
         expect.objectContaining({ id: "016_repository_onboarding" }),
+        expect.objectContaining({ id: "017_personal_data_action_names" }),
       ]);
       expect(
         database
@@ -238,6 +240,65 @@ describe("database migrations", () => {
           .all()
           .some((row) => (row as { name: string }).name === "resume_after"),
       ).toBe(true);
+    } finally {
+      database.close();
+    }
+  });
+
+  it("renames Personal Data actions while retaining task ids and run history", () => {
+    const database = openDatabase(createDatabasePath());
+
+    try {
+      database
+        .prepare(
+          `INSERT INTO scheduled_tasks (
+             id, name, cron_expression, timezone, prompt, workspace_path,
+             provider, model, reasoning_effort, kind, action, repository_id,
+             enabled, next_run_at, created_at, updated_at
+           ) VALUES (?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, 'system', ?, NULL, 0, NULL, ?, ?)`,
+        )
+        .run(
+          "system_knowledge_checkpoint",
+          "Knowledge checkpoint",
+          "0 0 * * *",
+          "UTC",
+          "knowledge.checkpoint",
+          "2026-09-01T00:00:00.000Z",
+          "2026-09-01T00:00:00.000Z",
+        );
+      database
+        .prepare(
+          `INSERT INTO scheduled_task_runs (
+             id, task_id, scheduled_for, started_at, finished_at, status,
+             agent_session_id, error
+           ) VALUES (?, ?, ?, NULL, ?, 'completed', NULL, NULL)`,
+        )
+        .run(
+          "run_personal_data_history",
+          "system_knowledge_checkpoint",
+          "2026-09-02T00:00:00.000Z",
+          "2026-09-02T00:00:01.000Z",
+        );
+      database.prepare("DELETE FROM schema_migrations WHERE id = ?").run(
+        "017_personal_data_action_names",
+      );
+
+      runMigrations(database);
+
+      expect(
+        database
+          .prepare("SELECT id, action, name FROM scheduled_tasks WHERE id = ?")
+          .get("system_knowledge_checkpoint"),
+      ).toEqual({
+        id: "system_knowledge_checkpoint",
+        action: "personal-data.checkpoint",
+        name: "Personal Data checkpoint",
+      });
+      expect(
+        database
+          .prepare("SELECT task_id FROM scheduled_task_runs WHERE id = ?")
+          .get("run_personal_data_history"),
+      ).toEqual({ task_id: "system_knowledge_checkpoint" });
     } finally {
       database.close();
     }
@@ -1307,7 +1368,7 @@ describe("database migrations", () => {
         },
         {
           id: "task-knowledge-phase1",
-          name: "Knowledge task",
+          name: "Personal Data checkpoint",
           cron_expression: "0 11 * * *",
           timezone: "Asia/Shanghai",
           enabled: 1,
@@ -1316,7 +1377,7 @@ describe("database migrations", () => {
           created_at: "2026-09-04T00:00:00.000Z",
           updated_at: "2026-09-04T00:00:00.000Z",
           kind: "system",
-          action: "knowledge.checkpoint",
+          action: "personal-data.checkpoint",
           repository_id: null,
           prompt: null,
           workspace_path: null,

@@ -16,12 +16,14 @@ import {
   type DatabaseClient,
 } from "@loongboard/database";
 import {
-  settingsDocumentV3Schema,
+  personalDataSettingsSchema,
+  settingsDocumentV4Schema,
 } from "@loongboard/contracts";
 import { GitHubCredentialService } from "@loongboard/github";
+import Fastify from "fastify";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { SettingsController } from "../src/settings.js";
+import { registerSettingsRoutes, SettingsController } from "../src/settings.js";
 import { SYSTEM_TASK_IDS } from "../src/system-schedules.js";
 
 const fixtures: Array<{ database: DatabaseClient; root: string }> = [];
@@ -145,7 +147,7 @@ function addSystemTask(
 }
 
 describe("SettingsController", () => {
-  it("materializes a complete V3 document for a missing file", () => {
+  it("materializes a complete V4 document for a missing file", () => {
     const { root, statePath, database } = fixture();
     new SettingsController({
       database,
@@ -156,9 +158,9 @@ describe("SettingsController", () => {
     });
 
     const persisted = readSettings(root);
-    expect(settingsDocumentV3Schema.safeParse(persisted).success).toBe(true);
+    expect(settingsDocumentV4Schema.safeParse(persisted).success).toBe(true);
     expect(persisted).toMatchObject({
-      version: 3,
+      version: 4,
       repositories: {
         vllm: {
           automaticSync: false,
@@ -167,9 +169,12 @@ describe("SettingsController", () => {
           worktrees: { configuredSlots: 1, idleCleanupTtlHours: 24 },
         },
       },
-      knowledgeBackup: {
+      personalDataBackup: {
+        automaticCheckpoint: false,
+        automaticPush: false,
         checkpointCron: "0 0 * * *",
         pushCron: "0 0 * * *",
+        remoteBranch: "loongboard-personal-data-backup",
       },
       codeBackup: {
         checkpointCron: "0 0 * * *",
@@ -193,12 +198,12 @@ describe("SettingsController", () => {
     });
     addSystemTask(database, {
       id: SYSTEM_TASK_IDS.knowledgeCheckpoint,
-      action: "knowledge.checkpoint",
+      action: "personal-data.checkpoint",
       cronExpression: "17 * * * *",
     });
     addSystemTask(database, {
       id: SYSTEM_TASK_IDS.knowledgePush,
-      action: "knowledge.push",
+      action: "personal-data.push",
       cronExpression: "23 * * * *",
     });
     addSystemTask(database, {
@@ -231,11 +236,14 @@ describe("SettingsController", () => {
     });
 
     const persisted = readSettings(root);
-    expect(persisted.version).toBe(3);
+    expect(persisted.version).toBe(4);
     expect(persisted.repositories.vllm.syncCron).toBe("0 7 * * *");
-    expect(persisted.knowledgeBackup).toMatchObject({
+    expect(persisted.personalDataBackup).toMatchObject({
+      automaticCheckpoint: false,
+      automaticPush: false,
       checkpointCron: "17 * * * *",
       pushCron: "23 * * * *",
+      remoteBranch: "loongboard-knowledge-backup",
     });
     expect(persisted.codeBackup).toMatchObject({
       checkpointCron: "0 4 * * 1",
@@ -245,7 +253,7 @@ describe("SettingsController", () => {
       exportCron: "0 6 * * 1",
       pushCron: "0 8 * * 1",
     });
-    expect(settingsDocumentV3Schema.safeParse(persisted).success).toBe(true);
+    expect(settingsDocumentV4Schema.safeParse(persisted).success).toBe(true);
   });
 
   it("uses effective valid daily defaults when a disabled V2 cadence was null", () => {
@@ -259,10 +267,118 @@ describe("SettingsController", () => {
       credential: credential(statePath),
     });
     expect(readSettings(root)).toMatchObject({
-      knowledgeBackup: { checkpointCron: "0 0 * * *", pushCron: "0 0 * * *" },
+      personalDataBackup: { checkpointCron: "0 0 * * *", pushCron: "0 0 * * *" },
       codeBackup: { checkpointCron: "0 0 * * *", pushCron: "0 0 * * *" },
       agentArchive: { exportCron: "0 0 * * *", pushCron: "0 0 * * *" },
     });
+  });
+
+  it("projects and updates the canonical Personal Data policy without exposing legacy names", async () => {
+    const { root, statePath, database } = fixture();
+    const updates: Array<Record<string, unknown>> = [];
+    const personalPath = join(root, "personal-data");
+    const controller = new SettingsController({
+      database,
+      systemRoot: root,
+      statePath,
+      environment: {},
+      credential: credential(statePath),
+      personalData: {
+        get: () => ({
+          path: personalPath,
+          knowledgePath: join(personalPath, "knowledge"),
+          instructionTreePath: join(personalPath, "knowledge", "_loongboard", "instruction-tree.md"),
+          available: true,
+        }),
+        getSync: () => ({
+          path: personalPath,
+          knowledgePath: join(personalPath, "knowledge"),
+          instructionTreePath: join(personalPath, "knowledge", "_loongboard", "instruction-tree.md"),
+          available: true,
+        }),
+      },
+      checkpoint: {
+        update: (patch) => {
+          updates.push(patch);
+          return null;
+        },
+      },
+    });
+
+    const before = await controller.personalDataSettings();
+    expect(personalDataSettingsSchema.parse(before)).toEqual(before);
+    expect(before).toMatchObject({
+      path: personalPath,
+      knowledgePath: join(personalPath, "knowledge"),
+      available: true,
+      automaticCheckpoint: false,
+      automaticPush: false,
+    });
+
+    const after = await controller.updatePersonalData({
+      automaticCheckpoint: true,
+      checkpointCron: "0 */6 * * *",
+    });
+    expect(after).toMatchObject({
+      automaticCheckpoint: true,
+      checkpointCron: "0 */6 * * *",
+    });
+    expect(updates).toEqual([
+      { automaticCheckpoint: true, checkpointCron: "0 */6 * * *" },
+    ]);
+    expect(readSettings(root).personalDataBackup).toMatchObject({
+      automaticCheckpoint: true,
+      checkpointCron: "0 */6 * * *",
+    });
+    expect(readSettings(root).personalDataBackup).not.toHaveProperty("autoCommit");
+  });
+
+  it("registers canonical Personal Data GET, PUT, checkpoint, and push routes", async () => {
+    const { root, statePath, database } = fixture();
+    const requested: string[] = [];
+    const personalPath = join(root, "personal-data");
+    const controller = new SettingsController({
+      database,
+      systemRoot: root,
+      statePath,
+      environment: {},
+      credential: credential(statePath),
+      personalData: {
+        get: () => ({
+          path: personalPath,
+          knowledgePath: join(personalPath, "knowledge"),
+          instructionTreePath: join(personalPath, "knowledge", "_loongboard", "instruction-tree.md"),
+          available: true,
+        }),
+      },
+      checkpoint: {
+        update: () => null,
+        run: () => { requested.push("checkpoint"); },
+        push: () => { requested.push("push"); },
+      },
+    });
+    const app = Fastify();
+    registerSettingsRoutes(app, { controller });
+
+    const getResponse = await app.inject({ method: "GET", url: "/api/settings/personal-data" });
+    expect(getResponse.statusCode).toBe(200);
+    expect(personalDataSettingsSchema.safeParse(JSON.parse(getResponse.body)).success).toBe(true);
+
+    const putResponse = await app.inject({
+      method: "PUT",
+      url: "/api/settings/personal-data",
+      payload: { automaticPush: true, pushCron: "0 3 * * 1" },
+    });
+    expect(putResponse.statusCode).toBe(200);
+    expect(JSON.parse(putResponse.body)).toMatchObject({
+      automaticPush: true,
+      pushCron: "0 3 * * 1",
+      path: personalPath,
+    });
+    expect((await app.inject({ method: "POST", url: "/api/settings/personal-data/checkpoint" })).statusCode).toBe(200);
+    expect((await app.inject({ method: "POST", url: "/api/settings/personal-data/push" })).statusCode).toBe(200);
+    expect(requested).toEqual(["checkpoint", "push"]);
+    await app.close();
   });
 
   it("drops legacy runtime projections while migrating V1", () => {
@@ -294,22 +410,22 @@ describe("SettingsController", () => {
       credential: credential(statePath),
     });
     const persisted = readSettings(root);
-    expect(persisted.version).toBe(3);
+    expect(persisted.version).toBe(4);
     expect(persisted.unrelated).toBeUndefined();
     expect(persisted.repositories.vllm).toMatchObject({
       syncCron: "*/15 * * * *",
       worktrees: { configuredSlots: 2, idleCleanupTtlHours: 48 },
     });
-    expect(persisted.knowledgeBackup).toMatchObject({
+    expect(persisted.personalDataBackup).toMatchObject({
       checkpointCron: "*/15 * * * *",
       pushCron: "*/45 * * * *",
     });
     expect(persisted.repositories.vllm).not.toHaveProperty("nextSyncAt");
-    expect(persisted.knowledgeBackup).not.toHaveProperty("nextRunAt");
-    expect(settingsDocumentV3Schema.safeParse(persisted).success).toBe(true);
+    expect(persisted.personalDataBackup).not.toHaveProperty("nextRunAt");
+    expect(settingsDocumentV4Schema.safeParse(persisted).success).toBe(true);
   });
 
-  it("rejects invalid V3 input without overwriting the original file", () => {
+  it("rejects invalid V4 input without overwriting the original file", () => {
     const { root, statePath, database } = fixture();
     new SettingsController({
       database,
@@ -367,7 +483,7 @@ describe("SettingsController", () => {
     expect(readFileSync(join(root, "settings.json"), "utf8")).toBe(before);
   });
 
-  it("persists V3 Cron policy before projecting updates", async () => {
+  it("persists V4 Cron policy before projecting updates", async () => {
     const { root, statePath, database } = fixture();
     const observed: Array<Record<string, any>> = [];
     const observe = () => observed.push(readSettings(root));
@@ -389,16 +505,16 @@ describe("SettingsController", () => {
     await controller.updateAgentArchive({ enabled: true, exportCron: "0 6 * * *", automaticPush: true, pushCron: "0 7 * * *" });
 
     expect(observed).toHaveLength(4);
-    expect(observed.every((document) => document.version === 3)).toBe(true);
+    expect(observed.every((document) => document.version === 4)).toBe(true);
     expect(readSettings(root)).toMatchObject({
       repositories: { vllm: { automaticSync: true, syncCron: "*/15 * * * *" } },
-      knowledgeBackup: { checkpointCron: "0 */6 * * *", pushCron: "0 3 * * 1" },
+      personalDataBackup: { checkpointCron: "0 */6 * * *", pushCron: "0 3 * * 1" },
       codeBackup: { checkpointCron: "0 4 * * *", pushCron: "0 5 * * *" },
       agentArchive: { exportCron: "0 6 * * *", pushCron: "0 7 * * *" },
     });
   });
 
-  it("keeps runtime code backup availability out of the durable V3 document", async () => {
+  it("keeps runtime code backup availability out of the durable V4 document", async () => {
     const { root, statePath, database } = fixture();
     const runtimePath = join(root, "installed-loongboard");
     const controller = new SettingsController({
