@@ -6,6 +6,7 @@ import { execa } from "execa";
 import { describe, expect, it } from "vitest";
 
 import {
+  GitCommandError,
   RepositoryOnboardingError,
   RepositoryOnboardingGit,
   runGitText,
@@ -65,6 +66,46 @@ describe("RepositoryOnboardingGit", () => {
     await expect(service.clone(input(target))).resolves.toMatchObject({ action: "cloned", targetPath: target });
     await expect(service.adopt(input(target))).resolves.toMatchObject({ action: "adopted", targetPath: target });
     expect(await git(target, ["remote", "get-url", "upstream"])).toBe("https://github.com/fixture/repo.git");
+  });
+
+  it("classifies the real Git missing-default-branch clone error", async () => {
+    const { root, runner, input } = await fixture();
+    const target = join(root, "managed", "missing-branch");
+    const defaultBranch = "release/does-not-exist";
+
+    await expect(new RepositoryOnboardingGit({ runner }).clone({
+      ...input(target),
+      defaultBranch,
+    })).rejects.toMatchObject({
+      code: "default_branch_missing",
+      message: expect.stringContaining(`default branch "${defaultBranch}" does not exist`),
+    });
+    await expect(readdir(target)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("keeps an ordinary clone failure classified as clone_failed", async () => {
+    const { root, runner, input } = await fixture();
+    const target = join(root, "managed", "clone-failed");
+    const failingRunner: RepositoryGitRunner = {
+      async runText(cwd, args, options) {
+        if (args[0] === "clone") {
+          throw new GitCommandError(
+            cwd,
+            args,
+            128,
+            "fatal: unable to access 'https://github.com/fixture/repo.git/': Could not resolve host: github.com\n",
+          );
+        }
+        return runner.runText(cwd, args, options);
+      },
+    };
+
+    await expect(new RepositoryOnboardingGit({ runner: failingRunner }).clone(input(target)))
+      .rejects.toMatchObject({
+        code: "clone_failed",
+        message: expect.stringContaining("Git repository clone failed"),
+      });
+    await expect(readdir(target)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("creates an initially missing managed root for clone", async () => {

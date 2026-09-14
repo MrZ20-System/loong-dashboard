@@ -299,6 +299,39 @@ function mapGitFailure(
   fail(code, `Git ${operation} failed${exitCode}`, targetPath);
 }
 
+/**
+ * Git reports a missing `clone --branch` ref with a stable, narrow stderr
+ * sentence. Keep this classifier tied to GitCommandError and the requested
+ * branch so network, authentication, and other clone failures stay generic.
+ */
+function isMissingDefaultBranchCloneError(
+  error: unknown,
+  defaultBranch: string,
+): boolean {
+  if (!(error instanceof GitCommandError)) return false;
+  const escapedBranch = defaultBranch.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(
+    `(?:^|\\n)fatal:\\s*remote branch\\s+${escapedBranch}\\s+not found in upstream\\s+[^\\r\\n]+`,
+    "i",
+  ).test(error.stderr);
+}
+
+function mapCloneFailure(
+  input: RepositoryOnboardingInput,
+  targetPath: string,
+  error: unknown,
+  signal?: AbortSignal,
+): never {
+  if (isMissingDefaultBranchCloneError(error, input.defaultBranch)) {
+    fail(
+      "default_branch_missing",
+      `Git repository default branch "${input.defaultBranch}" does not exist on the remote`,
+      targetPath,
+    );
+  }
+  mapGitFailure("clone_failed", "repository clone", targetPath, error, signal);
+}
+
 function resultBase(input: RepositoryOnboardingInput, targetPath: string) {
   return {
     targetPath,
@@ -441,17 +474,21 @@ export class RepositoryOnboardingGit {
       } else {
         env = { GIT_TERMINAL_PROMPT: "0" };
       }
-      await this.runner.runText(dirname(stagingRepo), [
-        "clone",
-        "--filter=blob:none",
-        "--single-branch",
-        "--branch",
-        input.defaultBranch,
-        "--origin",
-        input.remoteName,
-        input.cloneUrl,
-        stagingRepo,
-      ], this.commandOptions(options, env));
+      try {
+        await this.runner.runText(dirname(stagingRepo), [
+          "clone",
+          "--filter=blob:none",
+          "--single-branch",
+          "--branch",
+          input.defaultBranch,
+          "--origin",
+          input.remoteName,
+          input.cloneUrl,
+          stagingRepo,
+        ], this.commandOptions(options, env));
+      } catch (error) {
+        mapCloneFailure(input, location.target, error, options.signal);
+      }
       assertNotAborted(options.signal, location.target);
       const clonedRemote = (await this.runner.runText(stagingRepo, ["remote", "get-url", input.remoteName], this.commandOptions(options))).trim();
       if (!identityMatches(repositoryIdentity(clonedRemote), expected)) {
