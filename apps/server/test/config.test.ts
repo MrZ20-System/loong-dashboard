@@ -6,7 +6,6 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
-import { execFileSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -24,6 +23,12 @@ import {
 
 const repositoryRoot = fileURLToPath(new URL("../../..", import.meta.url));
 const serverPackageDirectory = resolve(repositoryRoot, "apps/server");
+
+function repositoryFixture(prefix: string): string {
+  // A child of the checked-out repository is sufficient for isGitRepository,
+  // while keeping Git process execution inside @loongboard/git-workspace.
+  return mkdtempSync(join(repositoryRoot, prefix));
+}
 
 function validConfigInput() {
   return {
@@ -142,7 +147,7 @@ describe("system configuration", () => {
   });
 
   it("migrates V1 schedules directly to V3, preserves topology, and atomically backs up the source", () => {
-    const root = mkdtempSync(join(tmpdir(), "loongboard-config-migration-"));
+    const root = repositoryFixture(".loongboard-config-migration-");
     try {
       const configPath = join(root, "system.yaml");
       const legacy = validV1ConfigInput();
@@ -151,7 +156,6 @@ describe("system configuration", () => {
       mkdirSync(join(legacyRoot, "knowledge"), { recursive: true });
       mkdirSync(join(legacyRoot, "prompts"));
       mkdirSync(join(legacyRoot, "skills"));
-      execFileSync("git", ["init", "-q", legacyRoot]);
       const migrated = migrateSystemConfigV1ToV3(legacy, configPath) as Record<string, any>;
       expect(migrated.version).toBe(3);
       expect(migrated.personalData.path).toBe("./personal-data");
@@ -177,7 +181,7 @@ describe("system configuration", () => {
   });
 
   it("migrates a V2 config through loadSystemConfig and writes a recoverable source backup", () => {
-    const root = mkdtempSync(join(tmpdir(), "loongboard-config-v2-migration-"));
+    const root = repositoryFixture(".loongboard-config-v2-migration-");
     try {
       const configPath = join(root, "system.yaml");
       const legacy = validV2ConfigInput();
@@ -186,7 +190,6 @@ describe("system configuration", () => {
       mkdirSync(join(legacyRoot, "knowledge"), { recursive: true });
       mkdirSync(join(legacyRoot, "prompts"));
       mkdirSync(join(legacyRoot, "skills"));
-      execFileSync("git", ["init", "-q", legacyRoot]);
 
       const config = loadSystemConfig(configPath);
       expect(config.version).toBe(3);
@@ -218,7 +221,7 @@ describe("system configuration", () => {
   });
 
   it("leaves a V1 source untouched when the migrated V3 config fails validation", () => {
-    const root = mkdtempSync(join(tmpdir(), "loongboard-config-migration-failure-"));
+    const root = repositoryFixture(".loongboard-config-migration-failure-");
     try {
       const configPath = join(root, "system.yaml");
       const legacy = {
@@ -231,7 +234,6 @@ describe("system configuration", () => {
       mkdirSync(join(legacyRoot, "knowledge"), { recursive: true });
       mkdirSync(join(legacyRoot, "prompts"));
       mkdirSync(join(legacyRoot, "skills"));
-      execFileSync("git", ["init", "-q", legacyRoot]);
 
       expect(() => loadSystemConfig(configPath)).toThrowError(/valid IANA timezone/);
       expect(readFileSync(configPath, "utf8")).toBe(original);
