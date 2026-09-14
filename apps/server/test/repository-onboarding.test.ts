@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 
 import {
   createRepositoryOnboardingJob,
+  getRepositoryOnboardingJob,
   getRepository,
   openDatabase,
   retryRepositoryOnboardingJob,
@@ -371,7 +372,7 @@ describe("repository onboarding", () => {
     const ready = await waitFor(fixture.service, failed.jobId, "ready");
     expect(ready.input.defaultBranch).toBe("release");
     expect(ready.repositoryId).toBe("owner-retry");
-    expect(fixture.database.prepare("SELECT config_hash FROM repository_onboarding_jobs WHERE id = ?").pluck().get(failed.jobId))
+    expect(getRepositoryOnboardingJob(fixture.database, failed.jobId)?.configHash)
       .toBe(createHash("sha256").update(changedRaw).digest("hex"));
     await app.close();
 
