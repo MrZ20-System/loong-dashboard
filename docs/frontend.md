@@ -25,7 +25,7 @@
 | `/settings/schedules`、`/scheduled-tasks` | [ScheduledTasksPage](../apps/web/src/scheduled-tasks.tsx) |
 | `/settings/health` | [HealthPage](../apps/web/src/features/system/HealthPage.tsx) |
 
-`/health` 重定向到 `/settings/health`；`/settings` 是控制中心入口。控制中心按 Repositories、Integrations、Agent、Domains、Schedules、Health、Knowledge checkpoint 和 Code backup 分区，具体设置页通过 `SettingsShell` 的标签导航进入。表中的 `/issues` 指与同一 repository 前缀拼接的 Issue 列表。
+`/health` 重定向到 `/settings/health`；`/settings` 是控制中心入口。控制中心按 Repositories、Integrations、Agent、Personal Data、Code backup、Domains、Schedules、Health 和 Security 分区，具体设置页通过 `SettingsShell` 的标签导航进入。Personal Data 页把 Import、Instruction Tree 和完整仓库 Backup 放在同一入口，三个手工动作保持独立；旧 `/settings/checkpoint` 只重定向到 `/settings/personal-data`。表中的 `/issues` 指与同一 repository 前缀拼接的 Issue 列表。
 
 ## 请求与状态
 

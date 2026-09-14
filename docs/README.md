@@ -17,6 +17,7 @@
 | [GitHub 同步与分类](github-sync.md) | HTTP provider、水位、文件补全、Issue 详情、Domain |
 | [Git 与 PR 工作区](git-workspace.md) | prepare、diff、文件读取、slot 复用与安全约束 |
 | [Agent 与 DSH](dsh-integration.md) | 会话、子进程、事件、取消与 workspace 互斥 |
+| [Personal Data](personal-data.md) | 三目录 Git 根、导入、Instruction Tree、Agent workspace 与完整仓库备份 |
 | [Knowledge](knowledge.md) | Markdown 身份、版本、watcher、Git checkpoint |
 | [调度器](scheduler.md) | cron、timer、运行记录、忙碌与重启语义 |
 | [配置与运行](operations.md) | 安装、配置位置、GitHub 凭证、启动、备份和排错 |

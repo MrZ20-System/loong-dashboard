@@ -1,10 +1,10 @@
 # LoongBoard
 
-LoongBoard 是本地优先、单用户的工程工作台：GitHub PR/Issue 活动、本地 Git diff、DSH Agent 对话、Markdown 知识库与定时任务集中在一个界面中。
+LoongBoard 是本地优先、单用户的工程工作台：GitHub PR/Issue 活动、本地 Git diff、DSH Agent 对话、Personal Data 与定时任务集中在一个界面中。
 
 ## What
 
-应用由 React/Vite 前端和 Fastify 本地服务组成。开发时两者分别运行；生产时 `pnpm start` 由 Fastify 同时提供 API、SSE 和已构建的 React 静态文件。运行数据、知识库和 worktree 路径都由 `system.yaml` 决定，不写入代码仓库。
+应用由 React/Vite 前端和 Fastify 本地服务组成。开发时两者分别运行；生产时 `pnpm start` 由 Fastify 同时提供 API、SSE 和已构建的 React 静态文件。运行数据、Personal Data 和 worktree 路径都由 `system.yaml` 决定，不写入代码仓库。
 
 ## Quick Start: Native
 
@@ -40,7 +40,7 @@ $EDITOR "$LOONGBOARD_DATA_DIR/system.yaml"
 docker compose up -d --build
 ```
 
-Compose 将 `${LOONGBOARD_DATA_DIR:-./loongboard-data}` 挂载为容器 `/data`，并读取 `/data/system.yaml`。因此配置中的相对 `knowledge.path`、`runtime.statePath` 和 `runtime.worktreesPath` 都相对 `/data` 解析。Compose 设置 `LOONGBOARD_SERVER_HOST=0.0.0.0`、端口 `4174`，宿主机仍只通过 `127.0.0.1:4174` 暴露服务。
+Compose 将 `${LOONGBOARD_DATA_DIR:-./loongboard-data}` 挂载为容器 `/data`，并读取 `/data/system.yaml`。因此示例中的 `personalData.path: ./personal-data` 会解析为持久的 `/data/personal-data`，Knowledge 内容位于其 `knowledge/` 子目录；runtime 和 worktree 相对路径也相对 `/data` 解析。Compose 设置 `LOONGBOARD_SERVER_HOST=0.0.0.0`、端口 `4174`，宿主机仍只通过 `127.0.0.1:4174` 暴露服务。
 
 镜像内包含 Node、Git 和 CA certificates；这些不需要宿主机挂载。GitHub 凭证应通过 Settings 保存，或在运行容器时显式提供 `GH_TOKEN`/`GITHUB_TOKEN`。宿主机的 `gh` 登录状态不会自动进入容器。镜像不 COPY SSH key、token 或凭证文件；如需额外凭证挂载，应使用本地 compose override，并保持只读和不入镜像。
 
@@ -55,9 +55,10 @@ docker compose down
 
 ## First Run
 
-1. 修改 `system.yaml` 中的 repositories、knowledge 和 runtime 路径。
-2. 启动后在 Settings 配置 GitHub 凭证、Agent 默认值和需要的计划任务。
-3. 确认 GitHub provider 能访问目标仓库，再执行首次同步。
+1. 修改 `system.yaml` 中的 repositories、personalData、knowledge 和 runtime 路径。
+2. 启动后在 Settings → Personal Data 导入指定 Git 仓库分支，或确认配置路径中已经存在 `knowledge/`、`prompts/`、`skills/`。
+3. 在 Settings 配置 GitHub 凭证、Agent 默认值和需要的计划任务。
+4. 确认 GitHub provider 能访问目标仓库，再执行首次同步。
 
 没有 GitHub token 时，native 环境可使用已认证的 `gh`；Docker 环境优先使用 Settings token 或显式环境变量，因为镜像不依赖宿主机的 `gh` 配置。
 
@@ -65,13 +66,14 @@ docker compose down
 
 `system.yaml` 所在目录决定所有 YAML 相对路径。通常需要保留：
 
-- `knowledge.path`：Markdown 和知识 Git 仓库。
+- `personalData.path`：包含 `knowledge/`、`prompts/`、`skills/` 及 Git 历史的完整 Personal Data 仓库。
+- `knowledge.path`：Personal Data 内只参与 Knowledge 产品逻辑的 Markdown 根目录。
 - `runtime.statePath`：SQLite、Agent session、GitHub credential、provider secrets、Settings 相关运行状态。
 - `runtime.worktreesPath`：PR worktree 缓存。
 - `system workspace/settings.json`、`domains/`、`prompts/`：非秘密 Settings、Domain 源文件和 update prompt。
 - Agent Archive path/repository（启用时；默认目录为 `systemRoot/agent-history`，自定义路径可覆盖）。
 
-`node_modules`、`dist`、`.pnpm-store` 和可安全重建的 worktree 缓存不属于代码提交内容。备份和恢复请看 [Backup and Restore](docs/backup-restore.md)。
+`node_modules`、`dist`、`.pnpm-store` 和可安全重建的 worktree 缓存不属于代码提交内容。Personal Data 的导入、Instruction Tree 与 Git 边界见 [Personal Data](docs/personal-data.md)，完整备份和恢复见 [Backup and Restore](docs/backup-restore.md)。
 
 ## Update
 

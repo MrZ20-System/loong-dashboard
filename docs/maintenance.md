@@ -14,7 +14,7 @@
 
 - GitHub 传输已是 HTTP fetch，gh 仅为可选凭证入口；ADR 0002 明确标记原决策被替代。
 - Scheduler 实际为每任务 timer map，并非旧设计中的单 timer/min-heap。
-- Knowledge checkpoint 已接入可选配置，默认关闭，Git 执行在 git-workspace 包。
+- Personal Data checkpoint/push 已接入可选配置且默认关闭，覆盖完整三目录 Git 仓库；Git 执行仍在 git-workspace 包。
 - PR 会话可同时携带 PR number 与 target SHA；不是所有目标字段互斥。
 - 文档版本数由 historyLimit 控制，示例值为 10，当前行为见 [Knowledge](knowledge.md)。
 - 过时的空包描述及阻止后续功能的 scoped AGENTS 约束已移除。

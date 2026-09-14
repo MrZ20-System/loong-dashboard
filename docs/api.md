@@ -39,12 +39,15 @@ Maintenance run kind 是 canonical 的 `archive` 或 `purge_runtime_history`；`
 | `/repositories/:id/settings/worktrees/cleanup` | POST 显式清理 unused Worktrees；busy、dirty 和 Git status 失败的 slot fail closed |
 | `/settings/integrations/github`、`/verify` | GET 摘要、PUT/DELETE token、POST 验证；不回传 secret |
 | `/settings/agent`、`/providers` | GET runtime 能力与默认值、PUT 默认值/私有 provider secret |
-| `/settings/knowledge-checkpoint`、`/run`、`/push` | GET/PUT 配置，POST checkpoint/push |
+| `/settings/personal-data` | GET 返回只读 path/knowledgePath/instructionTreePath/available 与 Personal Data Backup policy/runtime 状态；PUT 只更新 backup policy |
+| `/settings/personal-data/import` | POST `{ repositoryUrl, branch }`，同步 single-branch clone 到配置路径；目标非空时拒绝 |
+| `/settings/personal-data/instruction-tree/refresh` | POST 空 body，原子覆盖普通 Knowledge 文件并返回 `{ path, updatedAt }` |
+| `/settings/personal-data/checkpoint`、`/push` | POST 独立执行完整 Personal Data Git checkpoint 或显式 ref push，不互相触发 |
 | `/repositories/:id/domains/source`、`/prompt` | GET/PUT 文件源码与更新 prompt |
 | `/repositories/:id/domains/source/versions`、`/:versionId`、`/:versionId/restore` | GET 历史/内容、POST 恢复；prompt 具有同构路径 |
 | `/agent-sessions/:id/interactions/:requestId` | POST 答复当前 runtime 交互 |
 
-表内简写子路径均拼接到同一行的父资源。Knowledge 集合 GET/PUT 支持按 path 读取/保存；按 id 的资源用于稳定身份操作。
+表内简写子路径均拼接到同一行的父资源。Knowledge 集合 GET/PUT 支持按 path 读取/保存；按 id 的资源用于稳定身份操作。旧 `/settings/knowledge-checkpoint` 路由只服务迁移期兼容，当前 Web 和新调用方使用 Personal Data 路由。
 
 PR 与 Merged 列表的 `page` 默认为 1，`limit` 默认为 100 且最大为 100；响应统一包含 `page`、`pageSize`、`totalCount`、`totalPages` 和 `calendarTimeZone`。这些总数对应当前日期、状态、搜索和 Domain 过滤后的完整结果集（Merged 使用其支持的搜索和 Domain 过滤）。Issue 列表仍返回 `nextCursor` 并接受 cursor。
 请求页超过 `totalPages` 时，服务返回最后一页的有效 `page`；过滤结果为空时返回 `page=1`、`totalPages=0` 和空 `items`。

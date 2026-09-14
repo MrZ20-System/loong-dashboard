@@ -35,7 +35,7 @@ pnpm dev
 
 Repository metadata retention 位于每个 Repository Settings：默认 automatic archive 为 OFF、cutoff 为 7 天，scope 可分别选择 merged PR、closed PR 和 closed Issue，另有 `prunePayloadWhenArchived` 开关。手动维护先用本地日期执行 preview，再确认 Archive & clean；Server 按配置时区转换为 UTC，并以默认 250 条（内部允许 200–500）的 batch 执行。归档不删除 PR/Issue metadata，Archived/All 视图仍可读；restore 或 reopen 会解除归档，继续处于 terminal 状态的 metadata update 不会自动解除归档。payload 被清理后，PR files/Issue detail 会在下一次需要时重新从 GitHub 获取。现有 `repository.metadata-maintenance` system schedule 每天都会执行 runtime sync-run history purge，即使 automatic archive 为 OFF；只有 metadata `archive` operation 受该开关控制，`prunePayloadWhenArchived` 只是 archive request/selector 的 payload 清理布尔值，不是独立阶段或 run kind，不另加 timer。手动 Storage maintenance 使用同一固定 30 天 + 最新 100 条策略。
 
-Repository Settings 以 Settings V3 policy 形式保存在 system workspace 的 `settings.json`：forward sync 的开关与 `syncCron` 是用户 operational policy，写入后由 runtime bridge 投影到稳定的 `repository.sync` scheduled task。Knowledge、Code backup 和 Agent Archive 的 checkpoint/export 与 push 同样直接保存 Cron；自动开关关闭时仍保留有效表达式。服务启动时再次以 JSON policy 投影 enabled 和 cron；task 既有值不能反向覆盖 JSON。已有成功水位的增量从 watermark 前 2 分钟读取。更老数据的范围只由 SQLite 中持久的 History target 控制，Settings 使用日期选择器及 7/30/90 天 quick actions，不再暴露一套重复的 Initial sync range。手动 Sync now 与自动 `repository.sync` 使用同一 forward 规则。
+Repository Settings 以 Settings V4 policy 形式保存在 system workspace 的 `settings.json`：forward sync 的开关与 `syncCron` 是用户 operational policy，写入后由 runtime bridge 投影到稳定的 `repository.sync` scheduled task。Personal Data、Code backup 和 Agent Archive 的 checkpoint/export 与 push 同样直接保存 Cron；自动开关关闭时仍保留有效表达式。服务启动时再次以 JSON policy 投影 enabled 和 cron；task 既有值不能反向覆盖 JSON。已有成功水位的增量从 watermark 前 2 分钟读取。更老数据的范围只由 SQLite 中持久的 History target 控制，Settings 使用日期选择器及 7/30/90 天 quick actions，不再暴露一套重复的 Initial sync range。手动 Sync now 与自动 `repository.sync` 使用同一 forward 规则。
 
 Repository Worktree Settings 的 maximum slots 与 idle cleanup TTL 是 operational override；它们覆盖 `system.yaml` 的安装级 fallback，不写入 `worktree_slots`。维护为低频或显式操作：自动 TTL 及缩容只处理 clean、非 busy slot，手动 Clean unused now 忽略 TTL 但仍保护 busy、dirty 和 status 失败的 slot。Settings/API 展示 configured/physical/active/idle/dirty/pending retirement；缩容不会因忽略高编号目录而留下磁盘孤儿。
 
@@ -55,18 +55,19 @@ Settings → Integrations → GitHub 是 GitHub 凭证的唯一控制入口。�
 
 | 位置 | 内容与处理 |
 | --- | --- |
-| knowledge.path | Markdown 和知识 Git，长期保留 |
+| personalData.path | `knowledge/`、`prompts/`、`skills/` 和完整 Git 历史，长期保留 |
+| knowledge.path | Personal Data 内参与 Knowledge 扫描、watcher 和版本的 Markdown 根目录 |
 | runtime.statePath/loongboard.sqlite3 | 索引、消息、短期版本、任务状态，需备份 |
 | runtime.statePath/agent-sessions | 每会话 DSH home，随会话保留；不作为 Agent Archive 的输入目录 |
 | runtime.repositoriesPath | Settings 接入和默认容器仓库的持久 checkout；不能与 state/worktree/Knowledge 根目录混用 |
 | runtime.worktreesPath | PR slot 缓存；清理前由 WorktreeJanitor 确认没有 busy/dirty 内容，Git status 失败时 fail closed |
 | system workspace/agent-history | Agent Archive 默认目录；Docker 中对应 `/data/agent-history`，用户保存的自定义 archive path 优先 |
-| system workspace/settings.json | 控制中心非秘密设置；严格 Settings V3 policy。V2 启动迁移优先采用 `scheduled_tasks.cron_expression` 的真实投影，缺失时才转换 legacy interval；迁移完成后 runtime 只读取 V3，非法文档会拒绝并保留原文件 |
+| system workspace/settings.json | 控制中心非秘密设置；严格 Settings V4 policy。旧版本启动迁移优先采用 `scheduled_tasks.cron_expression` 的真实投影，Knowledge backup policy 一次性改名为 Personal Data；迁移完成后 runtime 只读取 V4，非法文档会拒绝并保留原文件 |
 | system workspace/domains/*.json | Domain JSON 源文件；文件名普通 key 可读，异常 key 编码 |
 | system workspace/prompts/update-domains.md | Agent 更新 Domain 使用的可编辑 prompt |
 | runtime.statePath/domain-file-versions | Domain/prompt content hash 短期历史，可由 history/restore API 查看 |
 
-`system.yaml` V1 在启动时一次性迁移为 V2：legacy checkpoint/push interval 转成 Cron，完整 V2 校验通过后才原子替换，并保留可恢复备份；迁移失败不损坏原文件。runtime 不长期兼容两套配置形状。
+`system.yaml` V1/V2 在启动时直接迁移为 V3：legacy checkpoint/push interval 转成 Cron，并拆分 `personalData.path` 与内部 `knowledge.path`。自动配置迁移只接受已经是 Git 仓库且包含 `knowledge/`、`prompts/`、`skills/` 的旧根目录；不会搬动未知文件。完整 V3 校验通过后才原子替换并保留对应 `.v1.bak`/`.v2.bak`；失败不损坏原文件。
 
 SIGINT/SIGTERM 触发服务的有序退出。服务启动会把数据库中上次遗留的 running metadata sync 标记为 interrupted/failed，保留已写入 rows 与成功 watermark；下次显式 Sync now 可继续。不会自动补跑错过的周期。备份前停止写入，保留整个知识仓库、数据库及会话目录；只备份 Markdown 无法恢复聊天与短期版本。SQLite 在线复制不作为安全备份方式，完整备份/恢复边界见 [Backup and Restore](backup-restore.md)。不要用删除 `.loong` 处理普通启动故障。
 
@@ -94,7 +95,7 @@ SIGINT/SIGTERM 触发服务的有序退出。服务启动会把数据库中上�
 | Code backup 不可用 | 先看 Settings API 的 runtime `available` 和只读 `repositoryPath`；镜像 checkout 没有 `.git` 时保持自动/手工 Code backup 关闭，使用页面提示，不要把它写入 settings |
 | 计划未执行 | enabled、timezone、nextRunAt、workspace busy、服务是否在线 |
 
-Repository metadata sync、metadata maintenance、Worktree maintenance、Knowledge checkpoint、Knowledge push、Code backup 和 Agent Archive 共享 Scheduler。system task action 包括 `repository.sync`、`repository.metadata-maintenance`、`repository.worktrees.cleanup`、`knowledge.checkpoint`、`knowledge.push`、`git.checkpoint`、`git.push`、`agent.archive.checkpoint`、`agent.archive.push`；调整 Settings 中的 policy 会先持久化 JSON，再更新同一条稳定任务，重启也会按 JSON policy 重新投影。Task GET、history 和 Run now 仍可用，但通用 scheduled-task PUT 不允许修改 system task。System task 不占用 Agent workspace lock；真正的同步、metadata maintenance、Knowledge、Worktree 或 Archive subsystem 负责自己的资源协调。Agent scheduled task 每次 run 都新建独立 session，run history 保存 `agentSessionId`，可继续打开旧 run；旧 session 的人工模型修改不影响下一次 run。Runtime sync history 的 purge 策略固定为 30 天 cutoff + 保留最新 100 条，并保护 queued/running 与 History 的 `last_run_id`；它与 metadata archive 分开。Archive export checkpoint 只读取 normalized allowlist 并对现有 Git 仓库提交，Archive push 只执行显式 refspec；两者失败均保留 Scheduler history，不自动初始化或合并远端。
+Repository metadata sync、metadata maintenance、Worktree maintenance、Personal Data checkpoint/push、Code backup 和 Agent Archive 共享 Scheduler。system task action 包括 `repository.sync`、`repository.metadata-maintenance`、`repository.worktrees.cleanup`、`personal-data.checkpoint`、`personal-data.push`、`git.checkpoint`、`git.push`、`agent.archive.checkpoint`、`agent.archive.push`；调整 Settings 中的 policy 会先持久化 JSON，再更新同一条稳定任务，重启也会按 JSON policy 重新投影。Personal Data 的旧 task ID 保留以维持 history 关联，action 由数据库迁移为 canonical 名。Task GET、history 和 Run Now 仍可用，但通用 scheduled-task PUT 不允许修改 system task。System task 不占用 Agent workspace lock；真正的同步、metadata maintenance、Personal Data、Worktree 或 Archive subsystem 负责自己的资源协调。Agent scheduled task 每次 run 都新建独立 session，run history 保存 `agentSessionId`，可继续打开旧 run；旧 session 的人工模型修改不影响下一次 run。Runtime sync history 的 purge 策略固定为 30 天 cutoff + 保留最新 100 条，并保护 queued/running 与 History 的 `last_run_id`；它与 metadata archive 分开。Archive export checkpoint 只读取 normalized allowlist 并对现有 Git 仓库提交，Archive push 只执行显式 refspec；两者失败均保留 Scheduler history，不自动初始化或合并远端。
 
 ## 本地密码锁
 

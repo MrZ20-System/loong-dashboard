@@ -43,7 +43,7 @@ flowchart LR
 
 生产流程先由根脚本执行 `pnpm build`，再由 `pnpm start` 使用 `node --conditions=production apps/server/dist/start.js` 启动。workspace package 的 `production` export 指向各自 `dist/index.js`，开发和测试仍通过 `types`/`import` 使用 `src`。编译后的 start 入口按自身位置解析 `apps/web/dist`，因此不依赖当前工作目录。只有 production start 传入 static root 时，Fastify 才注册静态文件和 React deep-link fallback；`/api/*` 未匹配路由保持 JSON 404。
 
-代码和运行数据分离：代码、构建产物及依赖属于应用仓库或镜像；SQLite、managed repositories、Agent session、Knowledge、worktrees、Settings 和凭证路径由 `system.yaml` 指定。YAML 相对路径相对配置文件目录解析。Docker 将宿主机 data root 挂载为 `/data`，并通过 `LOONGBOARD_SERVER_HOST`/`LOONGBOARD_SERVER_PORT` 覆盖容器监听地址/端口，不改变这些数据路径。`system.yaml.repositories` 是 repository 定义的唯一 authority；Settings onboarding 只通过 Server 原子更新这份 YAML，SQLite 仅保存 projection 与 durable job state。
+代码和运行数据分离：代码、构建产物及依赖属于应用仓库或镜像；SQLite、managed repositories、Agent session、Personal Data、worktrees、Settings 和凭证路径由 `system.yaml` 指定。`personalData.path` 是三目录 Git 根，`knowledge.path` 是其内部只供 Knowledge 使用的内容根。YAML 相对路径相对配置文件目录解析。Docker 将宿主机 data root 挂载为 `/data`，并通过 `LOONGBOARD_SERVER_HOST`/`LOONGBOARD_SERVER_PORT` 覆盖容器监听地址/端口，不改变这些数据路径。`system.yaml.repositories` 是 source repository 定义的唯一 authority；Settings onboarding 只通过 Server 原子更新这份 YAML，SQLite 仅保存 projection 与 durable job state。Personal Data Import 则只克隆到 YAML 已配置路径，不把 import source 写入配置或后台任务。
 
 聊天和调度器注入同一个 `WorkspaceRunCoordinator`。Repository metadata 的 admission 还由 [sync-coordinator.ts](../apps/server/src/sync-coordinator.ts) 统一协调：同一仓库的 foreground sync / `fetch_pr` 优先于 History；metadata maintenance 以 batch 为边界让出 admission，不能在长批处理中饿死前台请求。后台 worker 不应另建一套 repository lock。
 
@@ -51,18 +51,18 @@ HTTP 生产入口是 [buildProductionApp](../apps/server/src/app.ts)，要求注
 
 SIGINT/SIGTERM 经 [lifecycle.ts](../apps/server/src/lifecycle.ts) 触发幂等关闭；app 的关闭钩子先停止 metadata maintenance，再等待 `SchedulerEngine` 停止 timer 并结束活跃的 scheduled Agent runs，然后关闭 Agent runtime，之后才关闭同步协调、Knowledge、Domain watcher、重分类和 SQLite。增加后台服务时必须同时接入退出清理。
 
-Scheduler 是现有唯一的定时入口。`SchedulerEngine` 为持久任务维护 timer map，并把九个 canonical system action 委派给 [system-actions.ts](../apps/server/src/system-actions.ts) 的统一 registry；`runtime.ts` 不再拥有这些 action 的实现。Settings V3 是 system schedule policy authority，所有用户可配置周期都直接保存五字段 Cron；runtime 启动和 Settings 更新都会经 [system-schedules.ts](../apps/server/src/system-schedules.ts) 把 policy 投影到稳定的 `scheduled_tasks` 行，Scheduler 只执行 projection 并记录 runtime facts。system task 创建只保存 action、repository、Cron、timezone 和 enabled 等系统字段，Agent-only 的 prompt、workspace、provider、model、reasoning 字段保持 `NULL`。metadata maintenance 使用现有 `repository.metadata-maintenance` system action（默认每天 03:00，按配置时区）。该 action 每天执行固定的 `purge_runtime_history`；只有 Repository retention 的 automatic archive 开关打开时才追加 `archive`，archive selector 中的 `prune` 仅控制 payload 清理，不是独立 operation，不会添加第二个 timer、后台 cron 或独立调度框架。
+Scheduler 是现有唯一的定时入口。`SchedulerEngine` 为持久任务维护 timer map，并把九个 canonical system action 委派给 [system-actions.ts](../apps/server/src/system-actions.ts) 的统一 registry；`runtime.ts` 不再拥有这些 action 的实现。Settings V4 是 system schedule policy authority，所有用户可配置周期都直接保存五字段 Cron；runtime 启动和 Settings 更新都会经 [system-schedules.ts](../apps/server/src/system-schedules.ts) 把 policy 投影到稳定的 `scheduled_tasks` 行，Scheduler 只执行 projection 并记录 runtime facts。Personal Data 使用 `personal-data.checkpoint` 和 `personal-data.push`，保留旧 task ID 维持历史关联，不为 Instruction Tree 增加 timer。system task 创建只保存 action、repository、Cron、timezone 和 enabled 等系统字段，Agent-only 的 prompt、workspace、provider、model、reasoning 字段保持 `NULL`。metadata maintenance 使用现有 `repository.metadata-maintenance` system action（默认每天 03:00，按配置时区）。该 action 每天执行固定的 `purge_runtime_history`；只有 Repository retention 的 automatic archive 开关打开时才追加 `archive`，archive selector 中的 `prune` 仅控制 payload 清理，不是独立 operation，不会添加第二个 timer、后台 cron 或独立调度框架。
 
 ## 必须保持的边界
 
 - Web/Server 共享 contracts，禁止复制 HTTP schema。
 - `buildProductionApp` 的生产依赖完整且必选，且是 Server package 的唯一公开 app builder；`buildTestApp` 仅供同仓库 focused tests 从 `src/app` 直接导入，不能在生产 runtime 中按 capability 是否存在选择分支。
 - `SyncCoordinator` 的产品操作 `startHistory`、`startFetchPullRequest`、`configureHistory`、`pauseHistory`、`resumeHistory` 均为必选接口；生产 route 直接调用，不以 `undefined` 防御替代产品能力。
-- `settings.json` V3 保存用户 policy；`scheduled_tasks` 是 system schedule projection，`scheduled_task_runs` 是 runtime history，runtime facts 不反向写 Settings。
+- `settings.json` V4 保存用户 policy；`scheduled_tasks` 是 system schedule projection，`scheduled_task_runs` 是 runtime history，runtime facts 不反向写 Settings。
 - Settings API 返回的 Code backup `repositoryPath` 和 `available` 只来自 runtime；它们不是可持久化的用户 policy。
 - 只有 agent-runtime-dsh 可以导入 `@deepseek-ai/*`；产品层消费自身事件。产品级 wire event 只有 contracts 的 `AgentRuntimeEvent`，包括 status、assistant、tool、interaction、activity 和 error；DSH `SessionEvent` 只在 adapter 内转换，不进入 Server 或持久层。
 - 只有 github 包执行 `gh`；当前 GitHub 数据传输使用 HTTP fetch。
-- Git 命令在 git-workspace；Knowledge 的 checkpoint 也由该包执行。
+- Git 命令在 git-workspace；Personal Data 的 import/checkpoint/push 复用该包，Knowledge 只管理其内容子目录。
 - 原始 SQL 全部在 database；Server 编排类型化服务。
 - Workspace 依赖沿固定方向流动：`web → contracts`；`server → agent-runtime、agent-runtime-dsh、contracts、database、git-workspace、github、knowledge、scheduler`；`agent-runtime → contracts`；`agent-runtime-dsh → agent-runtime`；`database`、`git-workspace`、`knowledge`、`scheduler` → `contracts`；`github` 与 `contracts` 不依赖其他 workspace package。该集合描述允许的方向，不要求每个应用都实际导入全部允许包，且 workspace 不得形成环。
 - PR/Issue **列表**只读 SQLite。Issue **详情**可按缓存版本触发 provider 刷新。
@@ -77,7 +77,7 @@ Scheduler 是现有唯一的定时入口。`SchedulerEngine` 为持久任务维�
 
 ## 代码、运行数据和安全边界
 
-应用代码、`dist` 和依赖属于 checkout 或镜像；`system.yaml`、`settings.json`、SQLite、Knowledge Markdown/Git、Agent session homes、凭证、Domain 文件和可选 Agent Archive 是运行数据，位置由配置和 data root 决定。Agent Archive 默认位于 `systemRoot/agent-history`，用户明确保存的自定义 `archiveRepositoryPath` 优先；Docker 的默认路径因此是 `/data/agent-history`。Code backup 的 `repositoryPath` 与 `available` 是运行时事实，不写入 SettingsDocumentV3；`repositoryPath` 由真实 code checkout 决定。Worktree 是可重建缓存，但 dirty 或未提交用户内容仍需保护。
+应用代码、`dist` 和依赖属于 checkout 或镜像；`system.yaml`、`settings.json`、SQLite、Personal Data Git 仓库、Agent session homes、凭证、Domain 文件和可选 Agent Archive 是运行数据，位置由配置和 data root 决定。Agent Archive 默认位于 `systemRoot/agent-history`，用户明确保存的自定义 `archiveRepositoryPath` 优先；Docker 的默认路径因此是 `/data/agent-history`。Code backup 的 `repositoryPath` 与 `available` 是运行时事实，不写入 SettingsDocumentV4；`repositoryPath` 由真实 code checkout 决定。Worktree 是可重建缓存，但 dirty 或未提交用户内容仍需保护。
 
 可选密码锁只保护 LoongBoard Web/API 的访问门禁。它把 scrypt 派生值和 HMAC 签名密钥写入 `runtime.statePath/auth.json`，以 HttpOnly、SameSite=Strict cookie 建立本地会话；它不加密 SQLite、Knowledge、Agent home、worktree 或任何其他运行数据。DSH 仍是外部 runtime；产品只保存 opaque runtime id、normalized 消息和 title/titleSource ownership，不复制 DSH loop、原始事件或 title generation。会话标题只读取 DSH 原生 title 能力并投影 ownership，不由 LoongBoard 另行生成。
 
@@ -92,6 +92,7 @@ Scheduler 是现有唯一的定时入口。`SchedulerEngine` 为持久任务维�
 | 同步或分类异常 | sync-coordinator / enrichment-service / domain-classifier | provider、水位、classification-service |
 | PR 文件/布局 | diff.ts / pull-request-detail.tsx | git-workspace、文件缓存、Monaco |
 | Agent 流式/停止 | agent-chat.ts / agent-runtime-dsh | host、消息持久化、SSE、互斥 |
+| Personal Data import/tree/backup | personal-data.ts / settings.ts | git-workspace、contracts、Scheduler、Personal Data 设置页 |
 | Knowledge 保存/历史 | knowledge.ts controller | knowledge 包、knowledge-service、编辑器 |
 | 定时任务 | server scheduler.ts | cron 包、scheduler-service、共享互斥 |
 | Settings 与凭证 | server settings.ts / web SettingsControlCenter.tsx | contracts、github credentials、Scheduler |

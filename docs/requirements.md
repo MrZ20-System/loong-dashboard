@@ -10,7 +10,7 @@ LoongBoard 是本地优先、单用户的工程工作台。一个浏览器连接
 - 从本地 Git 读取 PR diff、完整文件及目录树；PR 对话使用可复用 worktree。
 - 通过外部 DeepSeek Harness 原生 Host 运行 Agent，保存和恢复会话，实时展示文本、工具事件及交互请求，使用原生模型、命令和运行配置；Agent 页面、业务页与全局浮窗共享会话。
 - 管理 Knowledge Markdown 文件、短期版本和文档默认对话。
-- Agent 计划任务按 cron 或 Run Now 为每次 occurrence 创建独立的持久 Agent session 并发送 prompt；仓库同步、Knowledge checkpoint 和 push 也由统一 Scheduler 执行。
+- Agent 计划任务按 cron 或 Run Now 为每次 occurrence 创建独立的持久 Agent session 并发送 prompt；仓库同步、Personal Data checkpoint 和 push 也由统一 Scheduler 执行。
 - 通过 Settings 控制中心管理仓库同步、统一 GitHub 凭证、Agent、checkpoint、Domain JSON 源文件和计划任务。
 
 ## 数据归属

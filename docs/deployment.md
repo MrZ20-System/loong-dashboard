@@ -4,7 +4,7 @@ LoongBoard 的部署产物只有一套：`pnpm build` 生成 workspace packages�
 
 ## Native production
 
-在应用仓库根目录准备 version 2 的 `system.yaml`。默认查找位置是应用仓库的父目录；如果使用自定义位置，设置 `LOONGBOARD_SYSTEM_CONFIG`，其相对路径相对应用仓库根目录解析。YAML 内所有相对路径则相对 YAML 文件所在目录解析。已有 version 1 配置会在启动时经过完整校验、备份和原子替换迁移到 version 2；迁移失败时原文件保持不变。
+在应用仓库根目录准备 version 3 的 `system.yaml`。默认查找位置是应用仓库的父目录；如果使用自定义位置，设置 `LOONGBOARD_SYSTEM_CONFIG`，其相对路径相对应用仓库根目录解析。YAML 内所有相对路径则相对 YAML 文件所在目录解析。旧配置只有在原路径已经满足安全的 Personal Data 三目录结构时才会经过完整校验、备份和原子替换迁移；需要搬动未知文件时启动会拒绝并要求人工迁移，原文件保持不变。
 
 ```bash
 pnpm install --frozen-lockfile
@@ -43,13 +43,13 @@ docker compose up -d --build
 - 容器使用 `restart: unless-stopped`。
 - healthcheck 使用镜像内 Node 请求 `http://127.0.0.1:4174/api/health/live`，不依赖 curl/wget。
 
-容器内 YAML 的相对路径相对 `/data`，所以 `./knowledge`、`./.loong`、`./repositories`、`./.worktrees` 分别落在 `/data/knowledge`、`/data/.loong`、`/data/repositories`、`/data/.worktrees`。示例配置默认接入 `vllm-project/vllm` 与 `vllm-project/vllm-ascend`，每个仓库默认 10 个 Worktree slots；缺失的受管 checkout 会在启动后通过持久异步任务初始化，首次 metadata sync 默认回看 7 天。首次启动前必须确认 `/data/system.yaml` 存在且整个 `/data` 对容器可写。
+容器内 YAML 的相对路径相对 `/data`，所以 `./personal-data`、`./.loong`、`./repositories`、`./.worktrees` 分别落在 `/data/personal-data`、`/data/.loong`、`/data/repositories`、`/data/.worktrees`；`knowledge.path` 是 `/data/personal-data/knowledge`。示例配置默认接入 `vllm-project/vllm` 与 `vllm-project/vllm-ascend`，每个仓库默认 10 个 Worktree slots；缺失的受管 checkout 会在启动后通过持久异步任务初始化，首次 metadata sync 默认回看 7 天。首次启动前必须确认 `/data/system.yaml` 存在且整个 `/data` 对容器可写。
 
 Native 环境中父目录 `system.yaml` 的 `./vllm`、`./vllm-ascend` 等 repository path 会解析到宿主机 system workspace；容器只挂载 `/data`，不会自动看到这些宿主机路径。容器部署应使用 `./repositories/<key>` 或其他位于 `/data` 下的路径；Settings 新接入的仓库始终位于 `runtime.repositoriesPath`。不要把指向宿主机外部 checkout 的 native 配置原样用于 Compose。
 
 当前 Dockerfile 和 Compose 没有声明 `USER`、`user`、`PUID` 或 `PGID`；镜像不支持通过 PUID/PGID 改变运行用户，设置这些变量本身也不会改变权限。`/data` bind mount 必须对容器实际用户可写；如果通过本地 override 使用非 root 用户，需自行配置用户映射和目录权限，这不属于当前默认部署的保证范围。
 
-镜像安装 Node、Git 和 CA certificates。宿主机不需要为这些组件提供挂载。GitHub 凭证通过 Settings 保存，或在启动容器时显式传入 `GH_TOKEN`/`GITHUB_TOKEN`；宿主机的 `gh` 登录状态不会自动进入容器。Dockerfile 不 COPY SSH key、token、`system.yaml`、`.loong`、knowledge 或 worktrees。Code backup 的 `repositoryPath` 和 `available` 由运行时从真实 code checkout 探测，不写入 SettingsDocumentV3；镜像 checkout 没有 `.git` 时 `available=false`，自动 checkpoint/push 会关闭，手工 Checkpoint now/Push now 会拒绝，并显示 `Code backup unavailable in container-image deployment.`。Code backup 的 policy 仍可保存，但不能开启必失败的自动任务。
+镜像安装 Node、Git、CA certificates 和 Server 的 Node 依赖；Instruction Tree 不依赖宿主机安装 `tree`、Python 或额外 apt package。GitHub 凭证通过 Settings 保存，或在运行容器时显式提供 `GH_TOKEN`/`GITHUB_TOKEN`；宿主机的 `gh` 登录状态不会自动进入容器。Dockerfile 不 COPY SSH key、token、`system.yaml`、`.loong`、Personal Data 或 worktrees。Code backup 的 `repositoryPath` 和 `available` 由运行时从真实 code checkout 探测，不写入 durable Settings；镜像 checkout 没有 `.git` 时 `available=false`，自动 checkpoint/push 会关闭，手工 Checkpoint Now/Push Now 会拒绝，并显示 `Code backup unavailable in container-image deployment.`。Code backup policy 仍可保存，但不能开启必失败的自动任务。
 
 Agent Archive 默认使用 `systemRoot/agent-history`；在当前 Compose 中对应持久 data root 下的 `/data/agent-history`，用户明确保存的自定义 archive path 优先。运行时可以创建缺失的 archive directory，export 也可写入其中，但不会自动 `git init`；checkpoint/push 要求目标已经是可写的 Git repository，否则操作会失败并保留状态。容器重建不会删除宿主机 data directory，因此默认 archive 不会随容器层丢失。Settings 页面在 code backup unavailable 时仍可保存普通字段、路由字段和 Agent Archive 设置。
 
@@ -71,7 +71,7 @@ native 环境可使用已认证的 `gh` 作为 GitHub credential fallback；Dock
 
 ## Data and code boundary
 
-生产代码和构建产物位于镜像或应用仓库；运行数据由 `system.yaml` 指定。必须持久化的内容包括 SQLite、Agent session、credential/provider secret 文件、Knowledge 仓库、Settings/Domain 文件和显式配置的 Agent Archive。凭据和运行数据不进入镜像层或仓库；只通过 runtime state 或 `/data` bind mount 保存。`dist`、`node_modules` 和可重建的 worktree 缓存不是备份替代品。
+生产代码和构建产物位于镜像或应用仓库；运行数据由 `system.yaml` 指定。必须持久化的内容包括 SQLite、Agent session、credential/provider secret 文件、完整 Personal Data Git 仓库、Settings/Domain 文件和显式配置的 Agent Archive。凭据和运行数据不进入镜像层或代码仓库；只通过 runtime state 或 `/data` bind mount 保存。`dist`、`node_modules` 和可重建的 worktree 缓存不是备份替代品。
 
 升级前先停止写入并备份 data directory，再执行新的 build/start 或重新构建容器。SQLite 正在写入时的在线文件复制不作为安全备份方式，详见 [Backup and Restore](backup-restore.md)。
 
@@ -93,7 +93,7 @@ docker compose down
 docker compose up -d --build
 ```
 
-两种方式都继续使用原 data directory；不要为了升级删除 `.loong`、knowledge 或整个 `/data`。
+两种方式都继续使用原 data directory；不要为了升级删除 `.loong`、Personal Data 或整个 `/data`。
 
 ## Reset local password lock
 

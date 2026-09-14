@@ -16,10 +16,12 @@
 
 Web 的 Preview 隐藏开头 YAML front matter，Edit 使用 Monaco 并保留完整源文本。共享 MarkdownView 支持 GFM、Mermaid、受控链接和图片；相对图片经过 Knowledge asset API，路径需限制在知识根目录。原始 HTML 保持转义。
 
-文档默认对话通过 `POST /api/knowledge/documents/:id/chat` 建立；工作目录为知识根目录。正文不会自动附加到 prompt，Agent 通过文件工具读取。
+文档默认对话通过 `POST /api/knowledge/documents/:id/chat` 建立；scope 仍是 Knowledge，但工作目录为 `personalData.path`，因此既能访问当前 `knowledge/` 文档，也能按统一相对路径读取 `prompts/` 与 `skills/`。正文不会自动附加到 prompt，Agent 通过文件工具读取。
 
-## 可选 Git checkpoint
+## Personal Data 内的 Knowledge 边界
 
-配置支持 `knowledge.checkpoint.autoCommit`、`autoPush`、`remote`、`sourceRef`、`remoteBranch`、`checkpointCron` 和 `pushCron`；默认 remote backup branch 为 `loongboard-knowledge-backup`。Settings → Checkpoint 提供独立 checkpoint/push Cron、运行状态、Run now 和 Push now。自动开关关闭时仍保留合法 Cron。Knowledge push 只执行显式 ref push，不隐式创建 checkpoint commit。执行 [runCheckpoint](../packages/git-workspace/src/checkpoint.ts) 时会在知识仓库执行 `git add -A` 和 commit，覆盖该仓库全部待提交变更。
+Knowledge 只扫描 `knowledge.path`，不把同级 `prompts/` 和 `skills/` 投影成新的产品类型。Refresh Instruction Tree 生成的 `_loongboard/instruction-tree.md` 也是普通 Knowledge Markdown，允许正常打开、编辑和删除；再次刷新会覆盖它，没有只读或绕过 watcher 的特例。
 
-失败记录在 Scheduler history 并显示于 Settings，不自动 pull、merge、rebase 或重试，也不回滚已保存的 Markdown。修改这部分时同时检查 [config.ts](../apps/server/src/config.ts)、controller 与 Git adapter，不能把“默认关闭”写成“未实现”。
+Git checkpoint 已升级为整个 `personalData.path` 的 Personal Data Backup，不再由 Knowledge 内容根代表仓库根。Settings → Personal Data 提供独立 checkpoint/push Cron、运行状态、Checkpoint Now 和 Push Now。执行 [runCheckpoint](../packages/git-workspace/src/checkpoint.ts) 时会覆盖同一 Git 仓库内的 `knowledge/`、`prompts/` 和 `skills/`；push 只执行显式 ref push，不隐式创建 checkpoint。
+
+失败记录在 Scheduler history 并显示于 Settings，不自动 pull、merge、rebase、重试或 `git init`，也不回滚已保存的 Markdown。完整边界见 [Personal Data](personal-data.md)。
